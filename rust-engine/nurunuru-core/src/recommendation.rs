@@ -275,14 +275,32 @@ impl RecommendationEngine {
         }
 
         // Sort each category by score descending
-        cat_2nd.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-        cat_out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-        cat_1st.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        cat_2nd.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        cat_out.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        cat_1st.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let mix = &self.config.feed_mix;
-        let target_2nd = cat_2nd.len().min((limit as f64 * mix.second_degree) as usize);
-        let target_out = cat_out.len().min((limit as f64 * mix.out_of_network) as usize);
-        let target_1st = cat_1st.len().min((limit as f64 * mix.first_degree) as usize);
+        let target_2nd = cat_2nd
+            .len()
+            .min((limit as f64 * mix.second_degree) as usize);
+        let target_out = cat_out
+            .len()
+            .min((limit as f64 * mix.out_of_network) as usize);
+        let target_1st = cat_1st
+            .len()
+            .min((limit as f64 * mix.first_degree) as usize);
 
         let mut result_ids: HashSet<String> = HashSet::new();
         let mut result: Vec<ScoredPost> = Vec::with_capacity(limit);
@@ -305,7 +323,9 @@ impl RecommendationEngine {
         let remaining = limit.saturating_sub(result.len());
         if remaining > 0 {
             scored.sort_by(|a, b| {
-                b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             });
             for sp in &scored {
                 if result.len() >= limit {
@@ -319,7 +339,11 @@ impl RecommendationEngine {
         }
 
         // Final sort by score
-        result.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        result.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         result.truncate(limit);
         result
     }
@@ -379,17 +403,25 @@ mod tests {
 
     #[test]
     fn test_geohash_boost_exact() {
-        assert!((RecommendationEngine::geohash_boost(Some("xn76u"), Some("xn76u")) - 2.0).abs() < f64::EPSILON);
+        assert!(
+            (RecommendationEngine::geohash_boost(Some("xn76u"), Some("xn76u")) - 2.0).abs()
+                < f64::EPSILON
+        );
     }
 
     #[test]
     fn test_geohash_boost_region() {
-        assert!((RecommendationEngine::geohash_boost(Some("xn76u"), Some("xn7ab")) - 1.5).abs() < f64::EPSILON);
+        assert!(
+            (RecommendationEngine::geohash_boost(Some("xn76u"), Some("xn7ab")) - 1.5).abs()
+                < f64::EPSILON
+        );
     }
 
     #[test]
     fn test_geohash_boost_none() {
-        assert!((RecommendationEngine::geohash_boost(None, Some("xn76u")) - 1.0).abs() < f64::EPSILON);
+        assert!(
+            (RecommendationEngine::geohash_boost(None, Some("xn76u")) - 1.0).abs() < f64::EPSILON
+        );
     }
 
     #[test]
@@ -428,7 +460,10 @@ mod tests {
             "alice".to_string(),
             vec!["charlie".to_string(), "bob".to_string()],
         );
-        fof.insert("bob".to_string(), vec!["charlie".to_string(), "dave".to_string()]);
+        fof.insert(
+            "bob".to_string(),
+            vec!["charlie".to_string(), "dave".to_string()],
+        );
 
         let result = RecommendationEngine::extract_2nd_degree_network(&my_follows, &fof);
         assert!(result.contains("charlie"));

@@ -63,12 +63,10 @@ class NostrRepository(
      */
     internal val followingSet: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
-    // ── MLS message cache ────────────────────────────────────────────────────
-    // Each Kind-445 event must only be passed to process_message() once;
-    // re-processing causes MLS epoch mismatches. We track processed event IDs
-    // per group and accumulate decrypted messages in memory for the session.
+    // ── MLS session state ──────────────────────────────────────────────────
+    // Rust SQLite (MDK) が single source of truth。アプリ側はセッション内の二重処理防止のみ。
     internal val mlsProcessedIds = java.util.concurrent.ConcurrentHashMap<String, MutableSet<String>>()
-    internal val mlsCachedMessages = java.util.concurrent.ConcurrentHashMap<String, MutableList<MlsMessage>>()
+    internal val processedWelcomeIds: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     internal val httpClient = OkHttpClient.Builder()
         .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
@@ -542,14 +540,14 @@ class NostrRepository(
     fun clearCacheByType(typeId: String) {
         cache.clearByType(typeId)
         if (typeId == "mls_groups" || typeId == "mls_messages") {
-            mlsCachedMessages.clear()
             mlsProcessedIds.clear()
+            processedWelcomeIds.clear()
         }
     }
     fun clearAllCache() {
         cache.clearAll()
-        mlsCachedMessages.clear()
         mlsProcessedIds.clear()
+        processedWelcomeIds.clear()
     }
     fun applyCacheSettings() {
         cache.applySettings(prefs)

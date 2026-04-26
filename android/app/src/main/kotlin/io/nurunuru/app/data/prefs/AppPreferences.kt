@@ -263,6 +263,40 @@ class AppPreferences(context: Context) {
         plainPrefs.edit().putBoolean("cache_enabled_$typeId", enabled).apply()
     }
 
+    fun getMlsSelfUpdateSuccessAt(groupIdHex: String): Long =
+        plainPrefs.getLong(KEY_MLS_SELF_UPDATE_SUCCESS_PREFIX + groupIdHex.lowercase(), 0L)
+
+    fun setMlsSelfUpdateSuccessAt(groupIdHex: String, timestampSecs: Long) {
+        plainPrefs.edit()
+            .putLong(KEY_MLS_SELF_UPDATE_SUCCESS_PREFIX + groupIdHex.lowercase(), timestampSecs)
+            .apply()
+    }
+
+    var mlsPublishedKeyPackageEventId: String?
+        get() = plainPrefs.getString(KEY_MLS_PUBLISHED_KEY_PACKAGE_EVENT_ID, null)
+        set(value) {
+            if (value == null) plainPrefs.edit().remove(KEY_MLS_PUBLISHED_KEY_PACKAGE_EVENT_ID).apply()
+            else plainPrefs.edit().putString(KEY_MLS_PUBLISHED_KEY_PACKAGE_EVENT_ID, value).apply()
+        }
+
+    var mlsPublishedKeyPackageAt: Long
+        get() = plainPrefs.getLong(KEY_MLS_PUBLISHED_KEY_PACKAGE_AT, 0L)
+        set(value) = plainPrefs.edit().putLong(KEY_MLS_PUBLISHED_KEY_PACKAGE_AT, value).apply()
+
+    var mlsConsumedKeyPackageEventIds: Set<String>
+        get() = plainPrefs.getStringSet(KEY_MLS_CONSUMED_KEY_PACKAGE_EVENT_IDS, emptySet()) ?: emptySet()
+        set(value) = plainPrefs.edit()
+            .putStringSet(KEY_MLS_CONSUMED_KEY_PACKAGE_EVENT_IDS, value.map { it.lowercase() }.toSet())
+            .apply()
+
+    fun addMlsConsumedKeyPackageEventId(eventId: String) {
+        val normalized = eventId.trim().lowercase()
+        if (normalized.isEmpty()) return
+        val current = mlsConsumedKeyPackageEventIds.toMutableSet()
+        current.add(normalized)
+        mlsConsumedKeyPackageEventIds = current.takeLast(200).toSet()
+    }
+
     var notificationEnabledKinds: Set<Int>
         get() {
             val str = plainPrefs.getString(KEY_NOTIFICATION_KINDS, null)
@@ -314,5 +348,6 @@ class AppPreferences(context: Context) {
         private const val KEY_MAIN_RELAY = "main_relay"
         private const val KEY_PLAIN_MIGRATED = "plain_migrated_v1"
         private const val KEY_NOTIFICATION_KINDS = "notification_enabled_kinds"
+        private const val KEY_MLS_SELF_UPDATE_SUCCESS_PREFIX = "mls_self_update_success_at_"
     }
 }

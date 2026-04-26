@@ -153,15 +153,41 @@ class NostrClient(
         }
     }
 
-    /** Fetch events from specific relays only (e.g. NIP-50 search relay).
-     *  The Rust engine already has the search relay configured, so this
-     *  is equivalent to fetchEvents — the search relay is included automatically. */
+    /**
+     * Fetch events from specific relays only.
+     *
+     * Automatically adds and connects to relays not yet in the pool.
+     * Falls back to [fetchEvents] (all relays) if the relay list is empty.
+     */
     suspend fun fetchEventsFrom(
         relayUrls: List<String>,
         filter: Filter,
         timeoutMs: Long = 5_000
     ): List<NostrEvent> {
-        return fetchEvents(filter, timeoutMs)
+        if (relayUrls.isEmpty()) return fetchEvents(filter, timeoutMs)
+        return withContext(Dispatchers.IO) {
+            val client = ensureClient() ?: return@withContext emptyList()
+            try {
+                val filterJson = buildFilterJson(filter)
+                val timeoutSecs = ((timeoutMs + 999) / 1000).toUInt()
+                val eventsJson = client.fetchEventsFromRelays(filterJson, relayUrls, timeoutSecs)
+                eventsJson.map { Json { ignoreUnknownKeys = true }.decodeFromString<NostrEvent>(it) }
+            } catch (e: Exception) {
+                Log.w(TAG, "fetchEventsFrom($relayUrls) failed: ${e.message}, falling back to all relays")
+                fetchEvents(filter, timeoutMs)
+            }
+        }
+    }
+
+    /** Dynamically add a relay and connect to it. */
+    suspend fun addRelay(url: String) {
+        withContext(Dispatchers.IO) {
+            try {
+                ensureClient()?.addRelay(url)
+            } catch (e: Exception) {
+                Log.w(TAG, "addRelay($url) failed: ${e.message}")
+            }
+        }
     }
 
     /** Serialise a [Filter] to a NIP-01 JSON filter string for the Rust FFI. */

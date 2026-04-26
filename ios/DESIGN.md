@@ -5,6 +5,20 @@
 iOS native client for null--nostr, a LINE-style Nostr client for the Japanese community.
 Must be pixel-identical to Android in layout, color, font, and UX flow.
 
+> **詳細な同期チェックリストは [SYNC_PLAN.md](./SYNC_PLAN.md) を参照。**
+
+### 同期状態サマリー（2026-03-24）
+
+| スクリーン | 同期率 | 主な残課題 |
+|-----------|--------|-----------|
+| MainTabView | ✅ 完了 | — |
+| HomeView | 🔶 90% | アバター 72→80pt, BadgeDisplay 接続 |
+| TimelineView | 🔶 90% | New Posts Pill 未実装 |
+| TalkView | ✅ 完了 | 絵文字ボタン photo→face.smiling |
+| SettingsView | 🔶 85% | カテゴリータブ underline 化 |
+| PostRow | 🔶 85% | アバター 40→42pt, "もっと見る" テキスト |
+| PostActions | 🔶 80% | like アイコン heart→thumbsup, 間隔 32pt, via client |
+
 ---
 
 ## Platform Stack
@@ -28,12 +42,19 @@ Must be pixel-identical to Android in layout, color, font, and UX flow.
 
 ### Navigation: 4-tab TabView (bottom)
 
-| Tab | Icon | Screen | Android Equivalent |
-|-----|------|--------|--------------------|
-| ホーム | house | HomeView | HomeScreen.kt |
-| トーク | bubble.left.and.bubble.right | TalkView | TalkScreen.kt |
-| タイムライン | doc.richtext | TimelineView | TimelineScreen.kt |
-| ミニアプリ | square.grid.2x2 | SettingsView | SettingsScreen.kt |
+| Tab | SF Symbol (active/inactive) | Screen | Android Equivalent |
+|-----|----------------------------|--------|--------------------|
+| ホーム | house.fill / house | HomeView | HomeScreen.kt |
+| トーク | message.fill / message | TalkView | TalkScreen.kt |
+| タイムライン | newspaper.fill / newspaper | TimelineView | TimelineScreen.kt |
+| ミニアプリ | square.grid.2x2.fill / square.grid.2x2 | SettingsView | SettingsScreen.kt |
+
+**Bottom nav bar specs** (MainTabView.swift):
+- height: 56pt + safe area (via `.safeAreaInset(edge: .bottom, spacing: 0)`)
+- background: Color.black with `.ignoresSafeArea(edges: .bottom)`
+- top border: 0.5pt Divider, borderColor
+- active icon/text: lineGreen; inactive: textTertiary
+- label: 10pt (labelSmall)
 
 ### Screen Details
 
@@ -417,7 +438,7 @@ Minimize dependencies. Prefer Apple frameworks (URLSession, AVFoundation, Crypto
 - [ ] MainTabView (4-tab navigation)
 - [ ] TimelineView (fetch kind 1, display PostRow)
 - [ ] PostRow component (avatar, name, content, timestamp)
-- [ ] PostActions (like, repost, reply, zap counts)
+- [ ] PostActions (repost, like [thumbsup], zap counts — no reply button; spacedBy 32pt)
 - [ ] Pull-to-refresh, pagination
 
 ### Phase 3: Profile & Interaction (Week 5-6)

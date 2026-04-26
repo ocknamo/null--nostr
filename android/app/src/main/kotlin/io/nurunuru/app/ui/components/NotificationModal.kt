@@ -266,7 +266,7 @@ fun NotificationModal(
                             ) {
                                 item {
                                     Column(
-                                        modifier = Modifier.fillMaxWidth().padding(32.dp),
+                                        modifier = Modifier.fillParentMaxHeight().fillMaxWidth().padding(32.dp),
                                         horizontalAlignment = Alignment.CenterHorizontally,
                                         verticalArrangement = Arrangement.Center
                                     ) {

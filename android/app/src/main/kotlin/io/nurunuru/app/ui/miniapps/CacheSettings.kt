@@ -53,7 +53,7 @@ private val CACHE_TYPES = listOf(
     CacheTypeConfig("emoji",        "絵文字",               "kind 10030",         86_400_000L),
     CacheTypeConfig("relay",        "リレーリスト",         "kind 10002",         86_400_000L),
     CacheTypeConfig("badge",        "プロフィールバッジ",   "kind 8, 30009",      86_400_000L),
-    CacheTypeConfig("mls_groups",   "トーク（グループ）",   "kind 443 / 444",     2_592_000_000L),
+    CacheTypeConfig("mls_groups",   "トーク（グループ）",   "kind 30443 / 1059",  2_592_000_000L),
     CacheTypeConfig("mls_messages", "トーク（メッセージ）", "kind 445",           2_592_000_000L),
 )
 

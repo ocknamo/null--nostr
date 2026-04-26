@@ -9,10 +9,9 @@
 
 [![Latest Release](https://img.shields.io/github/v/release/tami1A84/null--nostr?label=Android&color=4CAF50)](https://github.com/tami1A84/null--nostr/releases/latest)
 [![License](https://img.shields.io/badge/license-Unlicense-blue)](#ライセンス--license)
-[![Platform](https://img.shields.io/badge/platform-Android-lightgrey)](#インストール--installation)
 [![Nostr](https://img.shields.io/badge/Nostr-protocol-purple)](https://nostr.com)
 
-[🇯🇵 日本語](#日本語) · [🌐 English](#english)
+[🇯🇵 日本語](#日本語) · [🌐 English](#english) · [📱 公式サイト](https://tami1a84.github.io/null--nostr/)
 
 </div>
 
@@ -24,8 +23,7 @@ Nostrは、特定の企業やサーバーに依存しない自由なSNSプロト
 
 ### インストール
 
-[最新リリース](https://github.com/tami1A84/null--nostr/releases/latest) から `.apk` をダウンロードしてインストール。
-[zapstore](https://zapstore.dev) 経由でのインストールにも対応しています。
+[公式サイト](https://tami1a84.github.io/null--nostr/) からダウンロードできます。
 
 ### 主な機能
 
@@ -35,58 +33,6 @@ Nostrは、特定の企業やサーバーに依存しない自由なSNSプロト
 <img src="https://blossom.primal.net/51245134a6f922b4b22eeb65f0ee7c6aa96a5021596917e34b18a792b73ea540.png" width="23%" />
 <img src="https://blossom.primal.net/3251a2a0816281515f2e115527037f4f0ce257bc555649717ddfaaee24f51dd4.png" width="23%" />
 </div>
-
-アプリはホーム・タイムライン・トーク・ミニアプリの4タブ構成です。
-
-タイムラインはフォロー中の投稿を表示します。画像・動画・カスタム絵文字・長文記事に対応しています。ホームタブでは自分の投稿といいねした投稿を切り替えて確認できます。
-
-投稿は最大3枚の画像を同時にアップロードできます。投稿先のリレーをその都度選べます。
-
-いいねはカスタム絵文字に対応しています。2回タップで取り消せます。
-
-通知はリアクション・Zap・リポスト・返信・メンション・誕生日をリアルタイムで受信します。
-
-トークはE2E暗号化のDMとグループチャットに対応しています。
-
-ZapはLightningインボイスの生成・送信に対応しています。
-
-検索は全文検索で、`#タグ` `from:npub` `filter:image` などのコマンドに対応しています。
-
-ミニアプリとしてカスタム絵文字、プロフィールバッジ、リレー設定、ミュートリスト、Zap設定、調整くん、音声入力設定、バックアップ、削除リクエスト、キャッシュ設定を提供しています。
-
-ログインはnsec・外部署名アプリ（Amber）に対応しています。
-
-### 対応NIP
-
-| NIP | 内容 |
-|-----|------|
-| NIP-01 | 基本プロトコル・テキストノート |
-| NIP-02 | フォローリスト（kind 3） |
-| NIP-05 | DNS識別子（`user@domain` 認証） |
-| NIP-09 | イベント削除・リアクション取り消し |
-| NIP-11 | リレー情報 |
-| NIP-17 | プライベートDM（Gift Wrap） |
-| NIP-19 | bech32エンコード（npub / nsec / note / nevent など） |
-| NIP-23 | 長文記事（kind 30023） |
-| NIP-25 | リアクション・カスタム絵文字リアクション |
-| NIP-27 | テキスト内ノート参照 |
-| NIP-30 | カスタム絵文字 |
-| NIP-32 | ラベリング（Birdwatch） |
-| NIP-42 | リレー認証 |
-| NIP-44 | 暗号化コンテンツ |
-| NIP-46 | Nostr Connect（外部署名） |
-| NIP-50 | 全文検索 |
-| NIP-51 | リスト（ブックマーク kind 10003・ミュートリスト kind 10000） |
-| NIP-55 | Amber外部署名アプリ |
-| NIP-57 | Zap（Lightning決済） |
-| NIP-58 | バッジ（プロフィールバッジ） |
-| NIP-59 | Gift Wrap |
-| NIP-62 | 削除リクエスト（Vanish） |
-| NIP-65 | リレーリスト（read / write） |
-| NIP-70 | 保護投稿 |
-| NIP-71 | 動画イベント |
-| NIP-98 | HTTP認証 |
-| NIP-EE | MLS E2E暗号化トーク・グループチャット |
 
 ### ライセンス
 
@@ -104,8 +50,7 @@ Nostr is an open, censorship-resistant social protocol. Your identity is a crypt
 
 ### Installation
 
-Download the latest `.apk` from [Releases](https://github.com/tami1A84/null--nostr/releases/latest) and install directly.
-Also available via [zapstore](https://zapstore.dev).
+Download from the [official site](https://tami1a84.github.io/null--nostr/).
 
 ### Features
 
@@ -115,58 +60,6 @@ Also available via [zapstore](https://zapstore.dev).
 <img src="https://blossom.primal.net/51245134a6f922b4b22eeb65f0ee7c6aa96a5021596917e34b18a792b73ea540.png" width="23%" />
 <img src="https://blossom.primal.net/3251a2a0816281515f2e115527037f4f0ce257bc555649717ddfaaee24f51dd4.png" width="23%" />
 </div>
-
-The app has four tabs: Home, Timeline, Talk, and Mini-apps.
-
-The timeline shows posts from accounts you follow, with support for images, videos, custom emoji, and long-form articles. The Home tab shows your own posts and posts you've liked.
-
-Posts support up to 3 image uploads at once. You can choose which relays to publish to per post.
-
-Likes support custom emoji and can be undone with a double-tap.
-
-Notifications deliver reactions, Zaps, reposts, replies, mentions, and birthdays in real time.
-
-Talk provides E2E encrypted DMs and group chats.
-
-Zaps support Lightning invoice generation and sending.
-
-Search supports full-text with commands: `#tag`, `from:npub`, `filter:image`.
-
-Mini-apps include custom emoji, profile badges, relay settings, mute list, Zap settings, scheduling, voice input settings, backup, vanish request, and cache settings.
-
-Login supports nsec and external signers (Amber).
-
-### Supported NIPs
-
-| NIP | Description |
-|-----|-------------|
-| NIP-01 | Basic protocol, text notes |
-| NIP-02 | Follow list (kind 3) |
-| NIP-05 | DNS identifier verification |
-| NIP-09 | Event deletion, reaction undo |
-| NIP-11 | Relay information |
-| NIP-17 | Private DMs (Gift Wrap) |
-| NIP-19 | bech32 encoding (npub / nsec / note / nevent etc.) |
-| NIP-23 | Long-form content (kind 30023) |
-| NIP-25 | Reactions and custom emoji reactions |
-| NIP-27 | In-text note references |
-| NIP-30 | Custom emoji |
-| NIP-32 | Labeling (Birdwatch) |
-| NIP-42 | Relay authentication |
-| NIP-44 | Encrypted content |
-| NIP-46 | Nostr Connect (remote signing) |
-| NIP-50 | Full-text search |
-| NIP-51 | Lists (bookmarks kind 10003, mute list kind 10000) |
-| NIP-55 | Amber external signer |
-| NIP-57 | Zaps (Lightning payments) |
-| NIP-58 | Badges |
-| NIP-59 | Gift Wrap |
-| NIP-62 | Request to Vanish |
-| NIP-65 | Relay list (read / write) |
-| NIP-70 | Protected events |
-| NIP-71 | Video events |
-| NIP-98 | HTTP Auth |
-| NIP-EE | MLS E2E encrypted talk and group chats |
 
 ### License
 

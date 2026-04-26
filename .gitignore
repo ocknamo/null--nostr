@@ -47,3 +47,11 @@ rust-engine/target/
 # LINE Seed JP font distribution package (only res/font/ TTFs are committed)
 android/app/src/main/LINESeedJP_20241105/
 android/app/src/main/assets/
+ios/build-cli/
+ios/build-device/
+ios/build-live-device/
+ios/build-sim-cli/
+ios/build-stage/
+ios/Launch_io.nurunuru.app_*.trace/
+ios/NuruNuru.xcodeproj/xcuserdata/
+rust-engine/nurunuru-ffi/ios/.swiftpm/

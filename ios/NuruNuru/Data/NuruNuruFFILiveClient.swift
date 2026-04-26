@@ -1,0 +1,175 @@
+import Foundation
+
+#if NURUNURU_FFI_AVAILABLE
+import NuruNuruFFILib
+
+/// Live implementation of `MlsFFIBridge` backed by `NuruNuruClient` (UniFFI).
+/// `groupIdHex` parameters/results are Nostr group id hex values (Kind 445 `h` tags);
+/// internal MDK/OpenMLS group ids are resolved and hidden by Rust.
+final class MlsFFILiveClient: MlsFFIBridge, @unchecked Sendable {
+    private let client: NuruNuruClient
+
+    init(secretKeyHex: String, dbPath: String) throws {
+        try initEngine(dbPath: dbPath)
+        self.client = try NuruNuruClient(secretKeyHex: secretKeyHex)
+    }
+
+    init(pubkeyHex: String, dbPath: String) throws {
+        try initEngine(dbPath: dbPath)
+        self.client = try NuruNuruClient.newReadOnly(pubkeyHex: pubkeyHex)
+    }
+
+    func connect() { client.connect() }
+    func disconnect() throws { try client.disconnect() }
+
+    func mlsCreateKeyPackage() throws -> FfiKeyPackageEventData {
+        bridgeKeyPackage(try client.mlsCreateKeyPackage())
+    }
+
+    func mlsValidateKeyPackageEvent(eventJSON: String) throws {
+        try client.mlsValidateKeyPackageEvent(keyPackageEventJson: eventJSON)
+    }
+
+    func mlsDeleteConsumedKeyPackageFromEventJSON(eventJSON: String) throws {
+        try client.mlsDeleteConsumedKeyPackageFromEventJson(keyPackageEventJson: eventJSON)
+    }
+
+    func mlsGroupsNeedingSelfUpdate(thresholdSecs: UInt64) throws -> [String] {
+        try client.mlsGroupsNeedingSelfUpdate(thresholdSecs: thresholdSecs)
+    }
+
+    func mlsCreateGroup(name: String, adminPubkeys: [String], relays: [String]) throws -> FfiMlsGroupInfo {
+        bridgeGroupInfo(try client.mlsCreateGroup(name: name, adminPubkeys: adminPubkeys, relays: relays))
+    }
+
+    func mlsAddMember(groupIdHex: String, keyPackageEventJSON: String) throws -> FfiAddMemberResult {
+        let r = try client.mlsAddMember(groupIdHex: groupIdHex, keyPackageEventJson: keyPackageEventJSON)
+        return bridgeAddMemberResult(r)
+    }
+
+    func mlsRemoveMember(groupIdHex: String, memberPubkeyHex: String) throws -> FfiEncryptedMessageData {
+        bridgeEncryptedMsg(try client.mlsRemoveMember(groupIdHex: groupIdHex, memberPubkey: memberPubkeyHex))
+    }
+
+    func mlsLeaveGroup(groupIdHex: String) throws -> FfiEncryptedMessageData {
+        bridgeEncryptedMsg(try client.mlsLeaveGroup(groupIdHex: groupIdHex))
+    }
+
+    func mlsListGroups() throws -> [FfiMlsGroupInfo] {
+        try client.mlsListGroups().map { bridgeGroupInfo($0) }
+    }
+
+    func mlsGetGroupInfo(groupIdHex: String) throws -> FfiMlsGroupInfo {
+        bridgeGroupInfo(try client.mlsGetGroupInfo(groupIdHex: groupIdHex))
+    }
+
+    func mlsCreateMessage(groupIdHex: String, content: String) throws -> FfiEncryptedMessageData {
+        bridgeEncryptedMsg(try client.mlsCreateMessage(groupIdHex: groupIdHex, content: content))
+    }
+
+    func mlsProcessMessage(groupIdHex: String, eventJSON: String) throws -> FfiDecryptedMessage {
+        bridgeDecryptedMessage(try client.mlsProcessMessage(groupIdHex: groupIdHex, eventJson: eventJSON))
+    }
+
+    func mlsProcessMessageResult(groupIdHex: String, eventJSON: String) throws -> FfiMlsProcessResult {
+        let result = try client.mlsProcessMessageResult(groupIdHex: groupIdHex, eventJson: eventJSON)
+        switch result {
+        case let .application(message):
+            return .application(bridgeDecryptedMessage(message))
+        case let .stateUpdate(kind):
+            return .stateUpdate(kind)
+        }
+    }
+
+    func mlsProcessWelcome(welcomeEventJSON: String) throws -> FfiMlsGroupInfo {
+        bridgeGroupInfo(try client.mlsProcessWelcome(welcomeEventJson: welcomeEventJSON))
+    }
+
+    func mlsGetMessageHistory(groupIdHex: String, limit: UInt64) throws -> [FfiDecryptedMessage] {
+        try client.mlsGetMessageHistory(groupIdHex: groupIdHex, limit: limit).map { bridgeDecryptedMessage($0) }
+    }
+
+    func mlsMergePendingCommit(groupIdHex: String) throws {
+        try client.mlsMergePendingCommit(groupIdHex: groupIdHex)
+    }
+
+    func mlsCreateRecoveryCommit(groupIdHex: String) throws -> FfiEncryptedMessageData {
+        bridgeEncryptedMsg(try client.mlsCreateRecoveryCommit(groupIdHex: groupIdHex))
+    }
+
+    func mlsClearPendingCommit(groupIdHex: String) throws {
+        try client.mlsClearPendingCommit(groupIdHex: groupIdHex)
+    }
+
+    // MARK: - Helpers
+
+    private func bridgeGroupInfo(_ g: NuruNuruFFILib.FfiMlsGroupInfo) -> FfiMlsGroupInfo {
+        FfiMlsGroupInfo(
+            groupIdHex: g.groupIdHex,
+            name: g.name,
+            description: g.description,
+            adminPubkeys: g.adminPubkeys,
+            memberPubkeys: g.memberPubkeys,
+            relays: g.relays,
+            createdAt: g.createdAt,
+            epoch: g.epoch,
+            disappearingMessageSecs: extractDisappearingMessageSecs(g),
+            isDm: g.isDm
+        )
+    }
+
+    // Extract disappearing_message_secs from generated UniFFI type across binding versions.
+    private func extractDisappearingMessageSecs(_ g: NuruNuruFFILib.FfiMlsGroupInfo) -> UInt64? {
+        let mirror = Mirror(reflecting: g)
+        for child in mirror.children {
+            guard let label = child.label else { continue }
+            if label == "disappearingMessageSecs" || label == "disappearing_message_secs" {
+                if let v = child.value as? UInt64 { return v }
+                if let v = child.value as? Int { return v >= 0 ? UInt64(v) : nil }
+                if let v = child.value as? NSNumber { return v.uint64Value }
+                let opt = Mirror(reflecting: child.value)
+                if opt.displayStyle == .optional, let some = opt.children.first?.value {
+                    if let v = some as? UInt64 { return v }
+                    if let v = some as? Int { return v >= 0 ? UInt64(v) : nil }
+                    if let v = some as? NSNumber { return v.uint64Value }
+                }
+            }
+        }
+        return nil
+    }
+
+    private func bridgeDecryptedMessage(_ m: NuruNuruFFILib.FfiDecryptedMessage) -> FfiDecryptedMessage {
+        FfiDecryptedMessage(
+            senderPubkey: m.senderPubkey,
+            content: m.content,
+            timestamp: m.timestamp,
+            groupIdHex: m.groupIdHex
+        )
+    }
+
+    private func bridgeEncryptedMsg(_ d: NuruNuruFFILib.FfiEncryptedMessageData) -> FfiEncryptedMessageData {
+        FfiEncryptedMessageData(content: d.content, tags: d.tags, ephemeralPubkey: d.ephemeralPubkey)
+    }
+
+    private func bridgeWelcomeEvent(_ w: NuruNuruFFILib.FfiWelcomeEventData) -> FfiWelcomeEventData {
+        FfiWelcomeEventData(
+            recipientPubkey: w.recipientPubkey,
+            content: w.innerRumorJson,
+            tags: w.tags,
+            giftWrappedEventJson: w.giftWrappedEventJson,
+            innerRumorJson: w.innerRumorJson
+        )
+    }
+
+    private func bridgeKeyPackage(_ d: NuruNuruFFILib.FfiKeyPackageEventData) -> FfiKeyPackageEventData {
+        FfiKeyPackageEventData(kind: d.kind, content: d.content, tags: d.tags, legacyTags: d.legacyTags, dTag: d.dTag)
+    }
+
+    private func bridgeAddMemberResult(_ r: NuruNuruFFILib.FfiAddMemberResult) -> FfiAddMemberResult {
+        FfiAddMemberResult(
+            commitEventData: bridgeEncryptedMsg(r.commitEventData),
+            welcomeEventData: bridgeWelcomeEvent(r.welcomeEventData)
+        )
+    }
+}
+#endif

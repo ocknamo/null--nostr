@@ -62,6 +62,8 @@ object ExternalSigner : AppSigner {
             {"type":"sign_event","kind":443},
             {"type":"sign_event","kind":444},
             {"type":"sign_event","kind":445},
+            {"type":"sign_event","kind":30443},
+            {"type":"sign_event","kind":10051},
             {"type":"sign_event","kind":10000},
             {"type":"sign_event","kind":10002},
             {"type":"sign_event","kind":30030},

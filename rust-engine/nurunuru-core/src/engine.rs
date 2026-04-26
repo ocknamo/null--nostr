@@ -77,19 +77,25 @@ impl NuruNuruEngine {
     ///
     /// The signer can be `Keys` (private key), or a custom `NostrSigner`
     /// implementation for NIP-07/NIP-46 bridges.
-    pub async fn new(
-        signer: impl IntoNostrSigner,
-        config: NuruNuruConfig,
-    ) -> Result<Arc<Self>> {
-        // Open nostrdb at the configured path
-        let ndb = NdbDatabase::open(&config.db_path)
-            .map_err(|e| NuruNuruError::DatabaseError(e.to_string()))?;
+    pub async fn new(signer: impl IntoNostrSigner, config: NuruNuruConfig) -> Result<Arc<Self>> {
+        // Build nostr-sdk client.
+        //
+        // MLS-only mode: when db_path is empty, skip nostrdb initialization and
+        // use the default in-memory client backend. This is useful for iOS MLS-only
+        // integration where timeline/profile are pure Swift and Rust is used only
+        // for MLS cryptographic state.
+        let client = if config.db_path.is_empty() {
+            tracing::info!(
+                "[NuruNuruEngine] MLS-only mode: nostrdb disabled (in-memory client backend)"
+            );
+            Client::builder().signer(signer).build()
+        } else {
+            // Open nostrdb at the configured path.
+            let ndb = NdbDatabase::open(&config.db_path)
+                .map_err(|e| NuruNuruError::DatabaseError(e.to_string()))?;
 
-        // Build the nostr-sdk Client with nostrdb backend
-        let client = Client::builder()
-            .signer(signer)
-            .database(ndb)
-            .build();
+            Client::builder().signer(signer).database(ndb).build()
+        };
 
         // Add relays
         let relay_urls = relay::build_relay_list(&config.relay);
@@ -166,10 +172,8 @@ impl NuruNuruEngine {
         }
 
         // Load follow list, mute list in parallel
-        let (follows, mutes) = tokio::join!(
-            self.fetch_follow_list(pubkey),
-            self.fetch_mute_list(pubkey),
-        );
+        let (follows, mutes) =
+            tokio::join!(self.fetch_follow_list(pubkey), self.fetch_mute_list(pubkey),);
 
         if let Ok(follows) = follows {
             let mut fl = self.follow_list.write().await;
@@ -186,6 +190,13 @@ impl NuruNuruEngine {
     /// Get the current user's public key.
     pub async fn current_pubkey(&self) -> Option<PublicKey> {
         *self.user_pubkey.read().await
+    }
+
+    pub async fn client_signer_for_tests(&self) -> Result<Arc<dyn NostrSigner>> {
+        self.client
+            .signer()
+            .await
+            .map_err(|e| NuruNuruError::MlsError(format!("test signer unavailable: {e}")))
     }
 
     // ─── Profile ──────────────────────────────────────────────
@@ -285,10 +296,7 @@ impl NuruNuruEngine {
     }
 
     /// Follow a user (publish updated kind 3).
-    pub async fn follow_user(
-        &self,
-        target_pubkey: PublicKey,
-    ) -> Result<()> {
+    pub async fn follow_user(&self, target_pubkey: PublicKey) -> Result<()> {
         let my_pk = self
             .current_pubkey()
             .await
@@ -319,10 +327,7 @@ impl NuruNuruEngine {
     }
 
     /// Unfollow a user (publish updated kind 3).
-    pub async fn unfollow_user(
-        &self,
-        target_pubkey: PublicKey,
-    ) -> Result<()> {
+    pub async fn unfollow_user(&self, target_pubkey: PublicKey) -> Result<()> {
         let my_pk = self
             .current_pubkey()
             .await
@@ -382,20 +387,11 @@ impl NuruNuruEngine {
         since: Option<Timestamp>,
         limit: usize,
     ) -> Result<Vec<Event>> {
-        let tl_filters = filters::timeline_filters(
-            authors,
-            since,
-            None,
-            limit,
-            limit / 2,
-        );
+        let tl_filters = filters::timeline_filters(authors, since, None, limit, limit / 2);
 
         let mut all_events = Vec::new();
         for f in tl_filters {
-            let events = self
-                .client
-                .fetch_events(f, Duration::from_secs(15))
-                .await?;
+            let events = self.client.fetch_events(f, Duration::from_secs(15)).await?;
             all_events.extend(events);
         }
 
@@ -540,7 +536,11 @@ impl NuruNuruEngine {
         // out-of-network viral candidates (global, last 1h).
         let (network_result, viral_result) = tokio::join!(
             self.fetch_timeline(
-                if author_pks.is_empty() { None } else { Some(&author_pks) },
+                if author_pks.is_empty() {
+                    None
+                } else {
+                    Some(&author_pks)
+                },
                 Some(since_48h),
                 limit * 2,
             ),
@@ -552,7 +552,8 @@ impl NuruNuruEngine {
 
         // Merge and deduplicate by event ID
         let mut seen_ids: HashSet<EventId> = HashSet::new();
-        let mut all_events: Vec<Event> = Vec::with_capacity(network_events.len() + viral_events.len());
+        let mut all_events: Vec<Event> =
+            Vec::with_capacity(network_events.len() + viral_events.len());
         for event in network_events.into_iter().chain(viral_events.into_iter()) {
             if seen_ids.insert(event.id) {
                 all_events.push(event);
@@ -610,10 +611,7 @@ impl NuruNuruEngine {
 
     /// Get a recommended feed using the X-algorithm-inspired ranking.
     /// Returns scored post metadata (event_id, pubkey, score, created_at).
-    pub async fn get_recommended_feed(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<ScoredPost>> {
+    pub async fn get_recommended_feed(&self, limit: usize) -> Result<Vec<ScoredPost>> {
         let (_, scored) = self.build_recommendation_candidates(limit, None).await?;
         Ok(scored)
     }
@@ -643,23 +641,13 @@ impl NuruNuruEngine {
 
     /// Send an encrypted DM using NIP-17 gift wrapping.
     /// All seal/wrap layers are handled by `nostr-sdk`.
-    pub async fn send_dm(
-        &self,
-        recipient: PublicKey,
-        content: &str,
-    ) -> Result<()> {
-        self.client
-            .send_private_msg(recipient, content, [])
-            .await?;
+    pub async fn send_dm(&self, recipient: PublicKey, content: &str) -> Result<()> {
+        self.client.send_private_msg(recipient, content, []).await?;
         Ok(())
     }
 
     /// Fetch DM events (gift-wrapped, kind 1059).
-    pub async fn fetch_dms(
-        &self,
-        since: Option<Timestamp>,
-        limit: usize,
-    ) -> Result<Vec<Event>> {
+    pub async fn fetch_dms(&self, since: Option<Timestamp>, limit: usize) -> Result<Vec<Event>> {
         let my_pk = self
             .current_pubkey()
             .await
@@ -687,7 +675,12 @@ impl NuruNuruEngine {
     }
 
     /// Publish a reaction (kind 7, NIP-25).
-    pub async fn react(&self, event_id: EventId, author: PublicKey, reaction: &str) -> Result<EventId> {
+    pub async fn react(
+        &self,
+        event_id: EventId,
+        author: PublicKey,
+        reaction: &str,
+    ) -> Result<EventId> {
         let target = ReactionTarget {
             event_id,
             public_key: author,
@@ -920,6 +913,40 @@ impl NuruNuruEngine {
         Ok(events.into_iter().collect())
     }
 
+    /// Fetch events from *specific* relays only.
+    ///
+    /// Temporarily adds any relay not yet known, sends a REQ, then returns.
+    /// Useful for MLS group messages where Kind-445 may be published to
+    /// relays outside the default JP set.
+    pub async fn fetch_events_from_relays(
+        &self,
+        filter: Filter,
+        relay_urls: Vec<String>,
+        timeout_secs: u64,
+    ) -> Result<Vec<Event>> {
+        // Ensure all target relays are connected
+        for url in &relay_urls {
+            if let Ok(relay_url) = RelayUrl::parse(url) {
+                let _ = self.client.add_relay(relay_url.clone()).await;
+                let _ = self.client.connect_relay(relay_url).await;
+            }
+        }
+
+        // Small grace period for WebSocket handshake
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let urls: Vec<RelayUrl> = relay_urls
+            .iter()
+            .filter_map(|u| RelayUrl::parse(u).ok())
+            .collect();
+
+        let events = self
+            .client
+            .fetch_events_from(urls, filter, Duration::from_secs(timeout_secs))
+            .await?;
+        Ok(events.into_iter().collect())
+    }
+
     /// Send any `EventBuilder` — used by the FFI's generic `publish_event`.
     pub async fn send_builder(&self, builder: EventBuilder) -> Result<EventId> {
         let output = self.client.send_event_builder(builder).await?;
@@ -950,10 +977,8 @@ impl NuruNuruEngine {
         for tag in tags {
             builder = builder.tag(tag);
         }
-        let urls: Vec<nostr::types::Url> = relay_urls
-            .iter()
-            .filter_map(|u| u.parse().ok())
-            .collect();
+        let urls: Vec<nostr::types::Url> =
+            relay_urls.iter().filter_map(|u| u.parse().ok()).collect();
         let event = self.client.sign_event_builder(builder).await?;
         let output = self.client.send_event_to(urls, &event).await?;
         Ok(output.val)
@@ -1082,9 +1107,7 @@ impl NuruNuruEngine {
             map.remove(sub_id); // drops Arc → background task will exit
         }
         // Send CLOSE to relays.
-        self.client
-            .unsubscribe(&SubscriptionId::new(sub_id))
-            .await;
+        self.client.unsubscribe(&SubscriptionId::new(sub_id)).await;
         Ok(())
     }
 
@@ -1096,9 +1119,36 @@ impl NuruNuruEngine {
             .ok_or_else(|| NuruNuruError::MlsError("MLS not initialised for this client".into()))
     }
 
-    /// Generate a fresh MLS KeyPackage (Kind 443 event data).
+    /// Generate a fresh MLS KeyPackage (Kind 30443, Marmot MIP-00).
+    ///
+    /// Uses the engine's configured relay list for the `relays` tag.
     pub async fn mls_create_key_package(&self) -> Result<KeyPackageEventData> {
-        self.require_mls()?.create_key_package_event()
+        let relay_urls: Vec<RelayUrl> = self.client.relays().await.keys().cloned().collect();
+        self.require_mls()?.create_key_package_event(&relay_urls)
+    }
+
+    /// Strictly validate a KeyPackage event JSON (MIP-00).
+    ///
+    /// This validates required tags/capabilities and verifies `i` (KeyPackageRef)
+    /// against decoded content via MDK parser.
+    pub async fn mls_validate_key_package_event(&self, key_package_event_json: &str) -> Result<()> {
+        self.require_mls()?
+            .validate_key_package_event(key_package_event_json)
+    }
+
+    /// Delete consumed KeyPackage private/init-key material from local MLS storage (MIP-02).
+    pub async fn mls_delete_consumed_key_package_from_event_json(
+        &self,
+        key_package_event_json: &str,
+    ) -> Result<()> {
+        self.require_mls()?
+            .delete_consumed_key_package_from_event_json(key_package_event_json)
+    }
+
+    /// Return MLS group IDs (hex) that need self-update per MDK state tracking.
+    pub async fn mls_groups_needing_self_update(&self, threshold_secs: u64) -> Result<Vec<String>> {
+        self.require_mls()?
+            .groups_needing_self_update(threshold_secs)
     }
 
     /// Create a new MLS group.
@@ -1108,16 +1158,65 @@ impl NuruNuruEngine {
         admin_pubkeys: Vec<String>,
         relays: Vec<String>,
     ) -> Result<MlsGroupInfo> {
-        self.require_mls()?.create_group(name, admin_pubkeys, relays)
+        self.require_mls()?
+            .create_group(name, admin_pubkeys, relays)
     }
 
-    /// Add a member to a group using their Kind-443 KeyPackage event JSON.
+    /// Add a member to a group using their Kind-30443 KeyPackage event JSON.
+    ///
+    /// The returned `AddMemberResult.welcome_event_data.gift_wrapped_event_json`
+    /// contains a NIP-59 gift-wrapped event (Kind 1059) ready for `publish_raw_event`.
+    ///
+    /// Flow (per Marmot MIP-02):
+    /// 1. MLS add_members → Commit + Welcome rumor (Kind 444, unsigned)
+    /// 2. Gift-wrap the rumor: Kind 444 → Kind 13 seal → Kind 1059 gift-wrap
+    /// 3. Return both commit and gift-wrapped welcome
     pub async fn mls_add_member(
         &self,
         group_id_hex: &str,
         key_package_event_json: &str,
     ) -> Result<AddMemberResult> {
-        self.require_mls()?.add_member(group_id_hex, key_package_event_json)
+        let mut result = self
+            .require_mls()?
+            .add_member(group_id_hex, key_package_event_json)?;
+
+        // Apply NIP-59 gift-wrap to the Welcome rumor if present
+        if !result.welcome_event_data.inner_rumor_json.is_empty()
+            && !result.welcome_event_data.recipient_pubkey.is_empty()
+        {
+            let recipient_pk = PublicKey::from_hex(&result.welcome_event_data.recipient_pubkey)
+                .map_err(|e| NuruNuruError::MlsError(format!("Invalid recipient pubkey: {e}")))?;
+
+            let rumor: UnsignedEvent =
+                serde_json::from_str(&result.welcome_event_data.inner_rumor_json).map_err(|e| {
+                    NuruNuruError::MlsError(format!("Invalid welcome rumor JSON: {e}"))
+                })?;
+
+            let signer =
+                self.client.signer().await.map_err(|e| {
+                    NuruNuruError::MlsError(format!("No signer for gift-wrap: {e}"))
+                })?;
+
+            let gift_wrap = EventBuilder::gift_wrap(&signer, &recipient_pk, rumor, [])
+                .await
+                .map_err(|e| NuruNuruError::MlsError(format!("gift_wrap failed: {e}")))?;
+
+            // Defensive check: the generated gift-wrap must be decryptable by the
+            // recipient signer when the recipient is this engine's own user. This
+            // catches local-recipient wrapping regressions without requiring the
+            // sender to know a remote member's private key.
+            if self.current_pubkey().await == Some(recipient_pk) {
+                nostr::nips::nip59::extract_rumor(&signer, &gift_wrap)
+                    .await
+                    .map_err(|e| {
+                        NuruNuruError::MlsError(format!("gift_wrap self-check failed: {e}"))
+                    })?;
+            }
+
+            result.welcome_event_data.gift_wrapped_event_json = gift_wrap.as_json();
+        }
+
+        Ok(result)
     }
 
     /// Encrypt an application message for a group (Kind 445).
@@ -1135,11 +1234,44 @@ impl NuruNuruEngine {
         group_id_hex: &str,
         event_json: &str,
     ) -> Result<DecryptedMessage> {
-        self.require_mls()?.process_message(group_id_hex, event_json)
+        self.require_mls()?
+            .process_message(group_id_hex, event_json)
     }
 
-    /// Process an incoming Kind-444 Welcome and join the group.
+    /// Structured processing result for an incoming Kind-445 event.
+    pub async fn mls_process_message_result(
+        &self,
+        group_id_hex: &str,
+        event_json: &str,
+    ) -> Result<MlsProcessResult> {
+        self.require_mls()?
+            .process_message_result(group_id_hex, event_json)
+    }
+
+    /// Process an incoming Welcome event and join the group.
+    ///
+    /// Accepts both:
+    /// - Kind 1059 (NIP-59 gift-wrapped Welcome, Marmot MIP-02) — unwraps automatically
+    /// - Kind 444 (legacy NIP-EE rumor) — passed directly to MDK
     pub async fn mls_process_welcome(&self, welcome_event_json: &str) -> Result<MlsGroupInfo> {
+        // Try to parse as a signed Event first (gift-wrap or legacy)
+        if let Ok(event) = serde_json::from_str::<nostr::Event>(welcome_event_json) {
+            if event.kind == nostr::Kind::GiftWrap {
+                // NIP-59 unwrap: Kind 1059 → Kind 13 seal → Kind 444 rumor
+                let signer =
+                    self.client.signer().await.map_err(|e| {
+                        NuruNuruError::MlsError(format!("No signer for unwrap: {e}"))
+                    })?;
+                let unwrapped = nostr::nips::nip59::extract_rumor(&signer, &event)
+                    .await
+                    .map_err(|e| {
+                        NuruNuruError::MlsError(format!("gift-wrap unwrap failed: {e}"))
+                    })?;
+                let rumor_json = unwrapped.rumor.as_json();
+                return self.require_mls()?.process_welcome(&rumor_json);
+            }
+        }
+        // Legacy: treat as raw rumor JSON
         self.require_mls()?.process_welcome(welcome_event_json)
     }
 
@@ -1162,7 +1294,11 @@ impl NuruNuruEngine {
         self.require_mls()?.get_group_info(group_id_hex)
     }
 
+    // NOTE: mls_self_demote() will be added when mdk-core releases self_demote().
+    // Currently in mdk-core main branch but not in 0.7.1.
+
     /// Leave a group (publishes self-removal commit event data).
+    /// Uses SelfRemove proposal internally (Marmot MIP-03).
     pub async fn mls_leave_group(&self, group_id_hex: &str) -> Result<EncryptedMessageData> {
         self.require_mls()?.leave_group(group_id_hex)
     }
@@ -1173,11 +1309,95 @@ impl NuruNuruEngine {
         group_id_hex: &str,
         member_pubkey: &str,
     ) -> Result<EncryptedMessageData> {
-        self.require_mls()?.remove_member(group_id_hex, member_pubkey)
+        self.require_mls()?
+            .remove_member(group_id_hex, member_pubkey)
     }
 
     /// Merge the pending commit for a group after publishing to relays.
     pub async fn mls_merge_pending_commit(&self, group_id_hex: &str) -> Result<()> {
         self.require_mls()?.merge_pending_commit(group_id_hex)
+    }
+
+    /// Create a recovery self-update commit event for stuck pending proposals.
+    pub async fn mls_create_recovery_commit(
+        &self,
+        group_id_hex: &str,
+    ) -> Result<EncryptedMessageData> {
+        self.require_mls()?.create_recovery_commit(group_id_hex)
+    }
+
+    /// Clear (rollback) pending commit for recovery from stuck MLS state.
+    pub async fn mls_clear_pending_commit(&self, group_id_hex: &str) -> Result<()> {
+        self.require_mls()?.clear_pending_commit(group_id_hex)
+    }
+}
+
+#[cfg(test)]
+mod giftwrap_engine_tests {
+    use super::*;
+    use crate::config::NuruNuruConfig;
+    use nostr::{EventBuilder, Keys, Kind, Tag};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_db_path(name: &str) -> String {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "nurunuru_engine_giftwrap_test_{}_{}_{}.sqlite3",
+            name,
+            std::process::id(),
+            nanos
+        ));
+        path.to_string_lossy().to_string()
+    }
+
+    fn test_config(mls_db_path: String) -> NuruNuruConfig {
+        let mut cfg = NuruNuruConfig::default();
+        cfg.db_path = String::new();
+        cfg.mls_db_path = mls_db_path;
+        cfg
+    }
+
+    async fn new_logged_in_engine(keys: &Keys, name: &str) -> Arc<NuruNuruEngine> {
+        let cfg = test_config(unique_db_path(name));
+        let engine = NuruNuruEngine::new(keys.clone(), cfg).await.unwrap();
+        engine.login(keys.public_key()).await.unwrap();
+        engine
+    }
+
+    #[tokio::test]
+    async fn engine_signer_can_roundtrip_direct_gift_wrap() {
+        let alice_keys = Keys::generate();
+        let bob_keys = Keys::generate();
+
+        let alice = new_logged_in_engine(&alice_keys, "alice_engine_signer").await;
+        let bob = new_logged_in_engine(&bob_keys, "bob_engine_signer").await;
+
+        let rumor = EventBuilder::new(Kind::Custom(444), "hello-welcome")
+            .tags(vec![Tag::parse([
+                "p",
+                bob_keys.public_key().to_hex().as_str(),
+            ])
+            .unwrap()])
+            .build(alice_keys.public_key());
+
+        let alice_signer = alice.client.signer().await.unwrap();
+        let bob_signer = bob.client.signer().await.unwrap();
+
+        let gift =
+            EventBuilder::gift_wrap(&alice_signer, &bob_keys.public_key(), rumor.clone(), [])
+                .await
+                .unwrap();
+        let extracted = nostr::nips::nip59::extract_rumor(&bob_signer, &gift)
+            .await
+            .unwrap();
+
+        assert_eq!(u16::from(extracted.rumor.kind), u16::from(rumor.kind));
+        assert_eq!(extracted.rumor.pubkey, rumor.pubkey);
+        assert_eq!(extracted.rumor.tags.to_vec(), rumor.tags.to_vec());
+        assert_eq!(extracted.rumor.content, rumor.content);
     }
 }

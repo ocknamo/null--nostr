@@ -48,10 +48,7 @@ pub fn follow_list_filter(pubkey: PublicKey) -> Filter {
 
 /// Fetch mute list (kind 10000, NIP-51).
 pub fn mute_list_filter(pubkey: PublicKey) -> Filter {
-    Filter::new()
-        .kind(Kind::MuteList)
-        .author(pubkey)
-        .limit(1)
+    Filter::new().kind(Kind::MuteList).author(pubkey).limit(1)
 }
 
 /// Fetch reactions (kind 7, NIP-25) for given event IDs.
@@ -116,10 +113,7 @@ pub fn badge_filter(pubkey: PublicKey) -> Filter {
 
 /// Relay list (kind 10002, NIP-65).
 pub fn relay_list_filter(pubkey: PublicKey) -> Filter {
-    Filter::new()
-        .kind(Kind::RelayList)
-        .author(pubkey)
-        .limit(1)
+    Filter::new().kind(Kind::RelayList).author(pubkey).limit(1)
 }
 
 /// DM relay list (kind 10050, NIP-17).

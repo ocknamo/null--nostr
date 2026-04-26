@@ -108,9 +108,13 @@ pub struct RelayInfo {
 
 // ─── NIP-EE / MLS Types ─────────────────────────────────────────────────────
 
-/// MLS group information (NIP-EE Kind 443/444/445).
+/// MLS group information (Marmot Kind 30443/1059/445).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MlsGroupInfo {
+    /// Nostr group id hex / Kind 445 h tag value.
+    ///
+    /// This is the external group id used across FFI/App boundaries; it is not
+    /// MDK/OpenMLS's internal MLS group id.
     pub group_id_hex: String,
     pub name: String,
     pub description: String,
@@ -119,17 +123,32 @@ pub struct MlsGroupInfo {
     pub relays: Vec<String>,
     pub created_at: u64,
     pub epoch: u64,
+    /// MIP-01 v3: disappearing message duration in seconds.
+    ///
+    /// None => disabled (messages persist forever)
+    /// Some(n>0) => auto-expire after n seconds
+    ///
+    /// NOTE: current mdk-core(0.7.x) does not expose this field yet, so callers
+    /// may observe None until upstream support lands.
+    pub disappearing_message_secs: Option<u64>,
     /// true if this is a 1:1 DM (2-person group)
     pub is_dm: bool,
 }
 
-/// KeyPackage event data for Kind 443 publishing.
+/// KeyPackage event data for Marmot MIP-00 publishing (kind 30443 canonical, 443 legacy).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyPackageEventData {
-    /// Serialised MLS KeyPackage (base64 or hex)
+    /// Event kind — 30443 (addressable, NIP-33) canonical; 443 is legacy migration fallback.
+    pub kind: u32,
+    /// Serialised MLS KeyPackage (base64-encoded TLS-serialized KeyPackageBundle)
     pub content: String,
-    /// Kind 443 tags
+    /// Marmot-compliant tags for kind:30443: d, mls_protocol_version, mls_ciphersuite,
+    /// mls_extensions, mls_proposals, encoding, i, relays, client
     pub tags: Vec<Vec<String>>,
+    /// Legacy-compatible tags for kind:443 (no `d` tag), supplied by MDK.
+    pub legacy_tags: Vec<Vec<String>>,
+    /// Canonical `d` tag value (32-byte hex string) used for 30443 replacement lifecycle.
+    pub d_tag: String,
 }
 
 /// Result from adding a member to an MLS group.
@@ -141,11 +160,15 @@ pub struct AddMemberResult {
     pub welcome_event_data: WelcomeEventData,
 }
 
-/// Welcome event data for Kind 444 (gift-wrapped to new member).
+/// Welcome event data for Kind 444 → NIP-59 gift-wrapped as Kind 1059 (Marmot MIP-02).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WelcomeEventData {
     pub recipient_pubkey: String,
-    pub content: String,
+    /// NIP-59 gift-wrapped event JSON (Kind 1059), ready for `publish_raw_event`.
+    /// Empty if gift-wrapping has not been applied yet (caller must wrap).
+    pub gift_wrapped_event_json: String,
+    /// Inner rumor JSON (Kind 444, unsigned) — for local storage/debugging.
+    pub inner_rumor_json: String,
     pub tags: Vec<Vec<String>>,
 }
 
@@ -154,7 +177,8 @@ pub struct WelcomeEventData {
 pub struct EncryptedMessageData {
     /// NIP-44 encrypted content (using MLS exporter secret)
     pub content: String,
-    /// Tags including ["h", "<group_id_hex>"]
+    /// Tags including ["h", "<group_id_hex>"] where group_id_hex is the
+    /// Nostr group id hex / Kind 445 h tag value.
     pub tags: Vec<Vec<String>>,
     /// Ephemeral sender pubkey
     pub ephemeral_pubkey: String,
@@ -166,7 +190,15 @@ pub struct DecryptedMessage {
     pub sender_pubkey: String,
     pub content: String,
     pub timestamp: u64,
+    /// Nostr group id hex / Kind 445 h tag value.
     pub group_id_hex: String,
+}
+
+/// Structured result for processing a Kind 445 event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MlsProcessResult {
+    ApplicationMessage(DecryptedMessage),
+    StateUpdate { kind: String },
 }
 
 /// Japanese-friendly timestamp display

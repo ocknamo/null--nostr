@@ -6,7 +6,7 @@ Context and instructions for AI coding agents and developers working on **null--
 
 ## Project Overview
 
-null--nostr is a LINE-style Nostr client for the Japanese community. It runs as a Next.js PWA on Web and as a native Android app (Kotlin + Rust FFI). The shared Rust core handles crypto, relay management, and the recommendation algorithm.
+null--nostr is a LINE-style Nostr client for the Japanese community. It runs as a Next.js PWA on Web, a native Android app (Kotlin + Rust FFI), and a native iOS app (Swift/SwiftUI). The shared Rust core handles crypto and relay management.
 
 ---
 
@@ -16,18 +16,30 @@ null--nostr is a LINE-style Nostr client for the Japanese community. It runs as 
 ```bash
 npm install && npm run dev        # dev server at http://localhost:3000
 npm run build                     # production build
-npm run test                      # all tests
+npm run test                      # all tests (vitest)
+npm run test:coverage             # with coverage report
 npx vitest run src/__tests__/filename.test.ts   # single test
-npm run tokens                    # sync design-tokens/constants.json → Web + Android
+npm run tokens                    # sync design-tokens/constants.json → Web + Android + iOS
+npm run tokens:check              # verify tokens are in sync (CI)
 ```
 
 ### Android
 ```bash
-cd android && ./gradlew assembleDebug
+cd android && ./gradlew assembleDebug    # build debug APK
+cd android && ./gradlew assembleRelease  # build release APK
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
-
-./gradlew assembleRelease         # release build (signed)
 ```
+
+### iOS
+```bash
+# Xcode プロジェクト再生成 (project.yml 変更後)
+cd ios && /tmp/xcodegen_extracted/xcodegen/bin/xcodegen generate --spec project.yml
+
+cd ios && xcodebuild -scheme NuruNuru -destination 'platform=iOS Simulator,name=iPhone 17' -skipPackagePluginValidation build
+cd ios && xcodebuild -scheme NuruNuru -destination 'platform=iOS Simulator,name=iPhone 17' -skipPackagePluginValidation test
+open ios/NuruNuru.xcodeproj                    # open in Xcode
+```
+Design doc: [ios/DESIGN.md](./ios/DESIGN.md) | Guardrails: [ios/GUARDRAILS.md](./ios/GUARDRAILS.md)
 
 ### Rust Engine (rebuild required when modifying lib.rs or engine.rs)
 ```bash
@@ -43,7 +55,7 @@ cp rust-engine/target/aarch64-linux-android/release/libuniffi_nurunuru.so \
    rust-engine/nurunuru-ffi/android/libs/arm64-v8a/
 ```
 
-NDK config lives in `rust-engine/.cargo/config.toml`. `AR_aarch64_linux_android` must be passed as env var.
+NDK linker/compiler config is persisted in `rust-engine/.cargo/config.toml`. `CC_aarch64_linux_android` is set there; `AR_aarch64_linux_android` must be passed explicitly as an env var (cc-rs limitation).
 
 ### Publishing
 ```bash
@@ -64,8 +76,10 @@ gh release create vX.Y.Z nurunuru-X.Y.Z-arm64-v8a.apk --title "..." --notes "...
 |---|---|
 | Web | Next.js 14, nostr-tools, rx-nostr, Tailwind CSS |
 | Android | Kotlin, Jetpack Compose, CameraX, ExoPlayer/Media3 |
-| Rust FFI | UniFFI → `nurunuru-ffi/src/lib.rs` → Kotlin bindings |
+| iOS | Swift, SwiftUI, iOS 17+ Observation |
+| Rust FFI | UniFFI → `nurunuru-ffi/src/lib.rs` → Kotlin/Swift bindings |
 | Rust Core | `nurunuru-core`, nostr-sdk 0.44.x, nostrdb |
+| Desktop | `nurunuru-napi` (napi-rs) → `nurunuru-core` (Rust) |
 
 ### FFI Bridge
 
@@ -75,21 +89,53 @@ gh release create vX.Y.Z nurunuru-X.Y.Z-arm64-v8a.apk --title "..." --notes "...
 - `publishEvent(kind, content, tags)` supports arbitrary tag names including custom NIP tags.
 - Generated `.kt` must be committed alongside any `lib.rs` API changes.
 
-### Recommendation Algorithm
+### iOS Layer
+```
+ios/NuruNuru/
+  Theme/            # NuruColors, NuruTypography, NuruSpacing (auto-generated from tokens)
+  Models/           # NostrEvent, ScoredPost, MlsGroup — same names as Android
+  Data/             # NostrRepository (actor), NostrClient, ConnectionManager, SecureKeyManager
+                    # NostrRepository+Talk, +Timeline, +Reactions, +Notifications, +LiveStream 等
+                    # ImageUploadService (nostr.build/yabu.me/Blossom, NIP-98)
+                    # NuruNuruFFIBridge (protocol + stub), NuruNuruFFILiveClient (XCFramework bridge)
+  ViewModels/       # AuthViewModel, TimelineViewModel, HomeViewModel, TalkViewModel, ConnectionViewModel
+  Views/Screens/    # LoginView, MainTabView, HomeView, TimelineView, TalkView, SettingsView
+  Views/Components/ # PostRow, PostActions, PostContent, VideoPlayer, ImageViewerView, AvatarView 等
+  Views/Sheets/     # PostSheet, SearchSheet, ZapSheet, NotificationSheet, CreateGroupSheet,
+                    # GroupInfoSheet, BookmarkListSheet, QuoteRepostSheet, UserProfileSheet 等
+  Views/MiniApps/   # BadgeSettingsView, EmojiSettingsView, ZapSettingsView, RelaySettingsView,
+                    # ElevenLabsSettingsView, SchedulerView, CacheSettingsView 等
+```
+- `NostrRepository` is an `actor` — single data access point (same pattern as Android)
+- `@Observable` ViewModels (iOS 17 Observation framework, not Combine)
+- NIP-46 (Nostr Connect) replaces NIP-55 (Amber) for external signing on iOS
+- `NuruNuruFFIBridge` protocol + `NuruNuruFFIStub` fallback — Rust FFI は Phase 1 で統合予定
+- Design must match Android pixel-for-pixel. See [ios/GUARDRAILS.md](./ios/GUARDRAILS.md)
 
-Implemented in Rust at `nurunuru-core/src/recommendation.rs` (`rank_feed()`) and orchestrated by `engine.rs` (`get_recommended_events_ordered()`).
+### Web Layer (`lib/`)
+- `nostr.js` — core protocol ops (publish, DM, zap, sign)
+- `connection-manager.js` — WebSocket pool, rate limiting (10 req/s), relay cooldowns; max 4 global / 2 per-relay concurrent connections
+- `cache.js` — two-layer (in-memory LRU + localStorage)
+- `secure-key-store.js` — private keys in module-level closure; **never expose to `window.*`**
+- `security.js` — CSRF, AES-GCM encrypted storage, content sanitization
+- `validation.js` — input validation for URLs, pubkeys, NIP-05
+- Web mode: `lib/rust-bridge.js` and `lib/rust-engine-manager.js` are stubs; all Nostr ops use `lib/nostr.js` directly
 
-**Feed composition:** 50% 2nd-degree network (48h) + 30% viral global (1h) + 20% 1st-degree follows
-
-**Scoring:** `Score = Engagement × Social × Author × Geohash × Modifier × TimeDecay`
-- Weights: Zap 100, Quote 35, Reply 30, Repost 25, Like 5
-- Time decay: 1.5x boost for <1h, 6h half-life
-
-Android entry point: `NostrRepository.fetchRecommendedTimeline()` → `TimelineViewModel` (おすすめ tab)
+### Android Layer
+```
+android/app/src/main/kotlin/io/nurunuru/app/
+  data/           # NostrRepository, NostrClient, models, cache, prefs, signers
+  ui/             # Compose screens, components, theme, icons, miniapps
+  viewmodel/      # TimelineViewModel, TalkViewModel, HomeViewModel, AuthViewModel, ConnectionViewModel
+  MainActivity.kt
+  NuruNuruApp.kt
+```
+- `NostrRepository` is the single data access point for ViewModels
+- `TimelineViewModel` drives both フォロー and おすすめ tabs
 
 ### Design Tokens
 
-`design-tokens/constants.json` is the single source of truth for weights, colors, and limits. Run `npm run tokens` to sync to Android and Web.
+`design-tokens/constants.json` is the single source of truth for weights, colors, and limits. Run `npm run tokens` to sync to `lib/constants.generated.js` (Web), `android/app/src/main/kotlin/io/nurunuru/app/data/Constants.kt` (Android), and `ios/NuruNuru/Utilities/Constants.swift` (iOS).
 
 ---
 
@@ -100,8 +146,6 @@ Android entry point: `NostrRepository.fetchRecommendedTimeline()` → `TimelineV
 | File | Purpose |
 |---|---|
 | `ui/components/PostModal.kt` | Post composer (text, images). Relay selection panel + NIP-70 `-` tag protection. `targetRelays` param routes to `publishNoteWithTagsToRelays`. Parallel image uploads via `async { }`. |
-| `ui/components/DivineVideoRecorder.kt` | CameraX video recorder, 6.3s loop. MPL-2.0. |
-| `data/ProofModeManager.kt` | ProofMode: PGP signing (Bouncy Castle), frame hashes, Play Integrity. MPL-2.0. |
 | `ui/components/VideoPlayer.kt` | ExoPlayer/Media3 video player with tap-to-unmute. |
 | `ui/components/PostContent.kt` | Feed post rendering. `EmbeddedNostrContent` for nostr: bech32 cards. `PostImageGrid` for 1/2/3/4+ layouts. |
 | `ui/components/ImageViewerDialog.kt` | Fullscreen pager viewer (`HorizontalPager`). Custom gesture handler: pinch=zoom, 1-finger-at-scale1=pass-to-pager. |
@@ -118,22 +162,27 @@ Android entry point: `NostrRepository.fetchRecommendedTimeline()` → `TimelineV
 |---|---|
 | `lib/nostr.js` | Core Nostr operations: signing, publishing, DM, Zap. |
 | `lib/connection-manager.js` | WebSocket pooling, rate limiting (10 req/s), relay cooldowns. |
-| `lib/recommendation.js` | Feed algorithm (mirrors Rust scoring). |
 | `lib/secure-key-store.js` | Private key closure — never expose to `window`. |
 | `lib/cache.js` | Two-layer cache: in-memory LRU + localStorage. |
 | `lib/security.js` | CSRF, AES-GCM storage, `sanitizeContent()`. |
 
 ---
 
-## Android Implementation Constraints
+## Implementation Constraints
 
+### Web
+- Post length: 140 chars threshold for collapse; links excluded from count
+- Always use `sanitizeContent()` from `lib/security.js` before `dangerouslySetInnerHTML`
+- Production builds strip `console.log/warn/debug`; use `console.error` for critical issues only
+- Max 4 global concurrent connections, 2 per-relay
+- Private keys: Use `storePrivateKey()` / `getPrivateKeyBytes()` from `lib/secure-key-store.js`. Never assign to `window`
+
+### Android
 - **Post length**: 140 characters, strictly enforced in `PostModal.kt`.
 - **Modals**: Full-screen `Surface` overlays as siblings to `Scaffold` inside a root `Box`.
 - **BasicTextField**: Must NOT use `Modifier.weight(1f)` inside a scrollable `Column` — causes crash.
 - **Compose performance**: Use `remember(post.event.id)` in `PostItem.kt`. No entrance animations in `TimelineScreen.kt`.
 - **IO operations**: All Rust FFI calls, file I/O, and uploads must run on `Dispatchers.IO`.
-- **Video recording**: `pointerInput` key must include permission state so the lambda re-creates after permission grant.
-- **Kind 34236 required tags**: `d` (unique ID), `url`, `m`, `duration`, `imeta`, `thumb`, `x`, `verification`, `proofmode`.
 - **AnimatedVisibility inside Box inside Column**: Kotlin resolves `ColumnScope.AnimatedVisibility` (outer receiver) over the top-level overload. Fix: wrap the call site in a `Column { }` to explicitly bring `ColumnScope` into scope, or extract to a standalone composable function.
 - **Surface rounded corners**: Always pass `shape = RoundedCornerShape(…)` to `Surface` directly. Using only `Modifier.clip(shape)` causes the border to be drawn as a rectangle before clipping, cutting the corners visually.
 - **Toggle like/repost**: `ScoredPost` carries `myLikeEventId`/`myRepostEventId`. On second tap, `TimelineViewModel` calls `repository.deleteEvent(eventId)` and decrements the counter.
@@ -142,32 +191,25 @@ Android entry point: `NostrRepository.fetchRecommendedTimeline()` → `TimelineV
 - **Font**: App-wide typography uses `LineSeedJP` (`FontFamily` in `Type.kt`) loaded from `res/font/line_seed_jp_rg.ttf` / `line_seed_jp_bd.ttf`.
 - **Image uploads**: Use `async { }` inside `withContext(Dispatchers.IO)` for parallel uploads; collect with `awaitAll()`.
 - **Zoom + pager gesture conflict**: In `ImageViewerDialog`, do NOT use `Modifier.transformable` — it consumes single-finger drags at `scale==1f`, blocking the `HorizontalPager`. Use `awaitEachGesture` with manual pointer-count branching instead.
+- **nostrdb** stored at `context.filesDir/nostrdb_ndb`
+- **NIP-55** (Amber) external signer via `ExternalSigner.kt`
 
----
-
-## ProofMode (NIP-71 Video Verification)
-
-Verification levels, in order:
-
-| Level | Requirements |
-|---|---|
-| `verified_mobile` | Play Integrity API token + PGP signature + frame hashes |
-| `verified_web` | PGP signature (Bouncy Castle Ed25519) + frame hashes + sensor data |
-| `basic_proof` | Frame hashes only |
-| `unverified` | Fallback on error |
-
-Tags added to Kind 34236 events: `["x", sha256]`, `["verification", level]`, `["proofmode", json]`, `["pgp_fingerprint", fp]`, `["device_attestation", token]` (mobile only).
-
-Note: `verified_mobile` requires the app to be distributed via Google Play Store. Sideloaded APKs fall back to `verified_web`.
-
----
-
-## Web Implementation Constraints
-
-- **Connections**: Max 4 global concurrent, 2 per-relay.
-- **Logs**: `console.log/warn/debug` are stripped in production. Use `console.error` for critical issues only.
-- **Sanitization**: Always use `sanitizeContent()` before `dangerouslySetInnerHTML`.
-- **Private keys**: Use `storePrivateKey()` / `getPrivateKeyBytes()` from `lib/secure-key-store.js`. Never assign to `window`.
+### iOS
+- Post length: strictly enforced 140-char limit in `PostSheet.swift`
+- Font: LINE Seed JP only (bundled .ttf). Never fall back to system font for body text
+- Private keys: Keychain only (`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`). Never in UserDefaults or logs
+- Use `.id(post.event.id)` for stable list identity; no entrance animations on timeline
+- Full-screen modals: `.fullScreenCover` for image viewer, `.sheet` for everything else
+- `NostrRepository` must be an `actor` for thread-safe access
+- `@Observable` for all ViewModels (iOS 17+). No Combine/ObservableObject
+- NIP-46 (Nostr Connect) for external signing (no NIP-55 on iOS)
+- SPM only for dependencies. Minimize third-party (prefer Apple frameworks)
+- Minimum deployment target: iOS 17.0
+- Tab bar: `.safeAreaInset(edge: .bottom, spacing: 0)` — do NOT use ZStack+ignoresSafeArea pattern
+- Bottom nav icons: house/message/newspaper/square.grid.2x2 (NOT person.crop.circle for home)
+- PostActions: 3 buttons only (repost, like, zap) — no reply button; like icon = hand.thumbsup (not heart)
+- Collapse text: "もっと見る" / "閉じる" (NOT "続きを読む") — matches Android exact copy
+- For pixel-perfect sync spec, see [ios/SYNC_PLAN.md](./ios/SYNC_PLAN.md)
 
 ---
 
@@ -206,5 +248,3 @@ Routing logic in `NostrRepository.advancedSearch()`:
 ## Supported NIPs
 
 NIP-01, 02, 05, 07, 09, 11, 17, 19, 25, 27, 30, 32, 42, 44, 46, 50, 51, 57, 58, 59, 62, 65, 70, 71, 98
-
-Custom: Kind 34236 (Short Loop Video with ProofMode)

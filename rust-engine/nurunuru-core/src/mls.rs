@@ -1,14 +1,14 @@
-//! MLS (Messaging Layer Security, RFC 9420) manager for NIP-EE / Marmot.
+//! MLS (Messaging Layer Security, RFC 9420) manager for Marmot protocol.
 //!
 //! Wraps `mdk-core` (`MDK<MdkSqliteStorage>`) and exposes a Nostr-centric API
-//! that produces/consumes event payloads for the following NIP-EE kinds:
+//! that produces/consumes event payloads for the following Marmot kinds:
 //!
-//! | Kind  | Purpose                                      |
-//! |-------|----------------------------------------------|
-//! | 443   | KeyPackage — async group join credential     |
-//! | 444   | Welcome — gift-wrapped MLS Welcome object    |
-//! | 445   | Group Message — encrypted MLS message/commit |
-//! | 10051 | KeyPackage relay list                        |
+//! | Kind  | Purpose                                           |
+//! |-------|---------------------------------------------------|
+//! | 30443 | KeyPackage — MIP-00 canonical (addressable)       |
+//! | 444   | Welcome rumor — unsigned, gift-wrapped as 1059     |
+//! | 1059  | Gift Wrap — NIP-59 wrapped Welcome (MIP-02)       |
+//! | 445   | Group Message — encrypted MLS message/commit       |
 //!
 //! ## API notes
 //!
@@ -16,12 +16,17 @@
 //! (forward secrecy + sender anonymisation).  The returned `EncryptedMessageData.content`
 //! contains the **full signed event JSON**, ready for `publish_raw_event()`.
 //!
-//! Kind-443 (KeyPackage) and Kind-444 (Welcome) events are **unsigned** —
-//! the caller signs them via the internal signer or Amber.
+//! Kind-30443 (KeyPackage) events are **unsigned** — the caller signs them
+//! via the internal signer or Amber.
+//!
+//! Kind-444 (Welcome) rumors are gift-wrapped via NIP-59 in `engine.rs`
+//! (`mls_add_member`) using the engine's signer.
 
+use base64::Engine as _;
 use mdk_core::groups::NostrGroupConfigData;
 use mdk_sqlite_storage::MdkSqliteStorage;
 use nostr::{EventBuilder, JsonUtil, PublicKey, RelayUrl, UnsignedEvent};
+use serde_json::Value;
 
 use crate::error::{NuruNuruError, Result};
 use crate::types::{
@@ -32,6 +37,49 @@ use crate::types::{
 // ─── Type alias ──────────────────────────────────────────────────────────────
 
 type Mdk = mdk_core::MDK<MdkSqliteStorage>;
+
+fn redact_hex_prefix(value: &str) -> String {
+    if value.len() <= 8 {
+        value.to_string()
+    } else {
+        format!("{}…", &value[..8])
+    }
+}
+
+fn mls_process_result_label<T: std::fmt::Debug>(value: &T) -> &'static str {
+    let s = format!("{value:?}");
+    if s.contains("Unprocessable") {
+        "Unprocessable"
+    } else if s.contains("Application") {
+        "ApplicationMessage"
+    } else if s.contains("Commit") {
+        "Commit"
+    } else if s.contains("Proposal") {
+        "Proposal"
+    } else if s.contains("Welcome") {
+        "Welcome"
+    } else {
+        "Other"
+    }
+}
+
+fn mls_error_label(error: &dyn std::fmt::Display) -> &'static str {
+    let lower = error.to_string().to_lowercase();
+    if lower.contains("hmac") {
+        "hmac_error"
+    } else if lower.contains("welcome") || lower.contains("process_welcome") {
+        "welcome_error"
+    } else if lower.contains("content")
+        || lower.contains("payload")
+        || lower.contains("plaintext")
+        || lower.contains("secret")
+        || lower.contains("private")
+    {
+        "redacted_error"
+    } else {
+        "mls_error"
+    }
+}
 
 // ─── MlsManager ──────────────────────────────────────────────────────────────
 
@@ -77,7 +125,9 @@ impl MlsManager {
     }
 
     fn user_pubkey(&self) -> Result<PublicKey> {
-        let hex = self.user_pubkey_hex.read()
+        let hex = self
+            .user_pubkey_hex
+            .read()
             .map_err(|_| NuruNuruError::MlsError("pubkey lock poisoned".to_string()))?;
         PublicKey::from_hex(&*hex)
             .map_err(|e| NuruNuruError::MlsError(format!("Invalid user pubkey: {e}")))
@@ -92,18 +142,24 @@ impl MlsManager {
     fn resolve_group_id(&self, nostr_group_id_hex: &str) -> Result<mdk_storage_traits::GroupId> {
         let bytes = hex::decode(nostr_group_id_hex)
             .map_err(|e| NuruNuruError::MlsError(format!("Invalid nostr_group_id hex: {e}")))?;
-        let nostr_id: [u8; 32] = bytes.try_into()
-            .map_err(|_| NuruNuruError::MlsError(
-                format!("nostr_group_id must be 32 bytes, got {nostr_group_id_hex}")
-            ))?;
-        let groups = self.mdk.get_groups()
+        let nostr_id: [u8; 32] = bytes.try_into().map_err(|_| {
+            NuruNuruError::MlsError(format!(
+                "nostr_group_id must be 32 bytes, got {nostr_group_id_hex}"
+            ))
+        })?;
+        let groups = self
+            .mdk
+            .get_groups()
             .map_err(|e| NuruNuruError::MlsError(format!("get_groups: {e}")))?;
-        groups.into_iter()
+        groups
+            .into_iter()
             .find(|g| g.nostr_group_id == nostr_id)
             .map(|g| g.mls_group_id)
-            .ok_or_else(|| NuruNuruError::MlsError(
-                format!("Group not found for nostr_group_id: {nostr_group_id_hex}")
-            ))
+            .ok_or_else(|| {
+                NuruNuruError::MlsError(format!(
+                    "Group not found for nostr_group_id: {nostr_group_id_hex}"
+                ))
+            })
     }
 
     /// Convert a `mdk_storage_traits::GroupId` to a lowercase hex string.
@@ -137,27 +193,121 @@ impl MlsManager {
             relays: Vec::new(),         // enriched below via get_relays
             created_at: 0,
             epoch: group.epoch,
-            is_dm: false,               // updated after member count is known
+            disappearing_message_secs: group.disappearing_message_secs,
+            is_dm: false, // updated after member count is known
         }
     }
 
-    // ─── Key Package (Kind 443) ───────────────────────────────────────────
+    // ─── Key Package (Kind 30443, MIP-00) ───────────────────────────────────
 
-    /// Generate a fresh MLS KeyPackage and return Kind-443 event data.
+    /// Generate a fresh MLS KeyPackage and return Kind-30443 event data.
     ///
-    /// The caller signs the event via `create_unsigned_event(443, content, tags, pubkey_hex)`.
-    pub fn create_key_package_event(&self) -> Result<KeyPackageEventData> {
+    /// The caller signs the event via `create_unsigned_event(30443, content, tags, pubkey_hex)`.
+    /// MDK automatically generates all Marmot-required tags:
+    /// `d`, `mls_protocol_version`, `mls_ciphersuite`, `mls_extensions`,
+    /// `mls_proposals`, `encoding`, `i`, `relays`, `client`.
+    pub fn create_key_package_event(&self, relay_urls: &[RelayUrl]) -> Result<KeyPackageEventData> {
         let pubkey = self.user_pubkey()?;
-        // Publish on default relays; the caller can override the relay list tag later.
-        let (content, tags, _hash_ref) = self
+        let data = self
             .mdk
-            .create_key_package_for_event(&pubkey, std::iter::empty::<RelayUrl>())
+            .create_key_package_for_event(&pubkey, relay_urls.iter().cloned())
             .map_err(|e| NuruNuruError::MlsError(format!("create_key_package: {e}")))?;
 
         Ok(KeyPackageEventData {
-            content,
-            tags: Self::tags_to_vecs(tags),
+            kind: 30443, // Marmot MIP-00 canonical kind
+            content: data.content,
+            tags: Self::tags_to_vecs(data.tags_30443),
+            legacy_tags: Self::tags_to_vecs(data.tags_443),
+            d_tag: data.d_tag,
         })
+    }
+
+    /// Normalize incoming Marmot KeyPackage event JSON for MDK 0.7.x parser.
+    ///
+    /// MDK 0.7.x expects kind:443 (`Kind::MlsKeyPackage`). Marmot canonical uses kind:30443.
+    /// For compatibility we rewrite kind 30443 -> 443 before handing events to MDK parser.
+    fn normalize_key_package_event_for_mdk(
+        &self,
+        key_package_event_json: &str,
+    ) -> Result<nostr::Event> {
+        let mut v: Value = serde_json::from_str(key_package_event_json)
+            .map_err(|e| NuruNuruError::MlsError(format!("Invalid KeyPackage event JSON: {e}")))?;
+
+        let kind = v.get("kind").and_then(|k| k.as_u64()).unwrap_or_default();
+        if kind == 30443 {
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("kind".to_string(), Value::from(443u64));
+            }
+        }
+
+        serde_json::from_value(v).map_err(|e| {
+            NuruNuruError::MlsError(format!("Invalid normalized KeyPackage event JSON: {e}"))
+        })
+    }
+
+    /// Strictly validate a KeyPackage event (including KeyPackageRef `i` tag content match).
+    ///
+    /// Uses MDK `parse_key_package`, which validates:
+    /// - credential/event signer identity binding
+    /// - required tags/capabilities
+    /// - `i` tag hex format and computed-ref match
+    pub fn validate_key_package_event(&self, key_package_event_json: &str) -> Result<()> {
+        let kp_event = self.normalize_key_package_event_for_mdk(key_package_event_json)?;
+        self.mdk
+            .parse_key_package(&kp_event)
+            .map_err(|e| NuruNuruError::MlsError(format!("validate_key_package_event: {e}")))?;
+        Ok(())
+    }
+
+    /// Delete consumed KeyPackage private/init-key material from local MDK storage.
+    ///
+    /// MIP-02 requires deleting consumed init_key material after successful Welcome processing.
+    /// We parse the provided KeyPackage event JSON and delete the corresponding stored key package by hash_ref.
+    pub fn delete_consumed_key_package_from_event_json(
+        &self,
+        key_package_event_json: &str,
+    ) -> Result<()> {
+        let kp_event = self.normalize_key_package_event_for_mdk(key_package_event_json)?;
+        let key_package = self.mdk.parse_key_package(&kp_event).map_err(|e| {
+            NuruNuruError::MlsError(format!(
+                "delete_consumed_key_package: parse_key_package: {e}"
+            ))
+        })?;
+        self.mdk
+            .delete_key_package_from_storage(&key_package)
+            .map_err(|e| {
+                NuruNuruError::MlsError(format!(
+                    "delete_consumed_key_package: delete_key_package_from_storage: {e}"
+                ))
+            })?;
+        Ok(())
+    }
+
+    /// List groups that currently require self-update (MIP-02 post-join and periodic rotation).
+    pub fn groups_needing_self_update(&self, threshold_secs: u64) -> Result<Vec<String>> {
+        let ids = self
+            .mdk
+            .groups_needing_self_update(threshold_secs)
+            .map_err(|e| NuruNuruError::MlsError(format!("groups_needing_self_update: {e}")))?;
+
+        // Public/FFI group IDs are Nostr group IDs (the 32-byte value used in
+        // Kind-445 `h` tags), not MDK's internal MLS group IDs. MDK returns
+        // internal IDs here, so translate them before crossing our API boundary.
+        ids.into_iter()
+            .map(|mls_group_id| {
+                let group = self
+                    .mdk
+                    .get_group(&mls_group_id)
+                    .map_err(|e| NuruNuruError::MlsError(format!("get_group: {e}")))?
+                    .ok_or_else(|| {
+                        NuruNuruError::MlsError(format!(
+                            "Group not found for mls_group_id: {}",
+                            Self::group_id_to_hex(&mls_group_id)
+                        ))
+                    })?;
+                Ok(hex::encode(group.nostr_group_id))
+            })
+            .collect()
     }
 
     // ─── Group management ─────────────────────────────────────────────────
@@ -191,6 +341,7 @@ impl MlsManager {
             image_nonce: None,
             relays: relay_urls,
             admins,
+            disappearing_message_secs: None,
         };
 
         let result = self
@@ -202,13 +353,14 @@ impl MlsManager {
         Ok(info)
     }
 
-    /// Add a member to an existing group using their Kind-443 KeyPackage event JSON.
+    /// Add a member to an existing group using their Kind-30443/443 KeyPackage event JSON.
     ///
     /// Returns:
     /// - `commit_event_data.content` — full JSON of the signed Kind-445 Commit event
     ///   (ready for `publish_raw_event`)
-    /// - `welcome_event_data` — unsigned Kind-444 rumor for the new member
-    ///   (needs signing + NIP-59 gift-wrap before publishing)
+    /// - `welcome_event_data` — unsigned Kind-444 rumor for the new member.
+    ///   `gift_wrapped_event_json` is empty here; the caller (engine.rs) must
+    ///   apply NIP-59 gift-wrapping before publishing.
     pub fn add_member(
         &self,
         group_id_hex: &str,
@@ -216,8 +368,10 @@ impl MlsManager {
     ) -> Result<AddMemberResult> {
         let group_id = self.resolve_group_id(group_id_hex)?;
 
-        let kp_event: nostr::Event = serde_json::from_str(key_package_event_json)
-            .map_err(|e| NuruNuruError::MlsError(format!("Invalid KeyPackage event JSON: {e}")))?;
+        // MDK 0.7.x expects kind:443 for parse_key_package internally.
+        // Normalize 30443 -> 443 for compatibility, while keeping all other fields intact.
+        let kp_event = self.normalize_key_package_event_for_mdk(key_package_event_json)?;
+        let key_package_owner_pubkey = kp_event.pubkey;
 
         let result = self
             .mdk
@@ -230,36 +384,46 @@ impl MlsManager {
         let commit_pubkey = result.evolution_event.pubkey.to_hex();
 
         // welcome_rumors[0] is the unsigned Kind-444 rumor for the new member
-        let welcome = result
-            .welcome_rumors
-            .and_then(|mut v| if v.is_empty() { None } else { Some(v.remove(0)) });
+        let welcome = result.welcome_rumors.and_then(|mut v| {
+            if v.is_empty() {
+                None
+            } else {
+                Some(v.remove(0))
+            }
+        });
 
-        let (welcome_recipient, welcome_content, welcome_tags) = match welcome {
+        let (welcome_recipient, welcome_rumor_json, welcome_tags) = match welcome {
             Some(rumor) => {
-                let recipient = rumor.pubkey.to_hex();
-                let content = rumor.as_json();
+                // NIP-59 gift-wrap encryption must target the KeyPackage event owner
+                // (the member being added). The unsigned Kind-444 Welcome rumor's
+                // `pubkey` is MDK-controlled and is not guaranteed to be the new
+                // member's Nostr identity. Using it as the gift-wrap recipient makes
+                // the returned Kind-1059 undecryptable by the actual recipient
+                // (invalid HMAC during unwrap).
+                let recipient = key_package_owner_pubkey.to_hex();
+                let rumor_json = rumor.as_json();
                 let tags = Self::tags_to_vecs(
-                    serde_json::from_str::<serde_json::Value>(&content)
+                    serde_json::from_str::<serde_json::Value>(&rumor_json)
                         .ok()
                         .and_then(|v| v.get("tags").cloned())
                         .and_then(|t| serde_json::from_value::<Vec<nostr::Tag>>(t).ok())
                         .unwrap_or_default(),
                 );
-                (recipient, content, tags)
+                (recipient, rumor_json, tags)
             }
             None => (String::new(), String::new(), Vec::new()),
         };
 
         Ok(AddMemberResult {
             commit_event_data: EncryptedMessageData {
-                // content holds the full signed event JSON for direct publish_raw_event()
                 content: commit_json,
                 tags: commit_tags_vec,
                 ephemeral_pubkey: commit_pubkey,
             },
             welcome_event_data: WelcomeEventData {
                 recipient_pubkey: welcome_recipient,
-                content: welcome_content,
+                gift_wrapped_event_json: String::new(), // filled by engine after gift-wrapping
+                inner_rumor_json: welcome_rumor_json,
                 tags: welcome_tags,
             },
         })
@@ -275,6 +439,34 @@ impl MlsManager {
         self.mdk
             .merge_pending_commit(&group_id)
             .map_err(|e| NuruNuruError::MlsError(format!("merge_pending_commit: {e}")))
+    }
+
+    /// Create a recovery self-update commit event to resolve stuck pending proposals.
+    ///
+    /// Caller must publish returned Kind-445 commit event, then call `merge_pending_commit`.
+    pub fn create_recovery_commit(&self, group_id_hex: &str) -> Result<EncryptedMessageData> {
+        let group_id = self.resolve_group_id(group_id_hex)?;
+        let result = self
+            .mdk
+            .self_update(&group_id)
+            .map_err(|e| NuruNuruError::MlsError(format!("self_update_recovery: {e}")))?;
+
+        Ok(EncryptedMessageData {
+            content: result.evolution_event.as_json(),
+            tags: Self::tags_to_vecs(result.evolution_event.tags.to_vec()),
+            ephemeral_pubkey: result.evolution_event.pubkey.to_hex(),
+        })
+    }
+
+    /// Clear (rollback) a pending commit for recovery after stuck states.
+    ///
+    /// This is a recovery API used when clients get stuck with
+    /// "pending commit/proposal exists" and cannot proceed.
+    pub fn clear_pending_commit(&self, group_id_hex: &str) -> Result<()> {
+        let group_id = self.resolve_group_id(group_id_hex)?;
+        self.mdk
+            .clear_pending_commit(&group_id)
+            .map_err(|e| NuruNuruError::MlsError(format!("clear_pending_commit: {e}")))
     }
 
     /// Remove a member from the group.
@@ -321,6 +513,9 @@ impl MlsManager {
         })
     }
 
+    // NOTE: self_demote() is available in mdk-core main branch but not yet
+    // released in 0.7.1. Will be added when mdk-core is updated.
+
     // ─── Messaging (Kind 445) ─────────────────────────────────────────────
 
     /// Encrypt an application message for the group.
@@ -338,14 +533,36 @@ impl MlsManager {
         let group_id = self.resolve_group_id(group_id_hex)?;
         let pubkey = self.user_pubkey()?;
 
-        // Build the inner rumor (Kind 14 = private direct message, NIP-17)
+        // Build the inner rumor as a Nostr chat event (kind:9) per MIP-03
+        // application-message recommendation.
+        //
+        // NOTE: reactions/other kinds are supported when callers provide prebuilt
+        // MLS messages via lower layers; this high-level helper is chat-text focused.
         let rumor: UnsignedEvent =
-            EventBuilder::new(nostr::Kind::from(14u16), content).build(pubkey);
+            EventBuilder::new(nostr::Kind::from(9u16), content).build(pubkey);
 
-        let event = self
-            .mdk
-            .create_message(&group_id, rumor)
-            .map_err(|e| NuruNuruError::MlsError(format!("create_message: {e}")))?;
+        let event = match self.mdk.create_message(&group_id, rumor.clone(), None) {
+            Ok(ev) => ev,
+            Err(e) => {
+                let es = e.to_string();
+                // Recovery path: clear stuck pending commit/proposal and retry once.
+                if es.contains("pending proposal exists") || es.contains("pending commit exists") {
+                    tracing::warn!("[MLS] create_message pending state detected for {group_id_hex}, clearing pending commit and retrying");
+                    self.mdk.clear_pending_commit(&group_id).map_err(|ce| {
+                        NuruNuruError::MlsError(format!(
+                            "create_message clear_pending_commit: {ce}"
+                        ))
+                    })?;
+                    self.mdk
+                        .create_message(&group_id, rumor, None)
+                        .map_err(|re| {
+                            NuruNuruError::MlsError(format!("create_message retry: {re}"))
+                        })?
+                } else {
+                    return Err(NuruNuruError::MlsError(format!("create_message: {e}")));
+                }
+            }
+        };
 
         Ok(EncryptedMessageData {
             content: event.as_json(),
@@ -355,15 +572,64 @@ impl MlsManager {
     }
 
     /// Process an incoming Kind-445 event (Proposal / Commit / Application).
-    ///
-    /// Returns the decrypted application message, or an error for non-application messages.
-    pub fn process_message(
+    pub fn process_message_result(
         &self,
         group_id_hex: &str,
         event_json: &str,
-    ) -> Result<DecryptedMessage> {
+    ) -> Result<crate::types::MlsProcessResult> {
         let event: nostr::Event = serde_json::from_str(event_json)
             .map_err(|e| NuruNuruError::MlsError(format!("Invalid event JSON: {e}")))?;
+
+        // MIP-03: Group Event MUST be kind:445.
+        if u16::from(event.kind) != 445 {
+            return Ok(crate::types::MlsProcessResult::StateUpdate {
+                kind: "unhandled:Unprocessable:invalid_kind".to_string(),
+            });
+        }
+
+        // MIP-03 decryption edge-case guards before handing to MDK:
+        // - content must be valid base64
+        // - decoded payload must be at least 28 bytes (12-byte nonce + 16-byte tag)
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(event.content.as_bytes())
+            .map_err(|_| {
+                NuruNuruError::MlsError("process_message: invalid_base64_content".to_string())
+            })?;
+        if decoded.len() < 28 {
+            return Err(NuruNuruError::MlsError(
+                "process_message: malformed_content_too_short".to_string(),
+            ));
+        }
+
+        let h_tag = event
+            .tags
+            .iter()
+            .find(|t| t.kind() == nostr::TagKind::h())
+            .and_then(|t| t.content())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+
+        tracing::info!(
+            "[MLS] process_message start group={} event_id={} author={} created_at={} kind={} h_tag={:?}",
+            group_id_hex,
+            event.id.to_hex(),
+            redact_hex_prefix(&event.pubkey.to_hex()),
+            event.created_at.as_secs(),
+            u16::from(event.kind),
+            if h_tag.is_empty() { None } else { Some(h_tag.as_str()) }
+        );
+
+        // MIP-03 routing guard: outer kind:445 MUST carry matching h tag.
+        if h_tag.is_empty() {
+            return Ok(crate::types::MlsProcessResult::StateUpdate {
+                kind: "unhandled:Unprocessable:missing_h_tag".to_string(),
+            });
+        }
+        if h_tag != group_id_hex {
+            return Ok(crate::types::MlsProcessResult::StateUpdate {
+                kind: "unhandled:Unprocessable:group_id_mismatch".to_string(),
+            });
+        }
 
         let result = self
             .mdk
@@ -372,29 +638,125 @@ impl MlsManager {
 
         match result {
             mdk_core::messages::MessageProcessingResult::ApplicationMessage(msg) => {
-                Ok(DecryptedMessage {
-                    sender_pubkey: msg.pubkey.to_hex(),
-                    content: msg.content,
-                    timestamp: msg.created_at.as_secs(),
-                    group_id_hex: group_id_hex.to_string(),
+                tracing::info!(
+                    "[MLS] process_message application group={} event_id={} sender={} len={}",
+                    group_id_hex,
+                    event.id.to_hex(),
+                    redact_hex_prefix(&msg.pubkey.to_hex()),
+                    msg.content.len()
+                );
+                Ok(crate::types::MlsProcessResult::ApplicationMessage(
+                    DecryptedMessage {
+                        sender_pubkey: msg.pubkey.to_hex(),
+                        content: msg.content,
+                        timestamp: msg.created_at.as_secs(),
+                        group_id_hex: group_id_hex.to_string(),
+                    },
+                ))
+            }
+            mdk_core::messages::MessageProcessingResult::Commit { .. } => {
+                tracing::info!(
+                    "[MLS] process_message commit group={} event_id={} — state updated",
+                    group_id_hex,
+                    event.id.to_hex()
+                );
+                Ok(crate::types::MlsProcessResult::StateUpdate {
+                    kind: "commit".to_string(),
                 })
             }
-            // State-transition messages: MDK already updated local state, nothing to display.
-            // Callers should treat these as non-fatal and skip adding to the message list.
-            mdk_core::messages::MessageProcessingResult::Commit { .. } => {
-                tracing::debug!("[MLS] Commit processed for group {group_id_hex} — state updated");
-                Err(NuruNuruError::MlsStateUpdate)
-            }
             mdk_core::messages::MessageProcessingResult::Proposal(_) => {
-                tracing::debug!("[MLS] Proposal auto-committed for group {group_id_hex}");
-                Err(NuruNuruError::MlsStateUpdate)
+                tracing::info!(
+                    "[MLS] process_message proposal group={} event_id={} — auto-committed",
+                    group_id_hex,
+                    event.id.to_hex()
+                );
+                Ok(crate::types::MlsProcessResult::StateUpdate {
+                    kind: "proposal".to_string(),
+                })
             }
             mdk_core::messages::MessageProcessingResult::PendingProposal { .. } => {
-                tracing::debug!("[MLS] Pending proposal stored for group {group_id_hex}");
-                Err(NuruNuruError::MlsStateUpdate)
+                tracing::info!(
+                    "[MLS] process_message pending_proposal group={} event_id={} — stored",
+                    group_id_hex,
+                    event.id.to_hex()
+                );
+                Ok(crate::types::MlsProcessResult::StateUpdate {
+                    kind: "pending_proposal".to_string(),
+                })
             }
-            _ => {
-                tracing::warn!("[MLS] Unhandled message type for group {group_id_hex}");
+            other => {
+                let kind_s = format!("{:?}", other);
+                if kind_s.contains("Unprocessable") {
+                    // Diagnostic classification for retryable state-updates.
+                    // Keep machine-readable reason in `kind` for app-layer policy,
+                    // and emit detailed logs for on-device triage.
+                    let h_tag = event
+                        .tags
+                        .iter()
+                        .find(|t| t.kind() == nostr::TagKind::h())
+                        .and_then(|t| t.content())
+                        .map(|s| s.to_string())
+                        .unwrap_or_default();
+                    let group_info = self.get_group_info(group_id_hex).ok();
+                    let local_epoch = group_info.as_ref().map(|g| g.epoch).unwrap_or_default();
+                    let local_admins = group_info
+                        .as_ref()
+                        .map(|g| g.admin_pubkeys.len())
+                        .unwrap_or_default();
+                    let local_relays = group_info
+                        .as_ref()
+                        .map(|g| g.relays.len())
+                        .unwrap_or_default();
+                    let reason = if h_tag.is_empty() {
+                        "missing_h_tag"
+                    } else if h_tag != group_id_hex {
+                        "group_id_mismatch"
+                    } else {
+                        "state_not_ready"
+                    };
+                    tracing::warn!(
+                        "[MLS] process_message retryable_unprocessable group={} event_id={} reason={} local_epoch={} local_admins={} local_relays={} event_h={} author_prefix={} created_at={} result={}",
+                        group_id_hex,
+                        event.id.to_hex(),
+                        reason,
+                        local_epoch,
+                        local_admins,
+                        local_relays,
+                        h_tag,
+                        redact_hex_prefix(&event.pubkey.to_hex()),
+                        event.created_at.as_secs(),
+                        mls_process_result_label(&other)
+                    );
+                    Ok(crate::types::MlsProcessResult::StateUpdate {
+                        kind: format!("unhandled:Unprocessable:{}", reason),
+                    })
+                } else {
+                    let result_label = mls_process_result_label(&other);
+                    tracing::warn!(
+                        "[MLS] process_message unhandled group={} event_id={} author_prefix={} created_at={} result={} — treated as state update",
+                        group_id_hex,
+                        event.id.to_hex(),
+                        redact_hex_prefix(&event.pubkey.to_hex()),
+                        event.created_at.as_secs(),
+                        result_label
+                    );
+                    Ok(crate::types::MlsProcessResult::StateUpdate {
+                        kind: format!("unhandled:{result_label}"),
+                    })
+                }
+            }
+        }
+    }
+
+    /// Backward-compatible wrapper that returns only application messages.
+    pub fn process_message(
+        &self,
+        group_id_hex: &str,
+        event_json: &str,
+    ) -> Result<DecryptedMessage> {
+        match self.process_message_result(group_id_hex, event_json)? {
+            crate::types::MlsProcessResult::ApplicationMessage(msg) => Ok(msg),
+            crate::types::MlsProcessResult::StateUpdate { .. } => {
                 Err(NuruNuruError::MlsStateUpdate)
             }
         }
@@ -418,8 +780,25 @@ impl MlsManager {
             .process_welcome(&wrapper_event_id, &rumor)
             .map_err(|e| NuruNuruError::MlsError(format!("process_welcome: {e}")))?;
 
+        // `process_welcome` in MDK only stores a pending welcome preview. The
+        // NuruNuru API method is documented/used as "process and join", so accept
+        // it immediately to create the local MLS group and mark the required
+        // post-join self-update state.
+        self.mdk
+            .accept_welcome(&welcome)
+            .map_err(|e| NuruNuruError::MlsError(format!("accept_welcome: {e}")))?;
+
         let group_id_hex = hex::encode(welcome.nostr_group_id);
         let is_dm = welcome.member_count <= 2;
+
+        // The Welcome record itself doesn't carry disappearing_message_secs;
+        // read it from the stored group metadata if already available.
+        let disappearing_message_secs = self
+            .mdk
+            .get_group(&welcome.mls_group_id)
+            .ok()
+            .flatten()
+            .and_then(|g| g.disappearing_message_secs);
 
         Ok(MlsGroupInfo {
             group_id_hex,
@@ -431,13 +810,10 @@ impl MlsManager {
                 .map(|pk| pk.to_hex())
                 .collect(),
             member_pubkeys: Vec::new(),
-            relays: welcome
-                .group_relays
-                .iter()
-                .map(|r| r.to_string())
-                .collect(),
+            relays: welcome.group_relays.iter().map(|r| r.to_string()).collect(),
             created_at: 0,
             epoch: 0,
+            disappearing_message_secs,
             is_dm,
         })
     }
@@ -459,14 +835,14 @@ impl MlsManager {
             // Enrich with relay and member info
             match self.mdk.get_relays(&group_id) {
                 Ok(relays) => info.relays = relays.iter().map(|r| r.to_string()).collect(),
-                Err(e) => tracing::warn!("[MLS] get_relays failed for {}: {e}", info.group_id_hex),
+                Err(e) => tracing::warn!("[MLS] get_relays failed for {}: {}", info.group_id_hex, mls_error_label(&e)),
             }
             match self.mdk.get_members(&group_id) {
                 Ok(members) => {
                     info.member_pubkeys = members.iter().map(|pk| pk.to_hex()).collect();
                     info.is_dm = info.member_pubkeys.len() <= 2;
                 }
-                Err(e) => tracing::warn!("[MLS] get_members failed for {}: {e}", info.group_id_hex),
+                Err(e) => tracing::warn!("[MLS] get_members failed for {}: {}", info.group_id_hex, mls_error_label(&e)),
             }
 
             infos.push(info);
@@ -489,14 +865,14 @@ impl MlsManager {
 
         match self.mdk.get_relays(&group_id) {
             Ok(relays) => info.relays = relays.iter().map(|r| r.to_string()).collect(),
-            Err(e) => tracing::warn!("[MLS] get_relays failed for {group_id_hex}: {e}"),
+            Err(e) => tracing::warn!("[MLS] get_relays failed for {}: {}", group_id_hex, mls_error_label(&e)),
         }
         match self.mdk.get_members(&group_id) {
             Ok(members) => {
                 info.member_pubkeys = members.iter().map(|pk| pk.to_hex()).collect();
                 info.is_dm = info.member_pubkeys.len() <= 2;
             }
-            Err(e) => tracing::warn!("[MLS] get_members failed for {group_id_hex}: {e}"),
+            Err(e) => tracing::warn!("[MLS] get_members failed for {}: {}", group_id_hex, mls_error_label(&e)),
         }
 
         Ok(info)

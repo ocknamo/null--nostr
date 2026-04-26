@@ -7,7 +7,7 @@
 #
 # Output:
 #   bindgen/swift-out/
-#     nurunuru_ffi.swift       — Generated Swift API
+#     nurunuru.swift           — Generated Swift API
 #     nurunuru_ffiFFI.h        — C header for the XCFramework
 #     nurunuru_ffiFFI.modulemap
 
@@ -21,19 +21,20 @@ cd "$CRATE_DIR"
 echo "==> Building nurunuru-ffi for host (macOS)..."
 cargo build --release
 
-# Determine the dylib path
+# Determine the host library path used by uniffi-bindgen.
+# Use dylib for binding generation so all exported checksum symbols are visible.
 if [[ "$(uname)" == "Darwin" ]]; then
-    DYLIB="target/release/libnurunuru_ffi.dylib"
+    LIB_PATH="../target/release/libuniffi_nurunuru.dylib"
 else
     echo "ERROR: Swift binding generation requires a macOS host."
     exit 1
 fi
 
-echo "==> Generating Swift bindings from $DYLIB ..."
+echo "==> Generating Swift bindings from $LIB_PATH ..."
 mkdir -p bindgen/swift-out
 
 cargo run --bin uniffi-bindgen -- generate \
-    --library "$DYLIB" \
+    --library "$LIB_PATH" \
     --language swift \
     --out-dir bindgen/swift-out/
 

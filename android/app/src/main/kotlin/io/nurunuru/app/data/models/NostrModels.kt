@@ -87,7 +87,7 @@ data class DmMessage(
 
 // ─── NIP-EE / MLS (Marmot) ──────────────────────────────────────────────────
 
-/** MLS group backed by NIP-EE (Kind 443/444/445). */
+/** MLS group backed by Marmot protocol (Kind 30443/1059/445). */
 @Serializable
 data class MlsGroup(
     val groupIdHex: String,
@@ -244,9 +244,11 @@ object NostrKind {
     const val DATE_CANDIDATE = 31926
     const val TIME_BASED_EVENT = 31927
     const val CHRONOSTR_EVENT = 31928
-    // NIP-EE / MLS (Marmot)
-    const val MLS_KEY_PACKAGE = 443
-    const val MLS_WELCOME = 444
-    const val MLS_GROUP_MESSAGE = 445
+    // MLS / Marmot
+    const val MLS_KEY_PACKAGE = 443             // Marmot MIP-00 (Kind 443, per MDK/nostr-sdk spec)
+    const val MLS_KEY_PACKAGE_LEGACY = 30443   // Legacy addressable variant (read-only during migration)
+    const val MLS_WELCOME = 1059               // NIP-59 gift-wrapped Welcome (Marmot MIP-02)
+    const val MLS_WELCOME_INNER = 444          // Inner rumor kind (unwrapped by Rust)
+    const val MLS_GROUP_MESSAGE = 445          // Unchanged
     const val MLS_KEY_PACKAGE_RELAYS = 10051
 }

@@ -16,7 +16,9 @@ import androidx.compose.ui.unit.dp
 import io.nurunuru.app.data.models.ScoredPost
 import io.nurunuru.app.data.*
 import io.nurunuru.app.ui.theme.LocalNuruColors
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun PostItem(
@@ -40,7 +42,31 @@ fun PostItem(
     myPubkey: String = ""
 ) {
     val nuruColors = LocalNuruColors.current
-    val profile = post.profile
+    val baseProfile = post.profile
+
+    // プロフィールが不完全（名前・画像なし）な場合、バックグラウンドで再取得
+    var resolvedProfile by remember(post.event.id) { mutableStateOf(baseProfile) }
+    LaunchedEffect(post.event.id, baseProfile) {
+        if (baseProfile?.picture == null && baseProfile?.displayName == null && baseProfile?.name == null) {
+            // キャッシュに新しいデータが入っている可能性をまずチェック
+            val cached = repository.getCachedProfile(post.event.pubkey)
+            if (cached != null && (cached.picture != null || cached.displayName != null || cached.name != null)) {
+                resolvedProfile = cached
+            } else {
+                // キャッシュにもなければリレーから再取得
+                val fetched = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    try { repository.fetchProfiles(listOf(post.event.pubkey))[post.event.pubkey] }
+                    catch (_: Exception) { null }
+                }
+                if (fetched != null && (fetched.picture != null || fetched.displayName != null || fetched.name != null)) {
+                    resolvedProfile = fetched
+                }
+            }
+        } else {
+            resolvedProfile = baseProfile
+        }
+    }
+    val profile = resolvedProfile
 
     // NIP-05 verification is now handled in the ViewModel/Repository
     val internalVerified = post.isVerified || isVerified

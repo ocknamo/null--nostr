@@ -20,13 +20,15 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
-mdk-core = "0.7"
-mdk-sqlite-storage = "0.7"
-mdk-storage-traits = "0.7"
+# MIP-01 v3 (disappearing_message_secs) support is not in crates.io 0.7.1 yet.
+# Pin MDK crates to upstream git commit from branch:
+#   disappearing-messages-1-extension-v3
+# commit: e19dedf8b7b2e1d705de750e0513b69ebeb3a690
+mdk-core = { git = "https://github.com/marmot-protocol/mdk.git", rev = "e19dedf8b7b2e1d705de750e0513b69ebeb3a690", package = "mdk-core" }
+mdk-sqlite-storage = { git = "https://github.com/marmot-protocol/mdk.git", rev = "e19dedf8b7b2e1d705de750e0513b69ebeb3a690", package = "mdk-sqlite-storage" }
+mdk-storage-traits = { git = "https://github.com/marmot-protocol/mdk.git", rev = "e19dedf8b7b2e1d705de750e0513b69ebeb3a690", package = "mdk-storage-traits" }
 hex = "0.4"
-
-[patch.crates-io]
-mdk-sqlite-storage = { path = "vendor/mdk-sqlite-storage" }
+base64 = "0.22"
 
 [profile.release]
 lto = true

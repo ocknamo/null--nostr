@@ -398,8 +398,8 @@ class TimelineViewModel(
     fun flushPendingPosts(feedType: FeedType = _uiState.value.feedType) {
         // リレー選択中は pendingRelayPosts を relayPosts に prepend
         if (feedType == FeedType.GLOBAL && _uiState.value.selectedRelayUrl != null) {
+            val added = _uiState.value.pendingRelayPosts
             _uiState.update { state ->
-                val added = state.pendingRelayPosts
                 android.util.Log.d("TimelineViewModel",
                     "Relay live pill tapped: prepending ${added.size} posts")
                 state.copy(
@@ -407,27 +407,81 @@ class TimelineViewModel(
                     pendingRelayPosts = emptyList()
                 )
             }
+            reEnrichMissingProfiles(added)
             return
         }
         when (feedType) {
-            FeedType.GLOBAL -> _uiState.update { state ->
-                val added = state.pendingGlobalPosts
-                android.util.Log.d("TimelineViewModel",
-                    "Relay pill tapped: prepending ${added.size} posts → total ${added.size + state.globalPosts.size}")
-                state.copy(
-                    globalPosts = (added + state.globalPosts).deduped(),
-                    pendingGlobalPosts = emptyList(),
-                    hasNewRecommendations = false
-                )
+            FeedType.GLOBAL -> {
+                val added = _uiState.value.pendingGlobalPosts
+                _uiState.update { state ->
+                    android.util.Log.d("TimelineViewModel",
+                        "Relay pill tapped: prepending ${added.size} posts → total ${added.size + state.globalPosts.size}")
+                    state.copy(
+                        globalPosts = (added + state.globalPosts).deduped(),
+                        pendingGlobalPosts = emptyList(),
+                        hasNewRecommendations = false
+                    )
+                }
+                reEnrichMissingProfiles(added)
             }
-            FeedType.FOLLOWING -> _uiState.update { state ->
-                android.util.Log.d("TimelineViewModel",
-                    "Follow pill tapped: prepending ${state.pendingFollowingPosts.size} posts")
-                state.copy(
-                    followingPosts = (state.pendingFollowingPosts + state.followingPosts).deduped(),
-                    pendingFollowingPosts = emptyList()
-                )
+            FeedType.FOLLOWING -> {
+                val added = _uiState.value.pendingFollowingPosts
+                _uiState.update { state ->
+                    android.util.Log.d("TimelineViewModel",
+                        "Follow pill tapped: prepending ${state.pendingFollowingPosts.size} posts")
+                    state.copy(
+                        followingPosts = (added + state.followingPosts).deduped(),
+                        pendingFollowingPosts = emptyList()
+                    )
+                }
+                reEnrichMissingProfiles(added)
             }
+        }
+    }
+
+    /**
+     * プロフィール未取得の投稿について、バックグラウンドで再取得し表示を更新する。
+     */
+    private fun reEnrichMissingProfiles(posts: List<ScoredPost>) {
+        val missing = posts.filter { p ->
+            p.profile?.picture == null && p.profile?.displayName == null && p.profile?.name == null
+        }
+        if (missing.isEmpty()) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val pubkeys = missing.map { it.event.pubkey }.distinct()
+            val profiles = try { repository.fetchProfiles(pubkeys) } catch (_: Exception) { return@launch }
+
+            // 取得できたプロフィールで表示中リストを更新
+            val resolved = profiles.filter { (_, v) ->
+                v.picture != null || v.displayName != null || v.name != null
+            }
+            if (resolved.isEmpty()) return@launch
+
+            android.util.Log.d("TimelineViewModel",
+                "reEnrichMissingProfiles: resolved ${resolved.size}/${pubkeys.size}")
+
+            withContext(Dispatchers.Main) {
+                _uiState.update { state ->
+                    state.copy(
+                        globalPosts = state.globalPosts.updateProfiles(resolved),
+                        followingPosts = state.followingPosts.updateProfiles(resolved),
+                        relayPosts = state.relayPosts.updateProfiles(resolved)
+                    )
+                }
+            }
+        }
+    }
+
+    private fun List<ScoredPost>.updateProfiles(
+        profiles: Map<String, io.nurunuru.app.data.models.UserProfile>
+    ): List<ScoredPost> {
+        if (profiles.isEmpty()) return this
+        return map { post ->
+            val newProfile = profiles[post.event.pubkey]
+            if (newProfile != null && (post.profile?.picture == null && post.profile?.displayName == null && post.profile?.name == null)) {
+                post.copy(profile = newProfile)
+            } else post
         }
     }
 

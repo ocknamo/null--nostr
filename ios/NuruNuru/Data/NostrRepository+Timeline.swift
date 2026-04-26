@@ -1,0 +1,361 @@
+import Foundation
+
+// MARK: - Timeline
+// Android 対応ファイル: NostrRepositoryTimeline.kt
+// Phase A で分割確定。fetchGlobalTimeline / fetchFollowingTimeline / fetchEventsFromRelay を管理。
+// Phase 3: enrichPosts を TaskGroup で並列実装済み。
+
+extension NostrRepository {
+
+    // MARK: - Single-relay fetch
+
+    /// 単一リレーからイベントを取得する（リレータブ / ターゲット指定フェッチ用）。
+    /// Android: NostrRepository.fetchEventsFrom() に相当。
+    func fetchEventsFromRelay(
+        _ relayUrl: String,
+        filters: [NostrFilter],
+        timeoutSeconds: Double = 8.0
+    ) async -> [NostrEvent] {
+        await client.fetchEventsFromRelay(relayUrl, filters: filters, timeoutSeconds: timeoutSeconds)
+    }
+
+    // MARK: - Global timeline
+
+    /// グローバルタイムライン（kind 1、直近1時間）を取得し、エンゲージメントカウントを付与して返す。
+    ///
+    /// タイムライン取得は pure Swift 実装のみを使用する。
+    /// `enrichPosts` によりいいね数・リポスト数・Zap 金額が並列取得される。
+    /// Android: fetchGlobalTimeline() に対応。
+    func fetchGlobalTimeline(limit: Int = 50) async -> [ScoredPost] {
+        let since  = Int64(Date().addingTimeInterval(-3600).timeIntervalSince1970)
+        let kinds  = [NostrKind.textNote, NostrKind.longForm, NostrKind.repost]
+        let filter = NostrFilter(kinds: kinds, since: since, limit: limit)
+        let rawEvents = await fetchEvents(filters: [filter])
+            .filter { kinds.contains($0.kind) }
+            .sorted { $0.createdAt > $1.createdAt }
+
+        var posts = unwrapRepostEvents(rawEvents)
+        posts = await filterMutedPosts(posts)
+        cache.setCachedTimeline(posts.map(\.event), key: "global")
+
+        await enrichPosts(&posts)
+        return posts
+    }
+
+    /// 特定リレーからグローバルタイムラインを取得する（リレー選択ドロップダウン用）。
+    func fetchGlobalTimelineFromRelay(_ relayUrl: String, limit: Int = 50) async -> [ScoredPost] {
+        let since  = Int64(Date().addingTimeInterval(-3600).timeIntervalSince1970)
+        let kinds  = [NostrKind.textNote, NostrKind.longForm, NostrKind.repost]
+        let filter = NostrFilter(kinds: kinds, since: since, limit: limit)
+        let rawEvents = await fetchEventsFromRelay(relayUrl, filters: [filter])
+            .filter { kinds.contains($0.kind) }
+            .sorted { $0.createdAt > $1.createdAt }
+        var posts = unwrapRepostEvents(rawEvents)
+        posts = await filterMutedPosts(posts)
+        await enrichPosts(&posts)
+        return posts
+    }
+
+    // MARK: - Following timeline
+
+    /// フォロー中ユーザーのタイムライン（kind 1、直近48時間）を取得し、エンゲージメントカウントを付与して返す。
+    ///
+    /// フォロータイムライン取得は pure Swift 実装のみを使用する。
+    /// `enrichPosts` によりいいね数・リポスト数・Zap 金額が並列取得される。
+    /// Android: fetchFollowTimeline() に対応。
+    func fetchFollowingTimeline(authors: [String], limit: Int = 50) async -> [ScoredPost] {
+        guard !authors.isEmpty else { return [] }
+        let since  = Int64(Date().addingTimeInterval(-86400 * 2).timeIntervalSince1970)
+        let kinds  = [NostrKind.textNote, NostrKind.longForm, NostrKind.repost]
+        let filter = NostrFilter(authors: authors, kinds: kinds, since: since, limit: limit)
+        let rawEvents = await fetchEvents(filters: [filter])
+            .filter { kinds.contains($0.kind) }
+            .sorted { $0.createdAt > $1.createdAt }
+
+        var posts = unwrapRepostEvents(rawEvents)
+        posts = await filterMutedPosts(posts)
+        // キャッシュに保存（Android: cache.setCachedTimeline("following") に対応）
+        cache.setCachedTimeline(posts.map(\.event), key: "following")
+        await enrichPosts(&posts)
+        return posts
+    }
+
+    // MARK: - enrichPosts
+
+    /// タイムライン投稿のいいね数・リポスト数・Zap 金額を並列取得して付与する。
+    ///
+    /// Kind 7 / Kind 6 / Kind 9735 の 3 クエリを `withTaskGroup` で並列実行し、
+    /// 各 `ScoredPost` の `likeCount` / `repostCount` / `zapAmount` に格納する。
+    /// Android: `NostrRepository.enrichPosts()` に対応。
+    ///
+    /// - Parameter posts: 付与対象の `ScoredPost` 配列 (in-out)。
+    func enrichPosts(_ posts: inout [ScoredPost]) async {
+        guard !posts.isEmpty else { return }
+        let myPubkey = prefs.publicKeyHex
+        let ids = posts.map(\.event.id)
+
+        /// TaskGroup の各子タスクが返す結果を識別するための列挙型。
+        enum FetchResult {
+            case reactions([NostrEvent])
+            case reposts([NostrEvent])
+            case zaps([String: Int64])
+            case bookmarks(Set<String>)
+        }
+
+        var reactionEvents: [NostrEvent] = []
+        var repostEvents:   [NostrEvent] = []
+        var zapAmounts:     [String: Int64] = [:]
+        var bookmarkedIds:  Set<String> = []
+
+        // 並列フェッチ: reactions + reposts + zaps + bookmarks
+        await withTaskGroup(of: FetchResult.self) { group in
+            group.addTask { .reactions(await self.fetchReactionEvents(eventIds: ids)) }
+            group.addTask { .reposts(await self.fetchRepostEvents(eventIds: ids)) }
+            group.addTask { .zaps(await self.fetchZapAmounts(eventIds: ids)) }
+            if let pk = myPubkey {
+                group.addTask {
+                    let bmIds = await self.fetchBookmarkEventIds(pubkeyHex: pk)
+                    return .bookmarks(Set(bmIds))
+                }
+            }
+
+            for await result in group {
+                switch result {
+                case .reactions(let r): reactionEvents = r
+                case .reposts(let r):   repostEvents = r
+                case .zaps(let z):      zapAmounts = z
+                case .bookmarks(let b): bookmarkedIds = b
+                }
+            }
+        }
+
+        // Count reactions per event
+        let reactionCounts = Dictionary(
+            grouping: reactionEvents.compactMap { $0.getTagValue("e") },
+            by: { $0 }
+        ).mapValues(\.count)
+
+        // My reaction event IDs (for undo)
+        let myReactionMap: [String: String] = {
+            guard let pk = myPubkey else { return [:] }
+            var map: [String: String] = [:]
+            for ev in reactionEvents where ev.pubkey == pk {
+                if let targetId = ev.getTagValue("e") { map[targetId] = ev.id }
+            }
+            return map
+        }()
+
+        // Count reposts per event
+        let repostCounts = Dictionary(
+            grouping: repostEvents.compactMap { $0.getTagValue("e") },
+            by: { $0 }
+        ).mapValues(\.count)
+
+        // My repost event IDs (for undo)
+        let myRepostMap: [String: String] = {
+            guard let pk = myPubkey else { return [:] }
+            var map: [String: String] = [:]
+            for ev in repostEvents where ev.pubkey == pk {
+                if let targetId = ev.getTagValue("e") { map[targetId] = ev.id }
+            }
+            return map
+        }()
+
+        // プロフィール・バッジを並列取得
+        let allPubkeys = Array(Set(
+            posts.map(\.event.pubkey) + posts.compactMap(\.repostedBy?.pubkey)
+        ))
+        let profiles = await fetchProfiles(pubkeys: allPubkeys)
+        let profileMap = Dictionary(profiles.map { ($0.pubkey, $0) }, uniquingKeysWith: { a, _ in a })
+
+        // バッジはキャッシュからのみ取得（ネットワーク不要、即時表示）。
+        // フルフェッチはプロフィール画面でのみ実行（Android 同様）。
+        var badgeMap: [String: [String]] = [:]
+        for pk in allPubkeys {
+            if let cached = cache.getCachedBadges(pubkey: pk) {
+                badgeMap[pk] = cached
+            }
+        }
+
+        // 各 ScoredPost にカウント・状態・プロフィール・バッジを付与
+        for post in posts {
+            post.likeCount       = reactionCounts[post.event.id] ?? 0
+            post.repostCount     = repostCounts[post.event.id]   ?? 0
+            post.zapAmount       = zapAmounts[post.event.id]     ?? 0
+            post.isLiked         = myReactionMap[post.event.id] != nil
+            post.myLikeEventId   = myReactionMap[post.event.id]
+            post.isReposted      = myRepostMap[post.event.id] != nil
+            post.myRepostEventId = myRepostMap[post.event.id]
+            post.isBookmarked    = bookmarkedIds.contains(post.event.id)
+            // プロフィール設定
+            if post.profile == nil {
+                post.profile = profileMap[post.event.pubkey]
+            }
+            // repostedBy のプロフィール解決
+            if let rp = post.repostedBy, rp.name == nil, let fullProfile = profileMap[rp.pubkey] {
+                post.repostedBy = fullProfile
+            }
+            // バッジ設定（キャッシュ済みのみ — ネットワーク不要）
+            post.badges = badgeMap[post.event.pubkey] ?? []
+        }
+
+        // NIP-05 検証を並列実行（Android: enrichPosts 内の並列 NIP-05 検証に対応）
+        // 最大10件を同時検証してタイムアウトを防ぐ
+        let postsWithNip05 = posts.filter { $0.profile?.nip05 != nil }.prefix(10)
+        if !postsWithNip05.isEmpty {
+            await withTaskGroup(of: (String, Bool).self) { group in
+                for post in postsWithNip05 {
+                    guard let nip05 = post.profile?.nip05, !nip05.isEmpty else { continue }
+                    let pubkey = post.event.pubkey
+                    group.addTask {
+                        let resolvedPubkey = await self.resolveNip05(nip05)
+                        let verified = resolvedPubkey == pubkey
+                        return (pubkey, verified)
+                    }
+                }
+                for await (pubkey, verified) in group {
+                    for post in posts where post.event.pubkey == pubkey {
+                        post.isVerified = verified
+                    }
+                }
+            }
+        }
+
+        // 引用投稿の解決
+        await resolveQuotedPosts(&posts)
+    }
+
+    /// Fetch raw reaction events (Kind 7) — returns full events for pubkey matching.
+    private func fetchReactionEvents(eventIds: [String]) async -> [NostrEvent] {
+        guard !eventIds.isEmpty else { return [] }
+        let filter = NostrFilter(kinds: [NostrKind.reaction], limit: 500, tags: ["#e": eventIds])
+        return await fetchEvents(filters: [filter], timeoutSeconds: 3.0)
+    }
+
+    /// Fetch raw repost events (Kind 6) — returns full events for pubkey matching.
+    private func fetchRepostEvents(eventIds: [String]) async -> [NostrEvent] {
+        guard !eventIds.isEmpty else { return [] }
+        let filter = NostrFilter(kinds: [NostrKind.repost], limit: 500, tags: ["#e": eventIds])
+        return await fetchEvents(filters: [filter], timeoutSeconds: 3.0)
+    }
+
+    // MARK: - Repost Unwrap (Kind 6 → inner event + repostedBy)
+
+    /// Kind 6 リポストイベントの content から内包イベントを取り出し、
+    /// `repostedBy` をセットした `ScoredPost` に変換する。
+    /// Kind 1 などはそのまま `ScoredPost` にする。
+    /// Android: enrichPosts 内のリポスト展開ロジックに対応。
+    private func unwrapRepostEvents(_ events: [NostrEvent]) -> [ScoredPost] {
+        var posts: [ScoredPost] = []
+        var seenIds = Set<String>()
+
+        for event in events {
+            if event.kind == NostrKind.repost {
+                // Kind 6: content にオリジナルイベントの JSON が入っている
+                if let data = event.content.data(using: .utf8),
+                   let inner = try? JSONDecoder().decode(NostrEvent.self, from: data),
+                   inner.kind == NostrKind.textNote || inner.kind == NostrKind.longForm {
+                    guard seenIds.insert(inner.id).inserted else { continue }
+                    let post = ScoredPost(event: inner)
+                    // repostedBy はプロフィール取得後に設定される（pubkey のみ仮設定）
+                    post.repostedBy = UserProfile(pubkey: event.pubkey)
+                    post.repostTime = event.createdAt
+                    posts.append(post)
+                }
+                // content が空の場合は "e" タグのみのリポスト（後で解決する必要あり）
+            } else {
+                guard seenIds.insert(event.id).inserted else { continue }
+                posts.append(ScoredPost(event: event))
+            }
+        }
+
+        return posts
+    }
+
+    /// 公開/非公開ミュート対象の投稿を除外する（author と repostedBy の両方を判定）。
+    private func filterMutedPosts(_ posts: [ScoredPost]) async -> [ScoredPost] {
+        guard let myPubkey = prefs.publicKeyHex else { return posts }
+        let mute = await fetchMuteList(pubkeyHex: myPubkey)
+        let muted = Set(mute.publicMutes).union(mute.privateMutes)
+        guard !muted.isEmpty else { return posts }
+        return posts.filter { post in
+            if muted.contains(post.event.pubkey) { return false }
+            if let rp = post.repostedBy, muted.contains(rp.pubkey) { return false }
+            return true
+        }
+    }
+
+    // MARK: - Resolve Quoted Posts
+
+    /// 引用リポスト（"q" タグ or nostr:note1... in content）の引用元イベントを取得して
+    /// `ScoredPost.quotedPost` にセットする。
+    /// Android: enrichPosts 内の引用解決ロジックに対応。
+    func resolveQuotedPosts(_ posts: inout [ScoredPost]) async {
+        // "q" タグまたは content 内の nostr:nevent/note から引用先 ID を収集
+        var quoteMap: [String: [Int]] = [:] // eventId → indices in posts
+        for (i, post) in posts.enumerated() {
+            // 既に解決済みの引用はスキップ
+            guard post.quotedPost == nil else { continue }
+
+            if let qId = post.event.getTagValue("q"), !qId.isEmpty {
+                quoteMap[qId, default: []].append(i)
+            } else {
+                // content 内の nostr:note1... / nostr:nevent1... を検出
+                // nevent は可変長のため {20,} で広めにマッチ
+                let pattern = #"nostr:(note1[a-z0-9]{58}|nevent1[a-z0-9]{20,})"#
+                if let regex = try? NSRegularExpression(pattern: pattern),
+                   let match = regex.firstMatch(
+                    in: post.event.content,
+                    range: NSRange(location: 0, length: (post.event.content as NSString).length)
+                   ) {
+                    let bech32 = (post.event.content as NSString).substring(with: match.range).replacingOccurrences(of: "nostr:", with: "")
+                    // bech32 → hex id（NIP-19 デコード）
+                    if let eventId = NostrBech32.decodeEventId(bech32) {
+                        quoteMap[eventId, default: []].append(i)
+                    } else if let eId = post.event.tags.first(where: { $0.first == "e" && $0.count >= 2 })?.dropFirst().first {
+                        // フォールバック: "e" タグから取得
+                        quoteMap[eId, default: []].append(i)
+                    }
+                } else if let eId = post.event.getTagValue("e"), !eId.isEmpty,
+                          post.event.content.contains("nostr:") {
+                    // regex がマッチしなかった場合でも "e" タグ + content に nostr: がある場合は引用と判断
+                    quoteMap[eId, default: []].append(i)
+                }
+            }
+        }
+
+        guard !quoteMap.isEmpty else { return }
+
+        let quotedIds = Array(quoteMap.keys)
+        // タイムアウトを 5 秒に延長（3秒では遅いリレーで失敗しやすい）
+        let filter = NostrFilter(ids: quotedIds, limit: quotedIds.count)
+        let quotedEvents = await fetchEvents(filters: [filter], timeoutSeconds: 5.0)
+
+        // 取得できなかった ID を個別リレーでリトライ（最大5件）
+        let foundIds = Set(quotedEvents.map(\.id))
+        let missingIds = quotedIds.filter { !foundIds.contains($0) }
+        var allQuotedEvents = quotedEvents
+        if !missingIds.isEmpty {
+            let retryFilter = NostrFilter(ids: Array(missingIds.prefix(5)), limit: missingIds.count)
+            let relayUrls = getSavedRelayUrls()
+            for url in relayUrls.prefix(2) {
+                let retryEvents = await client.fetchEventsFromRelay(url, filters: [retryFilter], timeoutSeconds: 4.0)
+                allQuotedEvents.append(contentsOf: retryEvents)
+                if Set(allQuotedEvents.map(\.id)).isSuperset(of: missingIds) { break }
+            }
+        }
+
+        // プロフィールも取得（キャッシュ優先）
+        let quotedPubkeys = Array(Set(allQuotedEvents.map(\.pubkey)))
+        let quotedProfiles = await fetchProfiles(pubkeys: quotedPubkeys)
+        let profileMap = Dictionary(quotedProfiles.map { ($0.pubkey, $0) }, uniquingKeysWith: { a, _ in a })
+
+        for event in allQuotedEvents {
+            guard let indices = quoteMap[event.id] else { continue }
+            for i in indices where i < posts.count {
+                let qPost = ScoredPost(event: event, profile: profileMap[event.pubkey])
+                posts[i].quotedPost = qPost
+            }
+        }
+    }
+}

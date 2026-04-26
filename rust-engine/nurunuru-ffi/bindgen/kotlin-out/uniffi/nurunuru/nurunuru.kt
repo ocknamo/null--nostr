@@ -828,6 +828,22 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -844,6 +860,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 internal interface IntegrityCheckingUniffiLib : Library {
     // Integrity check functions only
     fun uniffi_uniffi_nurunuru_checksum_func_init_engine(
+): Short
+fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_add_relay(
 ): Short
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_connect(
 ): Short
@@ -864,6 +882,8 @@ fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_delete_event(
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_disconnect(
 ): Short
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_events_from_relay(
+): Short
+fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_events_from_relays(
 ): Short
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_follow_list(
 ): Short
@@ -889,15 +909,23 @@ fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mark_not_interested(
 ): Short
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_add_member(
 ): Short
+fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_clear_pending_commit(
+): Short
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_create_group(
 ): Short
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_create_key_package(
 ): Short
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_create_message(
 ): Short
+fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_create_recovery_commit(
+): Short
+fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_delete_consumed_key_package_from_event_json(
+): Short
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_get_group_info(
 ): Short
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_get_message_history(
+): Short
+fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_groups_needing_self_update(
 ): Short
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_leave_group(
 ): Short
@@ -907,9 +935,13 @@ fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_merge_pending_comm
 ): Short
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_process_message(
 ): Short
+fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_process_message_result(
+): Short
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_process_welcome(
 ): Short
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_remove_member(
+): Short
+fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_validate_key_package_event(
 ): Short
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_nip04_decrypt(
 ): Short
@@ -1014,6 +1046,8 @@ fun uniffi_uniffi_nurunuru_fn_constructor_nurunuruclient_new(`secretKeyHex`: Rus
 ): Pointer
 fun uniffi_uniffi_nurunuru_fn_constructor_nurunuruclient_new_read_only(`pubkeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Pointer
+fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_add_relay(`ptr`: Pointer,`url`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_connect(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_connection_stats(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -1033,6 +1067,8 @@ fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_delete_event(`ptr`: Pointer,
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_disconnect(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_fetch_events_from_relay(`ptr`: Pointer,`filterJson`: RustBuffer.ByValue,`timeoutSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_fetch_events_from_relays(`ptr`: Pointer,`filterJson`: RustBuffer.ByValue,`relayUrls`: RustBuffer.ByValue,`timeoutSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_fetch_follow_list(`ptr`: Pointer,`pubkeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1058,15 +1094,23 @@ fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mark_not_interested(`ptr`: P
 ): Unit
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_add_member(`ptr`: Pointer,`groupIdHex`: RustBuffer.ByValue,`keyPackageEventJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_clear_pending_commit(`ptr`: Pointer,`groupIdHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_create_group(`ptr`: Pointer,`name`: RustBuffer.ByValue,`adminPubkeys`: RustBuffer.ByValue,`relays`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_create_key_package(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_create_message(`ptr`: Pointer,`groupIdHex`: RustBuffer.ByValue,`content`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_create_recovery_commit(`ptr`: Pointer,`groupIdHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_delete_consumed_key_package_from_event_json(`ptr`: Pointer,`keyPackageEventJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_get_group_info(`ptr`: Pointer,`groupIdHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_get_message_history(`ptr`: Pointer,`groupIdHex`: RustBuffer.ByValue,`limit`: Long,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_groups_needing_self_update(`ptr`: Pointer,`thresholdSecs`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_leave_group(`ptr`: Pointer,`groupIdHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1076,10 +1120,14 @@ fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_merge_pending_commit(`pt
 ): Unit
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_process_message(`ptr`: Pointer,`groupIdHex`: RustBuffer.ByValue,`eventJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_process_message_result(`ptr`: Pointer,`groupIdHex`: RustBuffer.ByValue,`eventJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_process_welcome(`ptr`: Pointer,`welcomeEventJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_remove_member(`ptr`: Pointer,`groupIdHex`: RustBuffer.ByValue,`memberPubkey`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_validate_key_package_event(`ptr`: Pointer,`keyPackageEventJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_nip04_decrypt(`ptr`: Pointer,`senderPubkeyHex`: RustBuffer.ByValue,`ciphertext`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_nip04_encrypt(`ptr`: Pointer,`recipientPubkeyHex`: RustBuffer.ByValue,`plaintext`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1250,7 +1298,10 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
-    if (lib.uniffi_uniffi_nurunuru_checksum_func_init_engine() != 11794.toShort()) {
+    if (lib.uniffi_uniffi_nurunuru_checksum_func_init_engine() != 52824.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_add_relay() != 26516.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_connect() != 60367.toShort()) {
@@ -1281,6 +1332,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_events_from_relay() != 47830.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_events_from_relays() != 13351.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_follow_list() != 27471.toShort()) {
@@ -1316,40 +1370,58 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mark_not_interested() != 2204.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_add_member() != 48700.toShort()) {
+    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_add_member() != 24579.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_clear_pending_commit() != 40727.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_create_group() != 54959.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_create_key_package() != 65379.toShort()) {
+    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_create_key_package() != 32101.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_create_message() != 27676.toShort()) {
+    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_create_message() != 42093.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_get_group_info() != 37817.toShort()) {
+    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_create_recovery_commit() != 3656.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_get_message_history() != 22075.toShort()) {
+    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_delete_consumed_key_package_from_event_json() != 53947.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_leave_group() != 53476.toShort()) {
+    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_get_group_info() != 45739.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_get_message_history() != 36205.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_groups_needing_self_update() != 10252.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_leave_group() != 40071.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_list_groups() != 21675.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_merge_pending_commit() != 50789.toShort()) {
+    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_merge_pending_commit() != 48880.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_process_message() != 43277.toShort()) {
+    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_process_message() != 20654.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_process_welcome() != 9374.toShort()) {
+    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_process_message_result() != 18367.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_remove_member() != 34670.toShort()) {
+    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_process_welcome() != 43793.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_remove_member() != 42604.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_validate_key_package_event() != 20255.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_nip04_decrypt() != 5575.toShort()) {
@@ -1819,6 +1891,11 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
 public interface NuruNuruClientInterface {
     
     /**
+     * Add a relay and immediately connect to it.
+     */
+    fun `addRelay`(`url`: kotlin.String)
+    
+    /**
      * Connect to all configured relays.
      */
     fun `connect`()
@@ -1882,6 +1959,15 @@ public interface NuruNuruClientInterface {
      * `timeout_secs` controls how long to wait for relay responses.
      */
     fun `fetchEventsFromRelay`(`filterJson`: kotlin.String, `timeoutSecs`: kotlin.UInt): List<kotlin.String>
+    
+    /**
+     * Fetch events from specific relays only.
+     *
+     * Automatically adds and connects to any relay not yet known.
+     * Used for MLS group messages (Kind 445) that may be published to
+     * relays outside the default set.
+     */
+    fun `fetchEventsFromRelays`(`filterJson`: kotlin.String, `relayUrls`: List<kotlin.String>, `timeoutSecs`: kotlin.UInt): List<kotlin.String>
     
     /**
      * Fetch the follow list for a user. Returns pubkey hex strings.
@@ -1967,11 +2053,21 @@ public interface NuruNuruClientInterface {
     fun `markNotInterested`(`eventId`: kotlin.String, `authorPubkey`: kotlin.String)
     
     /**
-     * Add a member to a group using their Kind-443 KeyPackage event JSON.
+     * Add a member to a group using their Kind-30443 KeyPackage event JSON.
      *
-     * Returns commit (Kind 445) and welcome (Kind 444) event data.
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
+     *
+     * Returns commit (Kind 445) and gift-wrapped welcome (Kind 1059) event data.
+     * The welcome's `gift_wrapped_event_json` is ready for `publish_raw_event`.
      */
     fun `mlsAddMember`(`groupIdHex`: kotlin.String, `keyPackageEventJson`: kotlin.String): FfiAddMemberResult
+    
+    /**
+     * Clear (rollback) pending MLS commit for recovery from stuck state.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
+     */
+    fun `mlsClearPendingCommit`(`groupIdHex`: kotlin.String)
     
     /**
      * Create a new MLS group.
@@ -1979,31 +2075,60 @@ public interface NuruNuruClientInterface {
     fun `mlsCreateGroup`(`name`: kotlin.String, `adminPubkeys`: List<kotlin.String>, `relays`: List<kotlin.String>): FfiMlsGroupInfo
     
     /**
-     * Generate a fresh MLS KeyPackage and return Kind-443 event data.
+     * Generate a fresh MLS KeyPackage and return Kind-30443 event data (Marmot MIP-00).
      *
-     * The caller builds an unsigned Kind-443 event via `create_unsigned_event`,
+     * The caller builds an unsigned Kind-30443 event via `create_unsigned_event`,
      * signs it (internal key or Amber), then publishes via `publish_raw_event`.
      */
     fun `mlsCreateKeyPackage`(): FfiKeyPackageEventData
     
     /**
      * Encrypt an application message for a group (Kind 445 event data).
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     fun `mlsCreateMessage`(`groupIdHex`: kotlin.String, `content`: kotlin.String): FfiEncryptedMessageData
     
     /**
+     * Create a recovery self-update commit event for stuck pending proposals.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
+     */
+    fun `mlsCreateRecoveryCommit`(`groupIdHex`: kotlin.String): FfiEncryptedMessageData
+    
+    /**
+     * Delete consumed KeyPackage private/init-key material from local MLS storage (MIP-02).
+     */
+    fun `mlsDeleteConsumedKeyPackageFromEventJson`(`keyPackageEventJson`: kotlin.String)
+    
+    /**
      * Get metadata for a single MLS group.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     fun `mlsGetGroupInfo`(`groupIdHex`: kotlin.String): FfiMlsGroupInfo
     
     /**
      * Retrieve decrypted message history for a group from MDK's local SQLite.
      * Use this on app startup to restore history without re-processing relay events.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     fun `mlsGetMessageHistory`(`groupIdHex`: kotlin.String, `limit`: kotlin.ULong): List<FfiDecryptedMessage>
     
     /**
+     * Return Nostr group IDs (64-char hex Kind-445 `h` tag values) that need self-update.
+     *
+     * FFI/API contract: every `group_id_hex` crossing this boundary is the
+     * Nostr group id, not MDK's internal MLS storage group id. Returned values
+     * can be passed directly to `mls_create_recovery_commit(group_id_hex)`.
+     */
+    fun `mlsGroupsNeedingSelfUpdate`(`thresholdSecs`: kotlin.ULong): List<kotlin.String>
+    
+    /**
      * Leave a group. Returns the Kind-445 commit event data to publish.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     fun `mlsLeaveGroup`(`groupIdHex`: kotlin.String): FfiEncryptedMessageData
     
@@ -2018,23 +2143,46 @@ public interface NuruNuruClientInterface {
      * Must be called after `mls_add_member`, `mls_remove_member`, or `mls_leave_group`
      * once the commit event has been published. Without this, subsequent operations on the
      * same group will fail with "Can't execute operation because a pending commit exists".
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     fun `mlsMergePendingCommit`(`groupIdHex`: kotlin.String)
     
     /**
-     * Process an incoming Kind-445 event and return the decrypted message.
+     * Backward-compatible wrapper used by older clients.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     fun `mlsProcessMessage`(`groupIdHex`: kotlin.String, `eventJson`: kotlin.String): FfiDecryptedMessage
     
     /**
-     * Process an incoming Kind-444 Welcome event and join the group.
+     * Process an incoming Kind-445 event and return a structured result.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
+     */
+    fun `mlsProcessMessageResult`(`groupIdHex`: kotlin.String, `eventJson`: kotlin.String): FfiMlsProcessResult
+    
+    /**
+     * Process an incoming Welcome event and join the group.
+     *
+     * Accepts both Kind 1059 (NIP-59 gift-wrapped, Marmot) and Kind 444 (legacy).
      */
     fun `mlsProcessWelcome`(`welcomeEventJson`: kotlin.String): FfiMlsGroupInfo
     
     /**
      * Remove a member from a group. Returns the Kind-445 commit event data.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     fun `mlsRemoveMember`(`groupIdHex`: kotlin.String, `memberPubkey`: kotlin.String): FfiEncryptedMessageData
+    
+    /**
+     * Strictly validate a KeyPackage event JSON (MIP-00).
+     *
+     * Verifies required tags/capabilities and checks `i` tag against computed
+     * KeyPackageRef by parsing the content through MDK.
+     */
+    fun `mlsValidateKeyPackageEvent`(`keyPackageEventJson`: kotlin.String)
     
     /**
      * NIP-04 decrypt a message from a sender (legacy DM, Kind 4).
@@ -2301,6 +2449,21 @@ open class NuruNuruClient: Disposable, AutoCloseable, NuruNuruClientInterface
 
     
     /**
+     * Add a relay and immediately connect to it.
+     */
+    @Throws(NuruNuruFfiException::class)override fun `addRelay`(`url`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(NuruNuruFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_nurunuru_fn_method_nurunuruclient_add_relay(
+        it, FfiConverterString.lower(`url`),_status)
+}
+    }
+    
+    
+
+    
+    /**
      * Connect to all configured relays.
      */override fun `connect`()
         = 
@@ -2464,6 +2627,26 @@ open class NuruNuruClient: Disposable, AutoCloseable, NuruNuruClientInterface
     uniffiRustCallWithError(NuruNuruFfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_uniffi_nurunuru_fn_method_nurunuruclient_fetch_events_from_relay(
         it, FfiConverterString.lower(`filterJson`),FfiConverterUInt.lower(`timeoutSecs`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Fetch events from specific relays only.
+     *
+     * Automatically adds and connects to any relay not yet known.
+     * Used for MLS group messages (Kind 445) that may be published to
+     * relays outside the default set.
+     */
+    @Throws(NuruNuruFfiException::class)override fun `fetchEventsFromRelays`(`filterJson`: kotlin.String, `relayUrls`: List<kotlin.String>, `timeoutSecs`: kotlin.UInt): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NuruNuruFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_nurunuru_fn_method_nurunuruclient_fetch_events_from_relays(
+        it, FfiConverterString.lower(`filterJson`),FfiConverterSequenceString.lower(`relayUrls`),FfiConverterUInt.lower(`timeoutSecs`),_status)
 }
     }
     )
@@ -2671,9 +2854,12 @@ open class NuruNuruClient: Disposable, AutoCloseable, NuruNuruClientInterface
 
     
     /**
-     * Add a member to a group using their Kind-443 KeyPackage event JSON.
+     * Add a member to a group using their Kind-30443 KeyPackage event JSON.
      *
-     * Returns commit (Kind 445) and welcome (Kind 444) event data.
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
+     *
+     * Returns commit (Kind 445) and gift-wrapped welcome (Kind 1059) event data.
+     * The welcome's `gift_wrapped_event_json` is ready for `publish_raw_event`.
      */
     @Throws(NuruNuruFfiException::class)override fun `mlsAddMember`(`groupIdHex`: kotlin.String, `keyPackageEventJson`: kotlin.String): FfiAddMemberResult {
             return FfiConverterTypeFfiAddMemberResult.lift(
@@ -2685,6 +2871,23 @@ open class NuruNuruClient: Disposable, AutoCloseable, NuruNuruClientInterface
     }
     )
     }
+    
+
+    
+    /**
+     * Clear (rollback) pending MLS commit for recovery from stuck state.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
+     */
+    @Throws(NuruNuruFfiException::class)override fun `mlsClearPendingCommit`(`groupIdHex`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(NuruNuruFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_clear_pending_commit(
+        it, FfiConverterString.lower(`groupIdHex`),_status)
+}
+    }
+    
     
 
     
@@ -2705,9 +2908,9 @@ open class NuruNuruClient: Disposable, AutoCloseable, NuruNuruClientInterface
 
     
     /**
-     * Generate a fresh MLS KeyPackage and return Kind-443 event data.
+     * Generate a fresh MLS KeyPackage and return Kind-30443 event data (Marmot MIP-00).
      *
-     * The caller builds an unsigned Kind-443 event via `create_unsigned_event`,
+     * The caller builds an unsigned Kind-30443 event via `create_unsigned_event`,
      * signs it (internal key or Amber), then publishes via `publish_raw_event`.
      */
     @Throws(NuruNuruFfiException::class)override fun `mlsCreateKeyPackage`(): FfiKeyPackageEventData {
@@ -2725,6 +2928,8 @@ open class NuruNuruClient: Disposable, AutoCloseable, NuruNuruClientInterface
     
     /**
      * Encrypt an application message for a group (Kind 445 event data).
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     @Throws(NuruNuruFfiException::class)override fun `mlsCreateMessage`(`groupIdHex`: kotlin.String, `content`: kotlin.String): FfiEncryptedMessageData {
             return FfiConverterTypeFfiEncryptedMessageData.lift(
@@ -2740,7 +2945,42 @@ open class NuruNuruClient: Disposable, AutoCloseable, NuruNuruClientInterface
 
     
     /**
+     * Create a recovery self-update commit event for stuck pending proposals.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
+     */
+    @Throws(NuruNuruFfiException::class)override fun `mlsCreateRecoveryCommit`(`groupIdHex`: kotlin.String): FfiEncryptedMessageData {
+            return FfiConverterTypeFfiEncryptedMessageData.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NuruNuruFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_create_recovery_commit(
+        it, FfiConverterString.lower(`groupIdHex`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Delete consumed KeyPackage private/init-key material from local MLS storage (MIP-02).
+     */
+    @Throws(NuruNuruFfiException::class)override fun `mlsDeleteConsumedKeyPackageFromEventJson`(`keyPackageEventJson`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(NuruNuruFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_delete_consumed_key_package_from_event_json(
+        it, FfiConverterString.lower(`keyPackageEventJson`),_status)
+}
+    }
+    
+    
+
+    
+    /**
      * Get metadata for a single MLS group.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     @Throws(NuruNuruFfiException::class)override fun `mlsGetGroupInfo`(`groupIdHex`: kotlin.String): FfiMlsGroupInfo {
             return FfiConverterTypeFfiMlsGroupInfo.lift(
@@ -2758,6 +2998,8 @@ open class NuruNuruClient: Disposable, AutoCloseable, NuruNuruClientInterface
     /**
      * Retrieve decrypted message history for a group from MDK's local SQLite.
      * Use this on app startup to restore history without re-processing relay events.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     @Throws(NuruNuruFfiException::class)override fun `mlsGetMessageHistory`(`groupIdHex`: kotlin.String, `limit`: kotlin.ULong): List<FfiDecryptedMessage> {
             return FfiConverterSequenceTypeFfiDecryptedMessage.lift(
@@ -2773,7 +3015,29 @@ open class NuruNuruClient: Disposable, AutoCloseable, NuruNuruClientInterface
 
     
     /**
+     * Return Nostr group IDs (64-char hex Kind-445 `h` tag values) that need self-update.
+     *
+     * FFI/API contract: every `group_id_hex` crossing this boundary is the
+     * Nostr group id, not MDK's internal MLS storage group id. Returned values
+     * can be passed directly to `mls_create_recovery_commit(group_id_hex)`.
+     */
+    @Throws(NuruNuruFfiException::class)override fun `mlsGroupsNeedingSelfUpdate`(`thresholdSecs`: kotlin.ULong): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NuruNuruFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_groups_needing_self_update(
+        it, FfiConverterULong.lower(`thresholdSecs`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Leave a group. Returns the Kind-445 commit event data to publish.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     @Throws(NuruNuruFfiException::class)override fun `mlsLeaveGroup`(`groupIdHex`: kotlin.String): FfiEncryptedMessageData {
             return FfiConverterTypeFfiEncryptedMessageData.lift(
@@ -2810,6 +3074,8 @@ open class NuruNuruClient: Disposable, AutoCloseable, NuruNuruClientInterface
      * Must be called after `mls_add_member`, `mls_remove_member`, or `mls_leave_group`
      * once the commit event has been published. Without this, subsequent operations on the
      * same group will fail with "Can't execute operation because a pending commit exists".
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     @Throws(NuruNuruFfiException::class)override fun `mlsMergePendingCommit`(`groupIdHex`: kotlin.String)
         = 
@@ -2824,7 +3090,9 @@ open class NuruNuruClient: Disposable, AutoCloseable, NuruNuruClientInterface
 
     
     /**
-     * Process an incoming Kind-445 event and return the decrypted message.
+     * Backward-compatible wrapper used by older clients.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     @Throws(NuruNuruFfiException::class)override fun `mlsProcessMessage`(`groupIdHex`: kotlin.String, `eventJson`: kotlin.String): FfiDecryptedMessage {
             return FfiConverterTypeFfiDecryptedMessage.lift(
@@ -2840,7 +3108,27 @@ open class NuruNuruClient: Disposable, AutoCloseable, NuruNuruClientInterface
 
     
     /**
-     * Process an incoming Kind-444 Welcome event and join the group.
+     * Process an incoming Kind-445 event and return a structured result.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
+     */
+    @Throws(NuruNuruFfiException::class)override fun `mlsProcessMessageResult`(`groupIdHex`: kotlin.String, `eventJson`: kotlin.String): FfiMlsProcessResult {
+            return FfiConverterTypeFfiMlsProcessResult.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NuruNuruFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_process_message_result(
+        it, FfiConverterString.lower(`groupIdHex`),FfiConverterString.lower(`eventJson`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Process an incoming Welcome event and join the group.
+     *
+     * Accepts both Kind 1059 (NIP-59 gift-wrapped, Marmot) and Kind 444 (legacy).
      */
     @Throws(NuruNuruFfiException::class)override fun `mlsProcessWelcome`(`welcomeEventJson`: kotlin.String): FfiMlsGroupInfo {
             return FfiConverterTypeFfiMlsGroupInfo.lift(
@@ -2857,6 +3145,8 @@ open class NuruNuruClient: Disposable, AutoCloseable, NuruNuruClientInterface
     
     /**
      * Remove a member from a group. Returns the Kind-445 commit event data.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     @Throws(NuruNuruFfiException::class)override fun `mlsRemoveMember`(`groupIdHex`: kotlin.String, `memberPubkey`: kotlin.String): FfiEncryptedMessageData {
             return FfiConverterTypeFfiEncryptedMessageData.lift(
@@ -2868,6 +3158,24 @@ open class NuruNuruClient: Disposable, AutoCloseable, NuruNuruClientInterface
     }
     )
     }
+    
+
+    
+    /**
+     * Strictly validate a KeyPackage event JSON (MIP-00).
+     *
+     * Verifies required tags/capabilities and checks `i` tag against computed
+     * KeyPackageRef by parsing the content through MDK.
+     */
+    @Throws(NuruNuruFfiException::class)override fun `mlsValidateKeyPackageEvent`(`keyPackageEventJson`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(NuruNuruFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_validate_key_package_event(
+        it, FfiConverterString.lower(`keyPackageEventJson`),_status)
+}
+    }
+    
     
 
     
@@ -3383,6 +3691,9 @@ data class FfiDecryptedMessage (
     var `senderPubkey`: kotlin.String, 
     var `content`: kotlin.String, 
     var `timestamp`: kotlin.ULong, 
+    /**
+     * Nostr group id hex / Kind 445 h tag value.
+     */
     var `groupIdHex`: kotlin.String
 ) {
     
@@ -3456,8 +3767,23 @@ public object FfiConverterTypeFfiEncryptedMessageData: FfiConverterRustBuffer<Ff
 
 
 data class FfiKeyPackageEventData (
+    /**
+     * Event kind: 30443 (Marmot MIP-00, addressable)
+     */
+    var `kind`: kotlin.UInt, 
     var `content`: kotlin.String, 
-    var `tags`: List<List<kotlin.String>>
+    /**
+     * Canonical kind:30443 tags (includes `d`)
+     */
+    var `tags`: List<List<kotlin.String>>, 
+    /**
+     * Legacy kind:443 tags (excludes `d`) for migration dual-publish.
+     */
+    var `legacyTags`: List<List<kotlin.String>>, 
+    /**
+     * Canonical d-tag identifier for keypackage slot replacement.
+     */
+    var `dTag`: kotlin.String
 ) {
     
     companion object
@@ -3469,25 +3795,40 @@ data class FfiKeyPackageEventData (
 public object FfiConverterTypeFfiKeyPackageEventData: FfiConverterRustBuffer<FfiKeyPackageEventData> {
     override fun read(buf: ByteBuffer): FfiKeyPackageEventData {
         return FfiKeyPackageEventData(
+            FfiConverterUInt.read(buf),
             FfiConverterString.read(buf),
             FfiConverterSequenceSequenceString.read(buf),
+            FfiConverterSequenceSequenceString.read(buf),
+            FfiConverterString.read(buf),
         )
     }
 
     override fun allocationSize(value: FfiKeyPackageEventData) = (
+            FfiConverterUInt.allocationSize(value.`kind`) +
             FfiConverterString.allocationSize(value.`content`) +
-            FfiConverterSequenceSequenceString.allocationSize(value.`tags`)
+            FfiConverterSequenceSequenceString.allocationSize(value.`tags`) +
+            FfiConverterSequenceSequenceString.allocationSize(value.`legacyTags`) +
+            FfiConverterString.allocationSize(value.`dTag`)
     )
 
     override fun write(value: FfiKeyPackageEventData, buf: ByteBuffer) {
+            FfiConverterUInt.write(value.`kind`, buf)
             FfiConverterString.write(value.`content`, buf)
             FfiConverterSequenceSequenceString.write(value.`tags`, buf)
+            FfiConverterSequenceSequenceString.write(value.`legacyTags`, buf)
+            FfiConverterString.write(value.`dTag`, buf)
     }
 }
 
 
 
 data class FfiMlsGroupInfo (
+    /**
+     * Nostr group id hex / Kind 445 h tag value.
+     *
+     * This is the external group id used across FFI/App boundaries; it is not
+     * MDK/OpenMLS's internal MLS group id.
+     */
     var `groupIdHex`: kotlin.String, 
     var `name`: kotlin.String, 
     var `description`: kotlin.String, 
@@ -3496,6 +3837,11 @@ data class FfiMlsGroupInfo (
     var `relays`: List<kotlin.String>, 
     var `createdAt`: kotlin.ULong, 
     var `epoch`: kotlin.ULong, 
+    /**
+     * MIP-01 v3 disappearing message duration in seconds.
+     * None => disabled.
+     */
+    var `disappearingMessageSecs`: kotlin.ULong?, 
     var `isDm`: kotlin.Boolean
 ) {
     
@@ -3516,6 +3862,7 @@ public object FfiConverterTypeFfiMlsGroupInfo: FfiConverterRustBuffer<FfiMlsGrou
             FfiConverterSequenceString.read(buf),
             FfiConverterULong.read(buf),
             FfiConverterULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
             FfiConverterBoolean.read(buf),
         )
     }
@@ -3529,6 +3876,7 @@ public object FfiConverterTypeFfiMlsGroupInfo: FfiConverterRustBuffer<FfiMlsGrou
             FfiConverterSequenceString.allocationSize(value.`relays`) +
             FfiConverterULong.allocationSize(value.`createdAt`) +
             FfiConverterULong.allocationSize(value.`epoch`) +
+            FfiConverterOptionalULong.allocationSize(value.`disappearingMessageSecs`) +
             FfiConverterBoolean.allocationSize(value.`isDm`)
     )
 
@@ -3541,6 +3889,7 @@ public object FfiConverterTypeFfiMlsGroupInfo: FfiConverterRustBuffer<FfiMlsGrou
             FfiConverterSequenceString.write(value.`relays`, buf)
             FfiConverterULong.write(value.`createdAt`, buf)
             FfiConverterULong.write(value.`epoch`, buf)
+            FfiConverterOptionalULong.write(value.`disappearingMessageSecs`, buf)
             FfiConverterBoolean.write(value.`isDm`, buf)
     }
 }
@@ -3641,7 +3990,14 @@ public object FfiConverterTypeFfiUserProfile: FfiConverterRustBuffer<FfiUserProf
 
 data class FfiWelcomeEventData (
     var `recipientPubkey`: kotlin.String, 
-    var `content`: kotlin.String, 
+    /**
+     * NIP-59 gift-wrapped event JSON (Kind 1059), ready for `publish_raw_event`.
+     */
+    var `giftWrappedEventJson`: kotlin.String, 
+    /**
+     * Inner rumor JSON (Kind 444, unsigned) — for local storage/debugging.
+     */
+    var `innerRumorJson`: kotlin.String, 
     var `tags`: List<List<kotlin.String>>
 ) {
     
@@ -3656,22 +4012,95 @@ public object FfiConverterTypeFfiWelcomeEventData: FfiConverterRustBuffer<FfiWel
         return FfiWelcomeEventData(
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
             FfiConverterSequenceSequenceString.read(buf),
         )
     }
 
     override fun allocationSize(value: FfiWelcomeEventData) = (
             FfiConverterString.allocationSize(value.`recipientPubkey`) +
-            FfiConverterString.allocationSize(value.`content`) +
+            FfiConverterString.allocationSize(value.`giftWrappedEventJson`) +
+            FfiConverterString.allocationSize(value.`innerRumorJson`) +
             FfiConverterSequenceSequenceString.allocationSize(value.`tags`)
     )
 
     override fun write(value: FfiWelcomeEventData, buf: ByteBuffer) {
             FfiConverterString.write(value.`recipientPubkey`, buf)
-            FfiConverterString.write(value.`content`, buf)
+            FfiConverterString.write(value.`giftWrappedEventJson`, buf)
+            FfiConverterString.write(value.`innerRumorJson`, buf)
             FfiConverterSequenceSequenceString.write(value.`tags`, buf)
     }
 }
+
+
+
+sealed class FfiMlsProcessResult {
+    
+    data class Application(
+        val `message`: FfiDecryptedMessage) : FfiMlsProcessResult() {
+        companion object
+    }
+    
+    data class StateUpdate(
+        val `kind`: kotlin.String) : FfiMlsProcessResult() {
+        companion object
+    }
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiMlsProcessResult : FfiConverterRustBuffer<FfiMlsProcessResult>{
+    override fun read(buf: ByteBuffer): FfiMlsProcessResult {
+        return when(buf.getInt()) {
+            1 -> FfiMlsProcessResult.Application(
+                FfiConverterTypeFfiDecryptedMessage.read(buf),
+                )
+            2 -> FfiMlsProcessResult.StateUpdate(
+                FfiConverterString.read(buf),
+                )
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: FfiMlsProcessResult) = when(value) {
+        is FfiMlsProcessResult.Application -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeFfiDecryptedMessage.allocationSize(value.`message`)
+            )
+        }
+        is FfiMlsProcessResult.StateUpdate -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`kind`)
+            )
+        }
+    }
+
+    override fun write(value: FfiMlsProcessResult, buf: ByteBuffer) {
+        when(value) {
+            is FfiMlsProcessResult.Application -> {
+                buf.putInt(1)
+                FfiConverterTypeFfiDecryptedMessage.write(value.`message`, buf)
+                Unit
+            }
+            is FfiMlsProcessResult.StateUpdate -> {
+                buf.putInt(2)
+                FfiConverterString.write(value.`kind`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
 
 
 
@@ -3791,6 +4220,38 @@ public object FfiConverterTypeNuruNuruFfiError : FfiConverterRustBuffer<NuruNuru
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
     }
 
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalULong: FfiConverterRustBuffer<kotlin.ULong?> {
+    override fun read(buf: ByteBuffer): kotlin.ULong? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterULong.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.ULong?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterULong.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.ULong?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterULong.write(value, buf)
+        }
+    }
 }
 
 
@@ -4031,7 +4492,7 @@ public object FfiConverterSequenceSequenceString: FfiConverterRustBuffer<List<Li
          * `db_path` is the directory where nostrdb stores its data files.
          * Recommended value: `"${context.filesDir}/nostrdb_ndb"`.
          *
-         * Subsequent calls after the first are silently ignored (idempotent).
+         * Subsequent calls overwrite the previous value.
          */
     @Throws(NuruNuruFfiException::class) fun `initEngine`(`dbPath`: kotlin.String)
         = 

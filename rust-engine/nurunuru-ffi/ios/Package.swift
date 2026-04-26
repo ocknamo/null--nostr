@@ -4,14 +4,14 @@
 // Setup:
 //   1. Build the XCFramework from the nurunuru-ffi crate:
 //        cd rust-engine/nurunuru-ffi/bindgen && make xcframework
-//      This creates ios/NuruNuruFFI.xcframework and copies the generated
+//      This creates ios/NuruNuruFFI.xcframework and syncs the generated
 //      Swift file to Sources/NuruNuru/nurunuru_ffi.swift.
 //
 //   2. In Xcode: File > Add Package Dependencies > Add Local...
 //      Select the `rust-engine/nurunuru-ffi/ios/` directory.
 //
 //   3. Import in Swift:
-//        import NuruNuru
+//        import NuruNuruFFILib
 //        let client = try NuruNuruClient(secretKeyHex: nsec, dbPath: NuruNuruClient.defaultDbPath())
 //        client.connect()
 
@@ -24,17 +24,20 @@ let package = Package(
         .macOS(.v13),
     ],
     products: [
-        // Public API: import NuruNuru
+        // Public API: import NuruNuruFFILib
+        // ⚠️ Renamed from "NuruNuru" to avoid module name collision with the
+        //    Xcode app target "NuruNuru" (causes "Multiple commands produce" error).
         .library(
-            name: "NuruNuru",
-            targets: ["NuruNuruFFI", "NuruNuru"]
+            name: "NuruNuruFFILib",
+            targets: ["nurunuruFFI", "NuruNuruFFILib"]
         ),
     ],
     targets: [
         // Pre-built XCFramework containing libnurunuru_ffi.a for each platform slice.
         // Produced by: cd bindgen && make xcframework
+        // NOTE: Must match generated Swift import: `canImport(nurunuruFFI)`.
         .binaryTarget(
-            name: "NuruNuruFFI",
+            name: "nurunuruFFI",
             path: "NuruNuruFFI.xcframework"
         ),
         // Swift wrapper target: re-exports the UniFFI-generated API and adds
@@ -42,9 +45,10 @@ let package = Package(
         // Sources/NuruNuru/ contains:
         //   - nurunuru_ffi.swift   (generated — copied by `make xcframework`)
         //   - NuruNuruClient+Extensions.swift (hand-written conveniences)
+        // ⚠️ Renamed from "NuruNuru" to "NuruNuruFFILib" — see product note above.
         .target(
-            name: "NuruNuru",
-            dependencies: ["NuruNuruFFI"],
+            name: "NuruNuruFFILib",
+            dependencies: ["nurunuruFFI"],
             path: "Sources/NuruNuru"
         ),
     ]

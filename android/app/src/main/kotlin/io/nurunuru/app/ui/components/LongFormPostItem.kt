@@ -23,7 +23,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import io.nurunuru.app.data.models.ScoredPost
@@ -47,7 +49,29 @@ fun LongFormPostItem(
     onHashtagClick: ((String) -> Unit)? = null
 ) {
     val nuruColors = LocalNuruColors.current
-    val profile = post.profile
+    val baseProfile = post.profile
+
+    // プロフィールが不完全な場合、バックグラウンドで再取得
+    var resolvedProfile by remember(post.event.id) { mutableStateOf(baseProfile) }
+    LaunchedEffect(post.event.id, baseProfile) {
+        if (baseProfile?.picture == null && baseProfile?.displayName == null && baseProfile?.name == null) {
+            val cached = repository.getCachedProfile(post.event.pubkey)
+            if (cached != null && (cached.picture != null || cached.displayName != null || cached.name != null)) {
+                resolvedProfile = cached
+            } else {
+                val fetched = withContext(Dispatchers.IO) {
+                    try { repository.fetchProfiles(listOf(post.event.pubkey))[post.event.pubkey] }
+                    catch (_: Exception) { null }
+                }
+                if (fetched != null && (fetched.picture != null || fetched.displayName != null || fetched.name != null)) {
+                    resolvedProfile = fetched
+                }
+            }
+        } else {
+            resolvedProfile = baseProfile
+        }
+    }
+    val profile = resolvedProfile
     var showReader by remember { mutableStateOf(false) }
 
     var showReportModal by remember { mutableStateOf(false) }
