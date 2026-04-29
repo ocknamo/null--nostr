@@ -12,7 +12,7 @@
 [![Nostr](https://img.shields.io/badge/Nostr-protocol-purple)](https://nostr.com)
 
 <a href="https://opensats.org/blog/sixteenth-wave-of-nostr-grants">
-  <img src="https://opensats.org/static/images/blog/105-sixteenth-wave-of-nostr-grants.jpg" alt="ぬるぬる × OpenSats" width="100%" />
+  <img src="https://blossom.primal.net/dab6e0d933a2adb7a15c32cbf4fd5bf5321b8f5cf4389ea7aa55c25e2f3a024a.png" alt="ぬるぬる × OpenSats" width="100%" />
 </a>
 
 **OpenSats の Nostr Grant により支援を受けています。**  
