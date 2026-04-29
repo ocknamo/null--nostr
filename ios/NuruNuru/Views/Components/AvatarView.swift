@@ -154,6 +154,10 @@ private struct AnimatedUIImageView: UIViewRepresentable {
         view.contentMode = contentMode
         view.clipsToBounds = true
         view.backgroundColor = .clear
+        // Do not let the embedded UIKit image view intercept taps from SwiftUI
+        // Buttons (reaction picker / emoji settings cells). The parent SwiftUI
+        // controls must receive the touch events.
+        view.isUserInteractionEnabled = false
         view.setContentHuggingPriority(.defaultLow, for: .horizontal)
         view.setContentHuggingPriority(.defaultLow, for: .vertical)
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)

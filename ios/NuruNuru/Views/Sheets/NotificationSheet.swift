@@ -20,6 +20,7 @@ struct NotificationSheet: View {
     @State private var isLoading:     Bool = true
     @State private var isRefreshing:  Bool = false
     @State private var selectedPostTarget: NotificationPostTarget? = nil
+    @State private var selectedProfile:    ProfileID? = nil
     @State private var expandedPreviewPost: NotificationPreviewPost? = nil
 
     // ライブポーリング + 新着Pill (Android LaunchedEffect while(true) { delay(10_000) } 相当)
@@ -154,6 +155,13 @@ struct NotificationSheet: View {
                     )
                 }
             }
+        }
+        .sheet(item: $selectedProfile) { pid in
+            UserProfileSheet(
+                pubkey:      pid.id,
+                myPubkeyHex: myPubkeyHex,
+                repository:  repository
+            )
         }
     }
 
@@ -307,33 +315,41 @@ struct NotificationSheet: View {
 
         HStack(alignment: .top, spacing: NuruSpacing.space3) {
                 // Avatar + type badge (Android: Box with avatar + BottomEnd badge)
-                ZStack(alignment: .bottomTrailing) {
-                    avatarView(profile: profile, size: 46)
-                        .frame(width: 46, height: 46)
+                // アイコン画像部分だけはプロフィールへ遷移させ、行全体のタップは従来通り投稿へ遷移する。
+                Button {
+                    selectedProfile = ProfileID(notif.pubkey)
+                } label: {
+                    ZStack(alignment: .bottomTrailing) {
+                        avatarView(profile: profile, size: 46)
+                            .frame(width: 46, height: 46)
 
-                    // タイプアイコンバッジ (Android: 18dp circle at BottomEnd)
-                    ZStack {
-                        Circle().fill(style.color)
-                        if let emojiUrl = notif.emojiUrl,
-                           notif.type == "reaction" || notif.type == "emoji_reaction",
-                           let url = URL(string: emojiUrl) {
-                            AnimatedRemoteImage(url: url) {
-                                EmptyView()
+                        // タイプアイコンバッジ (Android: 18dp circle at BottomEnd)
+                        ZStack {
+                            Circle().fill(style.color)
+                            if let emojiUrl = notif.emojiUrl,
+                               notif.type == "reaction" || notif.type == "emoji_reaction",
+                               let url = URL(string: emojiUrl) {
+                                AnimatedRemoteImage(url: url) {
+                                    EmptyView()
+                                }
+                                .frame(width: 13, height: 13)
+                            } else if notif.type == "repost" {
+                                RepostIcon()
+                                    .frame(width: 12, height: 12)
+                                    .foregroundStyle(.white)
+                            } else {
+                                Image(systemName: style.icon)
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(.white)
                             }
-                            .frame(width: 13, height: 13)
-                        } else if notif.type == "repost" {
-                            RepostIcon()
-                                .frame(width: 12, height: 12)
-                                .foregroundStyle(.white)
-                        } else {
-                            Image(systemName: style.icon)
-                                .font(.system(size: 9, weight: .bold))
-                                .foregroundStyle(.white)
                         }
+                        .frame(width: 18, height: 18)
+                        .offset(x: 2, y: 2)
                     }
-                    .frame(width: 18, height: 18)
-                    .offset(x: 2, y: 2)
+                    .contentShape(Circle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("プロフィールを開く")
 
                 // Text content
                 VStack(alignment: .leading, spacing: 3) {

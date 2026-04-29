@@ -97,17 +97,21 @@ struct ReactionEmojiPicker: View {
                     ScrollView {
                         LazyVGrid(columns: columns, spacing: 4) {
                             ForEach(filtered) { emoji in
-                                Button {
-                                    onSelect(.custom(shortcode: emoji.shortcode, url: emoji.url))
-                                } label: {
+                                ZStack {
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .fill(Color.clear)
+
                                     AnimatedRemoteImage(url: URL(string: emoji.url)) {
                                         Color.clear
                                     }
-                                    .aspectRatio(1, contentMode: .fit)
                                     .padding(4)
+                                    .allowsHitTesting(false)
                                 }
-                                .buttonStyle(.plain)
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                                .aspectRatio(1, contentMode: .fit)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    onSelect(.custom(shortcode: emoji.shortcode, url: emoji.url))
+                                }
                             }
                         }
                         .padding(.horizontal, NuruSpacing.space4)
