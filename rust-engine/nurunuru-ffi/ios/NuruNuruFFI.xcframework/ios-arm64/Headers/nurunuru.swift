@@ -684,6 +684,8 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
     /**
      * Add a member to a group using their Kind-30443 KeyPackage event JSON.
      *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
+     *
      * Returns commit (Kind 445) and gift-wrapped welcome (Kind 1059) event data.
      * The welcome's `gift_wrapped_event_json` is ready for `publish_raw_event`.
      */
@@ -691,6 +693,8 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
     
     /**
      * Clear (rollback) pending MLS commit for recovery from stuck state.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     func mlsClearPendingCommit(groupIdHex: String) throws 
     
@@ -709,11 +713,15 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
     
     /**
      * Encrypt an application message for a group (Kind 445 event data).
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     func mlsCreateMessage(groupIdHex: String, content: String) throws  -> FfiEncryptedMessageData
     
     /**
      * Create a recovery self-update commit event for stuck pending proposals.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     func mlsCreateRecoveryCommit(groupIdHex: String) throws  -> FfiEncryptedMessageData
     
@@ -724,22 +732,32 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
     
     /**
      * Get metadata for a single MLS group.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     func mlsGetGroupInfo(groupIdHex: String) throws  -> FfiMlsGroupInfo
     
     /**
      * Retrieve decrypted message history for a group from MDK's local SQLite.
      * Use this on app startup to restore history without re-processing relay events.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     func mlsGetMessageHistory(groupIdHex: String, limit: UInt64) throws  -> [FfiDecryptedMessage]
     
     /**
-     * Return MLS group IDs (hex) that need self-update per MDK state tracking.
+     * Return Nostr group IDs (64-char hex Kind-445 `h` tag values) that need self-update.
+     *
+     * FFI/API contract: every `group_id_hex` crossing this boundary is the
+     * Nostr group id, not MDK's internal MLS storage group id. Returned values
+     * can be passed directly to `mls_create_recovery_commit(group_id_hex)`.
      */
     func mlsGroupsNeedingSelfUpdate(thresholdSecs: UInt64) throws  -> [String]
     
     /**
      * Leave a group. Returns the Kind-445 commit event data to publish.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     func mlsLeaveGroup(groupIdHex: String) throws  -> FfiEncryptedMessageData
     
@@ -754,16 +772,22 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * Must be called after `mls_add_member`, `mls_remove_member`, or `mls_leave_group`
      * once the commit event has been published. Without this, subsequent operations on the
      * same group will fail with "Can't execute operation because a pending commit exists".
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     func mlsMergePendingCommit(groupIdHex: String) throws 
     
     /**
      * Backward-compatible wrapper used by older clients.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     func mlsProcessMessage(groupIdHex: String, eventJson: String) throws  -> FfiDecryptedMessage
     
     /**
      * Process an incoming Kind-445 event and return a structured result.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     func mlsProcessMessageResult(groupIdHex: String, eventJson: String) throws  -> FfiMlsProcessResult
     
@@ -776,6 +800,8 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
     
     /**
      * Remove a member from a group. Returns the Kind-445 commit event data.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     func mlsRemoveMember(groupIdHex: String, memberPubkey: String) throws  -> FfiEncryptedMessageData
     
@@ -1346,6 +1372,8 @@ open func markNotInterested(eventId: String, authorPubkey: String)  {try! rustCa
     /**
      * Add a member to a group using their Kind-30443 KeyPackage event JSON.
      *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
+     *
      * Returns commit (Kind 445) and gift-wrapped welcome (Kind 1059) event data.
      * The welcome's `gift_wrapped_event_json` is ready for `publish_raw_event`.
      */
@@ -1360,6 +1388,8 @@ open func mlsAddMember(groupIdHex: String, keyPackageEventJson: String)throws  -
     
     /**
      * Clear (rollback) pending MLS commit for recovery from stuck state.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
 open func mlsClearPendingCommit(groupIdHex: String)throws   {try rustCallWithError(FfiConverterTypeNuruNuruFfiError_lift) {
     uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_clear_pending_commit(self.uniffiClonePointer(),
@@ -1396,6 +1426,8 @@ open func mlsCreateKeyPackage()throws  -> FfiKeyPackageEventData  {
     
     /**
      * Encrypt an application message for a group (Kind 445 event data).
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
 open func mlsCreateMessage(groupIdHex: String, content: String)throws  -> FfiEncryptedMessageData  {
     return try  FfiConverterTypeFfiEncryptedMessageData_lift(try rustCallWithError(FfiConverterTypeNuruNuruFfiError_lift) {
@@ -1408,6 +1440,8 @@ open func mlsCreateMessage(groupIdHex: String, content: String)throws  -> FfiEnc
     
     /**
      * Create a recovery self-update commit event for stuck pending proposals.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
 open func mlsCreateRecoveryCommit(groupIdHex: String)throws  -> FfiEncryptedMessageData  {
     return try  FfiConverterTypeFfiEncryptedMessageData_lift(try rustCallWithError(FfiConverterTypeNuruNuruFfiError_lift) {
@@ -1429,6 +1463,8 @@ open func mlsDeleteConsumedKeyPackageFromEventJson(keyPackageEventJson: String)t
     
     /**
      * Get metadata for a single MLS group.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
 open func mlsGetGroupInfo(groupIdHex: String)throws  -> FfiMlsGroupInfo  {
     return try  FfiConverterTypeFfiMlsGroupInfo_lift(try rustCallWithError(FfiConverterTypeNuruNuruFfiError_lift) {
@@ -1441,6 +1477,8 @@ open func mlsGetGroupInfo(groupIdHex: String)throws  -> FfiMlsGroupInfo  {
     /**
      * Retrieve decrypted message history for a group from MDK's local SQLite.
      * Use this on app startup to restore history without re-processing relay events.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
 open func mlsGetMessageHistory(groupIdHex: String, limit: UInt64)throws  -> [FfiDecryptedMessage]  {
     return try  FfiConverterSequenceTypeFfiDecryptedMessage.lift(try rustCallWithError(FfiConverterTypeNuruNuruFfiError_lift) {
@@ -1452,7 +1490,11 @@ open func mlsGetMessageHistory(groupIdHex: String, limit: UInt64)throws  -> [Ffi
 }
     
     /**
-     * Return MLS group IDs (hex) that need self-update per MDK state tracking.
+     * Return Nostr group IDs (64-char hex Kind-445 `h` tag values) that need self-update.
+     *
+     * FFI/API contract: every `group_id_hex` crossing this boundary is the
+     * Nostr group id, not MDK's internal MLS storage group id. Returned values
+     * can be passed directly to `mls_create_recovery_commit(group_id_hex)`.
      */
 open func mlsGroupsNeedingSelfUpdate(thresholdSecs: UInt64)throws  -> [String]  {
     return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeNuruNuruFfiError_lift) {
@@ -1464,6 +1506,8 @@ open func mlsGroupsNeedingSelfUpdate(thresholdSecs: UInt64)throws  -> [String]  
     
     /**
      * Leave a group. Returns the Kind-445 commit event data to publish.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
 open func mlsLeaveGroup(groupIdHex: String)throws  -> FfiEncryptedMessageData  {
     return try  FfiConverterTypeFfiEncryptedMessageData_lift(try rustCallWithError(FfiConverterTypeNuruNuruFfiError_lift) {
@@ -1489,6 +1533,8 @@ open func mlsListGroups()throws  -> [FfiMlsGroupInfo]  {
      * Must be called after `mls_add_member`, `mls_remove_member`, or `mls_leave_group`
      * once the commit event has been published. Without this, subsequent operations on the
      * same group will fail with "Can't execute operation because a pending commit exists".
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
 open func mlsMergePendingCommit(groupIdHex: String)throws   {try rustCallWithError(FfiConverterTypeNuruNuruFfiError_lift) {
     uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_merge_pending_commit(self.uniffiClonePointer(),
@@ -1499,6 +1545,8 @@ open func mlsMergePendingCommit(groupIdHex: String)throws   {try rustCallWithErr
     
     /**
      * Backward-compatible wrapper used by older clients.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
 open func mlsProcessMessage(groupIdHex: String, eventJson: String)throws  -> FfiDecryptedMessage  {
     return try  FfiConverterTypeFfiDecryptedMessage_lift(try rustCallWithError(FfiConverterTypeNuruNuruFfiError_lift) {
@@ -1511,6 +1559,8 @@ open func mlsProcessMessage(groupIdHex: String, eventJson: String)throws  -> Ffi
     
     /**
      * Process an incoming Kind-445 event and return a structured result.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
 open func mlsProcessMessageResult(groupIdHex: String, eventJson: String)throws  -> FfiMlsProcessResult  {
     return try  FfiConverterTypeFfiMlsProcessResult_lift(try rustCallWithError(FfiConverterTypeNuruNuruFfiError_lift) {
@@ -1536,6 +1586,8 @@ open func mlsProcessWelcome(welcomeEventJson: String)throws  -> FfiMlsGroupInfo 
     
     /**
      * Remove a member from a group. Returns the Kind-445 commit event data.
+     *
+     * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
 open func mlsRemoveMember(groupIdHex: String, memberPubkey: String)throws  -> FfiEncryptedMessageData  {
     return try  FfiConverterTypeFfiEncryptedMessageData_lift(try rustCallWithError(FfiConverterTypeNuruNuruFfiError_lift) {
@@ -2059,11 +2111,17 @@ public struct FfiDecryptedMessage {
     public var senderPubkey: String
     public var content: String
     public var timestamp: UInt64
+    /**
+     * Nostr group id hex / Kind 445 h tag value.
+     */
     public var groupIdHex: String
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(senderPubkey: String, content: String, timestamp: UInt64, groupIdHex: String) {
+    public init(senderPubkey: String, content: String, timestamp: UInt64, 
+        /**
+         * Nostr group id hex / Kind 445 h tag value.
+         */groupIdHex: String) {
         self.senderPubkey = senderPubkey
         self.content = content
         self.timestamp = timestamp
@@ -2338,6 +2396,12 @@ public func FfiConverterTypeFfiKeyPackageEventData_lower(_ value: FfiKeyPackageE
 
 
 public struct FfiMlsGroupInfo {
+    /**
+     * Nostr group id hex / Kind 445 h tag value.
+     *
+     * This is the external group id used across FFI/App boundaries; it is not
+     * MDK/OpenMLS's internal MLS group id.
+     */
     public var groupIdHex: String
     public var name: String
     public var description: String
@@ -2355,7 +2419,13 @@ public struct FfiMlsGroupInfo {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(groupIdHex: String, name: String, description: String, adminPubkeys: [String], memberPubkeys: [String], relays: [String], createdAt: UInt64, epoch: UInt64, 
+    public init(
+        /**
+         * Nostr group id hex / Kind 445 h tag value.
+         *
+         * This is the external group id used across FFI/App boundaries; it is not
+         * MDK/OpenMLS's internal MLS group id.
+         */groupIdHex: String, name: String, description: String, adminPubkeys: [String], memberPubkeys: [String], relays: [String], createdAt: UInt64, epoch: UInt64, 
         /**
          * MIP-01 v3 disappearing message duration in seconds.
          * None => disabled.
@@ -3278,10 +3348,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mark_not_interested() != 2204) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_add_member() != 32236) {
+    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_add_member() != 24579) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_clear_pending_commit() != 35443) {
+    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_clear_pending_commit() != 40727) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_create_group() != 54959) {
@@ -3290,43 +3360,43 @@ private let initializationResult: InitializationResult = {
     if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_create_key_package() != 32101) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_create_message() != 27676) {
+    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_create_message() != 42093) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_create_recovery_commit() != 40771) {
+    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_create_recovery_commit() != 3656) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_delete_consumed_key_package_from_event_json() != 53947) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_get_group_info() != 37817) {
+    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_get_group_info() != 45739) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_get_message_history() != 22075) {
+    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_get_message_history() != 36205) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_groups_needing_self_update() != 42812) {
+    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_groups_needing_self_update() != 10252) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_leave_group() != 53476) {
+    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_leave_group() != 40071) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_list_groups() != 21675) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_merge_pending_commit() != 50789) {
+    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_merge_pending_commit() != 48880) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_process_message() != 17145) {
+    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_process_message() != 20654) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_process_message_result() != 6853) {
+    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_process_message_result() != 18367) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_process_welcome() != 43793) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_remove_member() != 34670) {
+    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_remove_member() != 42604) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_validate_key_package_event() != 20255) {

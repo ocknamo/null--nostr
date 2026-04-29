@@ -19,6 +19,20 @@ extension NostrRepository {
         await client.fetchEventsFromRelay(relayUrl, filters: filters, timeoutSeconds: timeoutSeconds)
     }
 
+    func getCachedRelayTimeline(_ relayUrl: String, maxAgeSeconds: TimeInterval = 120) -> [ScoredPost]? {
+        guard let cached = relayTimelineCache[relayUrl],
+              Date().timeIntervalSince(cached.cachedAt) < maxAgeSeconds else { return nil }
+        return cached.posts
+    }
+
+    func prefetchRelayTimeline(_ relayUrl: String, limit: Int = 30) async {
+        // Do not background-prefetch relays currently in operator-friendly cooldown policy.
+        // They remain selectable, but the app should not generate automatic traffic.
+        guard !Self.temporarilyDeprioritizedRelays.contains(relayUrl) else { return }
+        guard relayTimelineCache[relayUrl] == nil else { return }
+        _ = await fetchGlobalTimelineFromRelay(relayUrl, limit: limit, fast: true)
+    }
+
     // MARK: - Global timeline
 
     /// グローバルタイムライン（kind 1、直近1時間）を取得し、エンゲージメントカウントを付与して返す。
@@ -43,16 +57,26 @@ extension NostrRepository {
     }
 
     /// 特定リレーからグローバルタイムラインを取得する（リレー選択ドロップダウン用）。
-    func fetchGlobalTimelineFromRelay(_ relayUrl: String, limit: Int = 50) async -> [ScoredPost] {
+    func fetchGlobalTimelineFromRelay(_ relayUrl: String, limit: Int = 50, fast: Bool = false) async -> [ScoredPost] {
+        if let cached = getCachedRelayTimeline(relayUrl), !cached.isEmpty {
+            return cached
+        }
         let since  = Int64(Date().addingTimeInterval(-3600).timeIntervalSince1970)
         let kinds  = [NostrKind.textNote, NostrKind.longForm, NostrKind.repost]
         let filter = NostrFilter(kinds: kinds, since: since, limit: limit)
-        let rawEvents = await fetchEventsFromRelay(relayUrl, filters: [filter])
+        let rawEvents = await fetchEventsFromRelay(relayUrl, filters: [filter], timeoutSeconds: fast ? 3.0 : 5.0)
             .filter { kinds.contains($0.kind) }
             .sorted { $0.createdAt > $1.createdAt }
         var posts = unwrapRepostEvents(rawEvents)
         posts = await filterMutedPosts(posts)
-        await enrichPosts(&posts)
+
+        applyCachedProfiles(to: &posts)
+        if fast {
+            await resolveQuotedPosts(&posts, fast: true)
+        } else {
+            await enrichPosts(&posts)
+        }
+        relayTimelineCache[relayUrl] = (posts: posts, cachedAt: Date())
         return posts
     }
 
@@ -78,6 +102,26 @@ extension NostrRepository {
         cache.setCachedTimeline(posts.map(\.event), key: "following")
         await enrichPosts(&posts)
         return posts
+    }
+
+    private func isTimelineDisplayProfileResolved(_ profile: UserProfile) -> Bool {
+        let hasName = profile.displayName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            || profile.name?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        let hasPicture = profile.picture?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        return hasName || hasPicture
+    }
+
+    private func applyCachedProfiles(to posts: inout [ScoredPost]) {
+        for post in posts {
+            if post.profile == nil, let p = cache.getCachedProfile(post.event.pubkey) {
+                post.profile = p
+            }
+            if let rp = post.repostedBy,
+               (rp.name == nil && rp.displayName == nil),
+               let p = cache.getCachedProfile(rp.pubkey) {
+                post.repostedBy = p
+            }
+        }
     }
 
     // MARK: - enrichPosts
@@ -161,12 +205,23 @@ extension NostrRepository {
             return map
         }()
 
-        // プロフィール・バッジを並列取得
+        // プロフィールはキャッシュを即時反映し、不足分だけリレー取得する
         let allPubkeys = Array(Set(
             posts.map(\.event.pubkey) + posts.compactMap(\.repostedBy?.pubkey)
         ))
-        let profiles = await fetchProfiles(pubkeys: allPubkeys)
-        let profileMap = Dictionary(profiles.map { ($0.pubkey, $0) }, uniquingKeysWith: { a, _ in a })
+        var profileMap: [String: UserProfile] = [:]
+        var missingProfiles: [String] = []
+        for pk in allPubkeys {
+            if let cached = cache.getCachedProfile(pk), isTimelineDisplayProfileResolved(cached) {
+                profileMap[pk] = cached
+            } else {
+                missingProfiles.append(pk)
+            }
+        }
+        if !missingProfiles.isEmpty {
+            let profiles = await fetchProfiles(pubkeys: missingProfiles)
+            for p in profiles { profileMap[p.pubkey] = p }
+        }
 
         // バッジはキャッシュからのみ取得（ネットワーク不要、即時表示）。
         // フルフェッチはプロフィール画面でのみ実行（Android 同様）。
@@ -290,7 +345,7 @@ extension NostrRepository {
     /// 引用リポスト（"q" タグ or nostr:note1... in content）の引用元イベントを取得して
     /// `ScoredPost.quotedPost` にセットする。
     /// Android: enrichPosts 内の引用解決ロジックに対応。
-    func resolveQuotedPosts(_ posts: inout [ScoredPost]) async {
+    func resolveQuotedPosts(_ posts: inout [ScoredPost], fast: Bool = false) async {
         // "q" タグまたは content 内の nostr:nevent/note から引用先 ID を収集
         var quoteMap: [String: [Int]] = [:] // eventId → indices in posts
         for (i, post) in posts.enumerated() {
@@ -300,15 +355,15 @@ extension NostrRepository {
             if let qId = post.event.getTagValue("q"), !qId.isEmpty {
                 quoteMap[qId, default: []].append(i)
             } else {
-                // content 内の nostr:note1... / nostr:nevent1... を検出
-                // nevent は可変長のため {20,} で広めにマッチ
-                let pattern = #"nostr:(note1[a-z0-9]{58}|nevent1[a-z0-9]{20,})"#
-                if let regex = try? NSRegularExpression(pattern: pattern),
+                // content 内の nostr:note/nevent と bare note1/nevent1 を検出。
+                // nevent は TLV により可変長なので {20,} で広めにマッチする。
+                let pattern = #"(?:nostr:)?(note1[a-z0-9]{58}|nevent1[a-z0-9]{20,})"#
+                if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
                    let match = regex.firstMatch(
                     in: post.event.content,
                     range: NSRange(location: 0, length: (post.event.content as NSString).length)
                    ) {
-                    let bech32 = (post.event.content as NSString).substring(with: match.range).replacingOccurrences(of: "nostr:", with: "")
+                    let bech32 = (post.event.content as NSString).substring(with: match.range(at: 1))
                     // bech32 → hex id（NIP-19 デコード）
                     if let eventId = NostrBech32.decodeEventId(bech32) {
                         quoteMap[eventId, default: []].append(i)
@@ -327,35 +382,57 @@ extension NostrRepository {
         guard !quoteMap.isEmpty else { return }
 
         let quotedIds = Array(quoteMap.keys)
-        // タイムアウトを 5 秒に延長（3秒では遅いリレーで失敗しやすい）
-        let filter = NostrFilter(ids: quotedIds, limit: quotedIds.count)
-        let quotedEvents = await fetchEvents(filters: [filter], timeoutSeconds: 5.0)
 
-        // 取得できなかった ID を個別リレーでリトライ（最大5件）
-        let foundIds = Set(quotedEvents.map(\.id))
-        let missingIds = quotedIds.filter { !foundIds.contains($0) }
-        var allQuotedEvents = quotedEvents
-        if !missingIds.isEmpty {
-            let retryFilter = NostrFilter(ids: Array(missingIds.prefix(5)), limit: missingIds.count)
-            let relayUrls = getSavedRelayUrls()
-            for url in relayUrls.prefix(2) {
-                let retryEvents = await client.fetchEventsFromRelay(url, filters: [retryFilter], timeoutSeconds: 4.0)
-                allQuotedEvents.append(contentsOf: retryEvents)
-                if Set(allQuotedEvents.map(\.id)).isSuperset(of: missingIds) { break }
+        // 1) キャッシュ済み引用は即時反映
+        var missingIds: [String] = []
+        for id in quotedIds {
+            if let cached = quotedPostCache[id] {
+                for i in quoteMap[id] ?? [] where i < posts.count { posts[i].quotedPost = cached }
+            } else {
+                missingIds.append(id)
+            }
+        }
+        guard !missingIds.isEmpty else { return }
+
+        let filter = NostrFilter(ids: missingIds, limit: missingIds.count)
+        var allQuotedEvents = await fetchEvents(filters: [filter], timeoutSeconds: fast ? 2.5 : 4.0)
+
+        // 取得できなかった ID を個別リレーでリトライ（fast時は体感優先で省略）
+        if !fast {
+            let foundIds = Set(allQuotedEvents.map(\.id))
+            let stillMissing = missingIds.filter { !foundIds.contains($0) }
+            if !stillMissing.isEmpty {
+                let retryFilter = NostrFilter(ids: Array(stillMissing.prefix(5)), limit: stillMissing.count)
+                let relayUrls = getSavedRelayUrls()
+                await withTaskGroup(of: [NostrEvent].self) { group in
+                    for url in relayUrls.prefix(2) {
+                        group.addTask { await self.client.fetchEventsFromRelay(url, filters: [retryFilter], timeoutSeconds: 3.0) }
+                    }
+                    for await retryEvents in group { allQuotedEvents.append(contentsOf: retryEvents) }
+                }
             }
         }
 
-        // プロフィールも取得（キャッシュ優先）
-        let quotedPubkeys = Array(Set(allQuotedEvents.map(\.pubkey)))
-        let quotedProfiles = await fetchProfiles(pubkeys: quotedPubkeys)
-        let profileMap = Dictionary(quotedProfiles.map { ($0.pubkey, $0) }, uniquingKeysWith: { a, _ in a })
+        // プロフィールもキャッシュ優先、不足分のみ取得
+        var profileMap: [String: UserProfile] = [:]
+        var missingProfilePubkeys: [String] = []
+        for pk in Set(allQuotedEvents.map(\.pubkey)) {
+            if let cached = cache.getCachedProfile(pk), isTimelineDisplayProfileResolved(cached) {
+                profileMap[pk] = cached
+            } else {
+                missingProfilePubkeys.append(pk)
+            }
+        }
+        if !missingProfilePubkeys.isEmpty && !fast {
+            let quotedProfiles = await fetchProfiles(pubkeys: missingProfilePubkeys)
+            for p in quotedProfiles { profileMap[p.pubkey] = p }
+        }
 
         for event in allQuotedEvents {
             guard let indices = quoteMap[event.id] else { continue }
-            for i in indices where i < posts.count {
-                let qPost = ScoredPost(event: event, profile: profileMap[event.pubkey])
-                posts[i].quotedPost = qPost
-            }
+            let qPost = ScoredPost(event: event, profile: profileMap[event.pubkey])
+            quotedPostCache[event.id] = qPost
+            for i in indices where i < posts.count { posts[i].quotedPost = qPost }
         }
     }
 }

@@ -130,8 +130,8 @@ struct ProfileHeader: View {
                             HStack(spacing: 6) {
                                 if let msg = onMessageClick {
                                     Button(action: msg) {
-                                        Image(systemName: "envelope")
-                                            .font(.system(size: 14))
+                                        Image(systemName: NuruIcons.talk(filled: false))
+                                            .font(.system(size: 16))
                                             .foregroundStyle(theme.textPrimary)
                                             .frame(width: 34, height: 34)
                                             .background(theme.bgPrimary)

@@ -10,6 +10,7 @@ struct TimelineView: View {
     var onProfileTap:        (String) -> Void  = { _ in }
     var onNotificationBell:  () -> Void        = {}
     var onSearchTap:         () -> Void        = {}
+    var onHashtagTap:       (String) -> Void  = { _ in }
 
     @Environment(\.nuruTheme) private var theme
     @State private var selectedPage:  Int        = 1   // 0 = リレー, 1 = フォロー (default)
@@ -443,6 +444,7 @@ struct TimelineView: View {
                 onZapLongPress: zapAction,
                 onBookmark:     { await viewModel.toggleBookmark(post: post) },
                 onProfileTap:   onProfileTap,
+                onHashtagTap:   onHashtagTap,
                 onDelete:       deleteAction,
                 onMute:         muteAction,
                 onReport:       reportAction,

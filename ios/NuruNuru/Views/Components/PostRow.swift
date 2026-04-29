@@ -15,6 +15,7 @@ struct PostRow: View {
     var onZapLongPress: (() -> Void)?                = nil
     var onBookmark:    (() async -> Void)?           = nil
     var onProfileTap:  (String) -> Void              = { _ in }
+    var onHashtagTap:  (String) -> Void              = { _ in }
     var onDelete:      (() -> Void)?                 = nil
     var onMute:        (() -> Void)?                 = nil
     var onReport:      ((String, String) -> Void)?   = nil
@@ -57,7 +58,7 @@ struct PostRow: View {
                 )
                 .onTapGesture { onProfileTap(post.event.pubkey) }
 
-                VStack(alignment: .leading, spacing: NuruSpacing.space2) {
+                VStack(alignment: .leading, spacing: 3) {
                     PostHeader(
                         post:         post,
                         isOwnPost:    onDelete != nil,
@@ -76,7 +77,7 @@ struct PostRow: View {
                             notes:         effectiveBirdwatchNotes,
                             onAuthorClick: onProfileTap
                         )
-                        .padding(.top, NuruSpacing.space1)
+                        .padding(.top, post.event.content.contains("http") ? 0 : NuruSpacing.space1)
                     }
 
                     // PostActions + TTS ボタン
@@ -170,22 +171,29 @@ struct PostRow: View {
                     // repository が利用可能なら直接パブリッシュ
                     if let repo = repository {
                         Task {
-                            try? await repo.publishBirdwatchNote(
+                            if let signed = try? await repo.publishBirdwatchNote(
                                 targetEventId: post.event.id,
                                 content:       content,
                                 contextType:   type,
                                 sourceUrl:     url.isEmpty ? nil : url
-                            )
-                            // パブリッシュ後にノートを再取得
+                            ) {
+                                fetchedBirdwatchNotes.append(signed)
+                            }
+                            // パブリッシュ後にノートを再取得（リレー反映済みなら重複排除して最新化）
                             let result = await repo.fetchBirdwatchNotes(eventIds: [post.event.id])
-                            fetchedBirdwatchNotes = result[post.event.id] ?? []
+                            let remoteNotes = result[post.event.id] ?? []
+                            if !remoteNotes.isEmpty {
+                                fetchedBirdwatchNotes = Array(Dictionary(grouping: fetchedBirdwatchNotes + remoteNotes, by: { $0.id }).values.compactMap { $0.first })
+                            }
                         }
+                    } else {
+                        onBirdwatch?(type, content, url)
                     }
-                    onBirdwatch?(type, content, url)
                 },
                 existingNotes: effectiveBirdwatchNotes
             )
-            .presentationDetents([.medium, .large])
+            .presentationDetents([.large])
+            .interactiveDismissDisabled(true)
         }
         .sheet(isPresented: $showReport) {
             if let reportHandler = onReport {
@@ -229,13 +237,13 @@ struct PostRow: View {
                     },
                     onDismiss: { showReactionPicker = false }
                 )
-                .presentationDetents([.medium, .large])
+                .presentationDetents([.large])
             } else {
                 ReactionEmojiPickerSheet(
                     onSelect: { _ in showReactionPicker = false },
                     onDismiss: { showReactionPicker = false }
                 )
-                .presentationDetents([.medium, .large])
+                .presentationDetents([.large])
             }
         }
         // 引用リポストシート — リポストボタン長押しで表示
@@ -312,6 +320,7 @@ struct PostRow: View {
                     post: post.truncated(to: UI.postMaxLength),
                     repository: repository,
                     onProfileTap: onProfileTap,
+                    onHashtagTap: onHashtagTap,
                     quotedPostEventId: post.quotedPost?.event.id
                 )
             } else {
@@ -319,6 +328,7 @@ struct PostRow: View {
                     post: post,
                     repository: repository,
                     onProfileTap: onProfileTap,
+                    onHashtagTap: onHashtagTap,
                     quotedPostEventId: post.quotedPost?.event.id
                 )
             }
@@ -329,14 +339,14 @@ struct PostRow: View {
             // 引用投稿プレビュー: enrichPosts でデータが揃えば全カード、未取得なら引用元インジケーター
             if let quoted = post.quotedPost {
                 QuotedPostPreview(post: quoted, onProfileTap: onProfileTap)
-                    .padding(.top, NuruSpacing.space2)
+                    .padding(.top, NuruSpacing.space1)
                     .contentShape(Rectangle())
                     .onTapGesture {
                         quotedDetailTarget = quoted
                     }
             } else if isQuotePost {
                 quotedPostIndicator
-                    .padding(.top, NuruSpacing.space2)
+                    .padding(.top, NuruSpacing.space1)
             }
 
             if collapse {
@@ -402,24 +412,36 @@ struct PostRow: View {
         ) != nil
     }
 
-    /// quotedPost が未取得の場合に表示するミニマルな引用元インジケーター。
+    /// quotedPost が未取得の場合に表示する引用元インジケーター。
     private var quotedPostIndicator: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             Image(systemName: "quote.opening")
-                .font(.system(size: 11))
-                .foregroundStyle(theme.textTertiary)
-            Text("引用元の投稿")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(NuruColors.lineGreen)
+            Text("引用元の投稿を読み込み中")
                 .font(NuruFont.bodySmall())
-                .foregroundStyle(theme.textTertiary)
+                .fontWeight(.medium)
+                .foregroundStyle(theme.textSecondary)
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, NuruSpacing.space3)
         .padding(.vertical, NuruSpacing.space2)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(theme.bgTertiary)
-        .clipShape(RoundedRectangle(cornerRadius: NuruSpacing.radiusSm))
+        .background(
+            RoundedRectangle(cornerRadius: NuruSpacing.radiusLg)
+                .fill(theme.bgSecondary.opacity(0.92))
+                .overlay(
+                    LinearGradient(
+                        colors: [NuruColors.lineGreen.opacity(0.10), Color.clear],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: NuruSpacing.radiusLg))
         .overlay(
-            RoundedRectangle(cornerRadius: NuruSpacing.radiusSm)
-                .stroke(theme.borderColor.opacity(0.4), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: NuruSpacing.radiusLg)
+                .stroke(NuruColors.lineGreen.opacity(0.22), lineWidth: 1)
         )
     }
 
@@ -441,39 +463,93 @@ private struct QuotedPostPreview: View {
     @Environment(\.nuruTheme) private var theme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: NuruSpacing.space2) {
-            // 著者行
-            HStack(spacing: 6) {
-                AvatarView(
-                    url:  post.profile?.picture,
-                    name: post.profile?.displayedName ?? "?",
-                    size: 20
+        HStack(alignment: .top, spacing: NuruSpacing.space3) {
+            RoundedRectangle(cornerRadius: NuruSpacing.radiusFull)
+                .fill(
+                    LinearGradient(
+                        colors: [NuruColors.lineGreen, NuruColors.lineGreen.opacity(0.25)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
                 )
-                Text(post.profile?.displayedName ?? post.event.pubkey.shortenedPubkey)
-                    .font(NuruFont.bodySmall())
-                    .fontWeight(.semibold)
-                    .foregroundStyle(theme.textPrimary)
-                    .lineLimit(1)
-            }
-            .contentShape(Rectangle())
-            .onTapGesture { onProfileTap(post.event.pubkey) }
+                .frame(width: 4)
 
-            // 本文（最大3行）
-            Text(removeImageUrls(post.event.content))
-                .font(NuruFont.bodySmall())
-                .foregroundStyle(theme.textSecondary)
-                .lineLimit(3)
-                .truncationMode(.tail)
+            VStack(alignment: .leading, spacing: NuruSpacing.space1) {
+                HStack(alignment: .center, spacing: 7) {
+                    AvatarView(
+                        url:  post.profile?.picture,
+                        name: post.profile?.displayedName ?? "?",
+                        size: 24
+                    )
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(quoteWrapLongTokens(post.profile?.displayedName ?? post.event.pubkey.shortenedPubkey, chunkSize: 14))
+                            .font(NuruFont.bodySmall())
+                            .fontWeight(.semibold)
+                            .foregroundStyle(theme.textPrimary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        if let nip05 = post.profile?.nip05, !nip05.isEmpty {
+                            Text(quoteFormatNip05(nip05))
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(NuruColors.lineGreen.opacity(0.9))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                    Spacer(minLength: 6)
+                    Image(systemName: "quote.opening")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(NuruColors.lineGreen.opacity(0.85))
+                }
+
+                Text(quoteWrapLongTokens(removeMediaUrls(post.event.content)))
+                    .font(NuruFont.bodySmall())
+                    .foregroundStyle(theme.textSecondary)
+                    .lineLimit(4)
+                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(NuruSpacing.space3)
-        .background(theme.bgTertiary)
-        .clipShape(RoundedRectangle(cornerRadius: NuruSpacing.radiusMd))
-        .overlay(
-            RoundedRectangle(cornerRadius: NuruSpacing.radiusMd)
-                .stroke(theme.borderColor.opacity(0.5), lineWidth: 0.5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: NuruSpacing.radiusXl)
+                .fill(theme.bgSecondary.opacity(0.92))
+                .overlay(
+                    LinearGradient(
+                        colors: [NuruColors.lineGreen.opacity(0.10), Color.clear],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
         )
+        .clipShape(RoundedRectangle(cornerRadius: NuruSpacing.radiusXl))
+        .overlay(
+            RoundedRectangle(cornerRadius: NuruSpacing.radiusXl)
+                .stroke(NuruColors.lineGreen.opacity(0.22), lineWidth: 1)
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .clipped()
+        .shadow(color: NuruColors.lineGreen.opacity(0.06), radius: 10, x: 0, y: 4)
     }
+}
+
+private func quoteFormatNip05(_ nip05: String) -> String {
+    nip05.hasPrefix("_@") ? String(nip05.dropFirst(2)) : nip05
+}
+
+private func quoteWrapLongTokens(_ text: String, chunkSize: Int = 18) -> String {
+    text.split(separator: " ", omittingEmptySubsequences: false).map { tokenSub in
+        let token = String(tokenSub)
+        guard token.count > chunkSize else { return token }
+        var out = ""
+        for (idx, ch) in token.enumerated() {
+            if idx > 0 && idx % chunkSize == 0 { out.append("\u{200B}") }
+            out.append(ch)
+        }
+        return out
+    }.joined(separator: " ")
 }
 
 // MARK: - Reaction Emoji Picker Sheet wrapper

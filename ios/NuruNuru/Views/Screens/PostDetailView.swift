@@ -44,8 +44,13 @@ final class PostDetailViewModel {
         isLoading    = true
         errorMessage = nil
 
-        // 元投稿取得
-        guard let rawEvent = await repository.fetchEvent(eventId: eventId) else {
+        // 元投稿取得。更新時にリレーから一時的に取得できない場合でも、既に表示中の投稿は維持する。
+        let rawEvent: NostrEvent
+        if let fetched = await repository.fetchEvent(eventId: eventId) {
+            rawEvent = fetched
+        } else if let existing = post?.event {
+            rawEvent = existing
+        } else {
             errorMessage = "投稿が見つかりませんでした"
             isLoading    = false
             return
@@ -198,6 +203,7 @@ struct PostDetailView: View {
     @Environment(\.nuruTheme) private var theme
 
     @State private var showReplySheet = false
+    @State private var viewingProfile: ProfileID? = nil
 
     /// `ScoredPost` 直接渡し時の初期値（ロード前に表示するため）。
     private let initialPost: ScoredPost?
@@ -306,6 +312,13 @@ struct PostDetailView: View {
                 await viewModel.loadPostAndReplies()
             }
         }
+        .sheet(item: $viewingProfile) { pid in
+            UserProfileSheet(
+                pubkey: pid.id,
+                myPubkeyHex: viewModel.myPubkeyHex,
+                repository: viewModel.repository
+            )
+        }
         .sheet(isPresented: $showReplySheet) {
             PostSheet(
                 repository:  viewModel.repository,
@@ -320,6 +333,10 @@ struct PostDetailView: View {
             )
             .presentationDetents([.medium, .large])
         }
+    }
+
+    private func openProfile(_ pubkey: String) {
+        viewingProfile = ProfileID(pubkey)
     }
 
     // MARK: - Content Body
@@ -369,22 +386,14 @@ struct PostDetailView: View {
             repository:   viewModel.repository,
             onLike:       { await viewModel.toggleLike(post: ancestor) },
             onRepost:     { await viewModel.toggleRepost(post: ancestor) },
-            onProfileTap: { _ in }
+            onProfileTap: openProfile
         )
         .id(ancestor.event.id)
     }
 
     @ViewBuilder
     private var ancestorDivider: some View {
-        HStack(spacing: 6) {
-            Rectangle().fill(theme.borderColor).frame(height: 0.5)
-            Image(systemName: "arrow.down")
-                .font(.caption2)
-                .foregroundStyle(theme.textTertiary)
-            Rectangle().fill(theme.borderColor).frame(height: 0.5)
-        }
-        .padding(.horizontal, NuruSpacing.space4)
-        .padding(.vertical, 4)
+        EmptyView()
     }
 
     // MARK: - Main Post
@@ -396,7 +405,7 @@ struct PostDetailView: View {
             repository:  viewModel.repository,
             onLike:      { await viewModel.toggleLike(post: mainPost) },
             onRepost:    { await viewModel.toggleRepost(post: mainPost) },
-            onProfileTap: { _ in }
+            onProfileTap: openProfile
         )
         // Android の PostDetailScreen 同様、元投稿を bgSecondary でハイライト
         .background(NuruColors.bgSecondary)
@@ -433,7 +442,7 @@ struct PostDetailView: View {
                     repository:  viewModel.repository,
                     onLike:      { await viewModel.toggleLike(post: reply) },
                     onRepost:    { await viewModel.toggleRepost(post: reply) },
-                    onProfileTap: { _ in }
+                    onProfileTap: openProfile
                 )
                 .id(reply.event.id)
             }

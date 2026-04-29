@@ -156,20 +156,16 @@ struct QuoteRepostSheet: View {
                         imagePreviewRow
                     }
 
+                    // カスタム絵文字プレビュー — mirrors Android QuoteRepostModal.kt
+                    if !selectedCustomEmojis.isEmpty {
+                        customEmojiPreviewRow
+                    }
+
                     // アップロード進捗
                     if !uploadProgress.isEmpty {
                         Text(uploadProgress)
                             .font(NuruFont.bodySmall())
                             .foregroundStyle(theme.textSecondary)
-                    }
-
-                    // リレー選択パネル（展開時のみ）
-                    if showRelayPanel {
-                        RelaySelectPanel(
-                            relays: allRelays,
-                            selectedRelays: $selectedRelays,
-                            nip70Protected: $nip70Protected
-                        )
                     }
 
                     // 引用元プレビューカード
@@ -189,94 +185,78 @@ struct QuoteRepostSheet: View {
 
             Divider().background(theme.borderColor)
 
-            // ── ボトムツールバー（PostSheet と同じ 5 ボタン構成） ──────────────
-            HStack(spacing: NuruSpacing.space3) {
-                // 画像ピッカー
+            // ── ボトムツールバー — Android PostToolbar と同じ順序/アイコン ─────────
+            HStack(spacing: 4) {
                 PhotosPicker(
                     selection: $selectedItems,
                     maxSelectionCount: 3,
                     matching: .images
                 ) {
-                    Image(systemName: "photo")
-                        .font(.system(size: NuruSpacing.iconMd))
-                        .foregroundStyle(selectedImages.isEmpty ? theme.textTertiary : NuruColors.lineGreen)
+                    toolbarIcon(tint: selectedImages.isEmpty ? theme.textTertiary : NuruColors.lineGreen) {
+                        PhotoIcon()
+                    }
                 }
+                .disabled(selectedImages.count >= 3)
+                .opacity(selectedImages.count >= 3 ? 0.35 : 1.0)
                 .onChange(of: selectedItems) { _, newItems in
                     Task { await loadSelectedImages(from: newItems) }
                 }
 
-                // CW トグル
-                Button {
+                toolbarButton {
                     withAnimation(.easeInOut(duration: 0.2)) { showCWInput.toggle() }
                     if !showCWInput { contentWarning = "" }
-                } label: {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: NuruSpacing.iconMd))
-                        .foregroundStyle(showCWInput
-                            ? Color(red: 0.98, green: 0.67, blue: 0.0)
-                            : theme.textTertiary)
-                }
-                .buttonStyle(.plain)
-
-                // カスタム絵文字ピッカー — mirrors PostSheet
-                Button { showEmojiPicker.toggle() } label: {
-                    Image(systemName: "face.smiling")
-                        .font(.system(size: NuruSpacing.iconMd))
-                        .foregroundStyle(selectedCustomEmojis.isEmpty
-                            ? theme.textTertiary : NuruColors.lineGreen)
-                }
-                .buttonStyle(.plain)
-
-                // リレー選択 — mirrors PostSheet
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { showRelayPanel.toggle() }
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "antenna.radiowaves.left.and.right")
-                            .font(.system(size: NuruSpacing.iconMd))
-                        if hasRelayCustomization {
-                            Circle().fill(NuruColors.lineGreen).frame(width: 6, height: 6)
-                        }
+                } icon: {
+                    toolbarIcon(tint: showCWInput ? Color(red: 1.0, green: 0.60, blue: 0.0) : theme.textTertiary) {
+                        WarningIcon()
                     }
-                    .foregroundStyle(hasRelayCustomization
-                        ? NuruColors.lineGreen : theme.textTertiary)
                 }
-                .buttonStyle(.plain)
 
-                // STT (Speech-to-Text) — mirrors PostSheet
-                Button {
-                    if isSTTActive { stopSTT() } else { startSTT() }
-                } label: {
-                    Image(systemName: isSTTActive ? "mic.fill" : "mic")
-                        .font(.system(size: NuruSpacing.iconMd))
-                        .foregroundStyle(isSTTActive ? NuruColors.lineGreen : theme.textTertiary)
+                toolbarButton {
+                    showEmojiPicker.toggle()
+                    if showEmojiPicker { showRelayPanel = false }
+                } icon: {
+                    toolbarIcon(tint: theme.textTertiary) {
+                        EmojiIcon()
+                    }
                 }
-                .buttonStyle(.plain)
+
+                toolbarButton {
+                    if isSTTActive { stopSTT() } else { startSTT() }
+                } icon: {
+                    toolbarIcon(tint: isSTTActive ? Color.red : theme.textTertiary) {
+                        MicIcon()
+                    }
+                }
+
+                toolbarButton {
+                    withAnimation(.easeInOut(duration: 0.2)) { showRelayPanel.toggle() }
+                    if showRelayPanel { showEmojiPicker = false }
+                } icon: {
+                    toolbarIcon(tint: (showRelayPanel || hasRelayCustomization) ? NuruColors.lineGreen : theme.textTertiary) {
+                        Image(systemName: "wifi.router")
+                            .font(.system(size: 22, weight: .regular))
+                    }
+                }
 
                 Spacer()
 
-                // 文字数カウンター
-                HStack(spacing: 4) {
-                    Text("\(remaining)")
-                        .font(NuruFont.bodySmall())
-                        .foregroundStyle(remaining < 0 ? NuruColors.colorError
-                            : remaining <= 20 ? Color(red: 0.98, green: 0.67, blue: 0.0)
-                            : theme.textTertiary)
-
-                    ZStack {
-                        Circle()
-                            .stroke(theme.bgTertiary, lineWidth: 2)
-                        Circle()
-                            .trim(from: 0, to: max(0, CGFloat(text.count) / CGFloat(UI.postMaxLength)))
-                            .stroke(remaining < 0 ? NuruColors.colorError : NuruColors.lineGreen, lineWidth: 2)
-                            .rotationEffect(.degrees(-90))
-                    }
-                    .frame(width: 20, height: 20)
-                    .animation(.easeInOut(duration: 0.1), value: text.count)
-                }
+                Text("\(remaining)")
+                    .font(.system(size: 12))
+                    .foregroundStyle(remaining < 0 ? NuruColors.colorError
+                        : remaining < 20 ? Color(red: 1.0, green: 0.60, blue: 0.0)
+                        : theme.textTertiary)
+                    .padding(.trailing, 8)
             }
-            .padding(.horizontal, NuruSpacing.space4)
-            .padding(.vertical, NuruSpacing.space3)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+
+            if showRelayPanel {
+                RelaySelectPanel(
+                    relays: allRelays,
+                    selectedRelays: $selectedRelays,
+                    nip70Protected: $nip70Protected
+                )
+            }
         }
         .background(theme.bgPrimary.ignoresSafeArea())
         .onAppear {
@@ -294,12 +274,34 @@ struct QuoteRepostSheet: View {
             EmojiPickerSheet(
                 repository: repository,
                 pubkeyHex: myPubkeyHex,
+                individualOnly: true,
                 onSelect: { emoji in
                     insertCustomEmoji(emoji)
                 }
             )
             .presentationDetents([.medium, .large])
         }
+    }
+
+    // MARK: - Android-style Toolbar Helpers
+
+    private func toolbarButton<Icon: View>(
+        action: @escaping () -> Void,
+        @ViewBuilder icon: () -> Icon
+    ) -> some View {
+        Button(action: action) { icon() }
+            .buttonStyle(.plain)
+    }
+
+    private func toolbarIcon<Icon: View>(
+        tint: Color,
+        @ViewBuilder icon: () -> Icon
+    ) -> some View {
+        icon()
+            .frame(width: 24, height: 24)
+            .foregroundStyle(tint)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
     }
 
     // MARK: - 引用元プレビューカード
@@ -364,6 +366,37 @@ struct QuoteRepostSheet: View {
                         .buttonStyle(.plain)
                         .padding(4)
                     }
+                }
+            }
+        }
+    }
+
+    // MARK: - Custom Emoji Preview
+
+    private var customEmojiPreviewRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(selectedCustomEmojis) { emoji in
+                    HStack(spacing: 4) {
+                        if let url = URL(string: emoji.url) {
+                            AsyncImage(url: url) { phase in
+                                if case .success(let img) = phase {
+                                    img.resizable().scaledToFit()
+                                } else {
+                                    Color.clear
+                                }
+                            }
+                            .frame(width: 18, height: 18)
+                        }
+                        Text(":\(emoji.shortcode):")
+                            .font(.system(size: 11))
+                            .foregroundStyle(theme.textTertiary)
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(theme.bgSecondary)
+                    .clipShape(Capsule())
                 }
             }
         }

@@ -13,9 +13,12 @@ struct MainTabView: View {
     @State private var showPostSheet:      Bool       = false
     @State private var showNotifications:  Bool       = false
     @State private var showSearch:         Bool       = false
+    @State private var searchInitialQuery: String     = ""
     @State private var viewingProfile:     ProfileID? = nil
     @State private var zapTarget:          ScoredPost? = nil
     @State private var hideBottomNavForExternalMiniApp: Bool = false
+    @State private var didLoadTalkGroups: Bool = false
+    @State private var showAppSettings:  Bool       = false
 
     // Shared repository — created once per session.
     @State private var repository: NostrRepository
@@ -63,7 +66,24 @@ struct MainTabView: View {
                     onPostTap:           { showPostSheet     = true },
                     onProfileTap:        { viewingProfile    = ProfileID($0) },
                     onNotificationBell:  { showNotifications = true },
-                    onSearchTap:         { showSearch        = true }
+                    onSearchTap:         {
+                        searchInitialQuery = ""
+                        showSearch        = true
+                    },
+                    onHashtagTap: { tag in
+                        // Present the search sheet on the next run loop after updating
+                        // the initial query. With a Bool sheet, SwiftUI can build the
+                        // sheet content from the previous state snapshot, which made the
+                        // first hashtag tap open an empty search and only the second tap
+                        // run the #tag search.
+                        searchInitialQuery = "#\(tag)"
+                        if showSearch {
+                            showSearch = false
+                        }
+                        DispatchQueue.main.async {
+                            showSearch = true
+                        }
+                    }
                 )
             }
 
@@ -72,13 +92,14 @@ struct MainTabView: View {
                 HomeView(
                     viewModel:    homeVM,
                     repository:   repository,
-                    onLogout:     { authViewModel.logout() },
+                    onSettingsTap: { showAppSettings = true },
                     onPostTap:    { showPostSheet  = true },
                     onProfileTap: { viewingProfile = ProfileID($0) },
                     onMessageTap: { pubkey in
                         // DM ボタン — Android 同様トークタブに遷移 + DM 作成
                         activeTab = .talk
-                        Task { await talkVM.createDmConversation(pubkey: pubkey) }
+                        if !didLoadTalkGroups { didLoadTalkGroups = true }
+                        Task { await talkVM.loadGroups(); await talkVM.createDmConversation(pubkey: pubkey) }
                     }
                 )
             }
@@ -148,7 +169,8 @@ struct MainTabView: View {
                     showSearch     = false
                     viewingProfile = ProfileID(pubkey)
                 },
-                onDismiss: { showSearch = false }
+                initialQuery: searchInitialQuery,
+                onDismiss: { showSearch = false; searchInitialQuery = "" }
             )
         }
         // ZapSheet
@@ -157,6 +179,12 @@ struct MainTabView: View {
                 repository:   repository,
                 myPubkeyHex:  pubkeyHex,
                 targetPost:   post
+            )
+        }
+        .sheet(isPresented: $showAppSettings) {
+            AppSettingsView(
+                onDismiss: { showAppSettings = false },
+                onLogout: { authViewModel.logout() }
             )
         }
         // UserProfileSheet — mirrors Android UserProfileModal with DM button
@@ -168,11 +196,13 @@ struct MainTabView: View {
                 onStartDM: { pubkey in
                     viewingProfile = nil
                     activeTab = .talk
-                    Task { await talkVM.createDmConversation(pubkey: pubkey) }
+                    if !didLoadTalkGroups { didLoadTalkGroups = true }
+                    Task { await talkVM.loadGroups(); await talkVM.createDmConversation(pubkey: pubkey) }
                 }
             )
         }
         .task {
+            timelineVM.startInitialLoadIfNeeded()
             await repository.connect()
             await repository.drainMlsRetryQueue(trigger: "mainTabTask", maxItems: 3)
         }
@@ -224,6 +254,10 @@ struct MainTabView: View {
                 }
             }
             activeTab = tab
+            if tab == .talk, !didLoadTalkGroups {
+                didLoadTalkGroups = true
+                Task { await talkVM.loadGroups() }
+            }
         } label: {
             VStack(spacing: 2) {
                 // All custom icons — matches Android NuruIcons exactly
@@ -350,3 +384,113 @@ private struct PlaceholderTab: View {
         .background(theme.bgPrimary)
     }
 }
+
+import SwiftUI
+
+/// Lightweight app settings page opened from the Home header gear button.
+/// Keep this separate from the Mini Apps tab so the gear does not switch tabs.
+struct AppSettingsView: View {
+    var onDismiss: () -> Void = {}
+    var onLogout:  () -> Void = {}
+
+    @Environment(\.nuruTheme) private var theme
+    @State private var showLogoutConfirm = false
+
+    private let privacyURL = URL(string: "https://tami1A84.github.io/null--nostr/privacy.html")!
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: NuruSpacing.space4) {
+                    settingsRow(
+                        icon: "hand.raised",
+                        title: "プライバシーポリシー",
+                        subtitle: "個人情報とデータの取り扱いを確認",
+                        trailing: "chevron.right"
+                    ) {
+                        UIApplication.shared.open(privacyURL)
+                    }
+
+                    settingsRow(
+                        icon: "rectangle.portrait.and.arrow.right",
+                        title: "ログアウト",
+                        subtitle: "このデバイスから秘密鍵を削除します",
+                        titleColor: .red,
+                        trailing: nil
+                    ) {
+                        showLogoutConfirm = true
+                    }
+                }
+                .padding(NuruSpacing.space4)
+            }
+            .background(theme.bgPrimary)
+            .navigationTitle("設定")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: onDismiss) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(theme.textSecondary)
+                            .frame(width: 36, height: 36)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .alert("ログアウト", isPresented: $showLogoutConfirm) {
+            Button("ログアウト", role: .destructive) { onLogout() }
+            Button("キャンセル", role: .cancel) {}
+        } message: {
+            Text("ログアウトします。秘密鍵はこのデバイスから削除されます。")
+        }
+    }
+
+    private func settingsRow(
+        icon: String,
+        title: String,
+        subtitle: String,
+        titleColor: Color? = nil,
+        trailing: String?,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: NuruSpacing.space3) {
+                ZStack {
+                    Circle()
+                        .fill(theme.bgPrimary)
+                        .frame(width: 40, height: 40)
+                    Image(systemName: icon)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(titleColor ?? theme.textSecondary)
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(NuruFont.bodyMedium())
+                        .fontWeight(.bold)
+                        .foregroundStyle(titleColor ?? theme.textPrimary)
+                    Text(subtitle)
+                        .font(NuruFont.bodySmall())
+                        .foregroundStyle(theme.textTertiary)
+                        .lineLimit(2)
+                }
+
+                Spacer()
+
+                if let trailing {
+                    Image(systemName: trailing)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(theme.textTertiary)
+                }
+            }
+            .padding(NuruSpacing.space4)
+            .background(
+                RoundedRectangle(cornerRadius: NuruSpacing.radiusXl)
+                    .fill(theme.bgSecondary)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+

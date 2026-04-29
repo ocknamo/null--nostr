@@ -77,7 +77,9 @@ import Foundation
     init(repository: NostrRepository, myPubkeyHex: String) {
         self.repository   = repository
         self.myPubkeyHex  = myPubkeyHex
-        Task { await loadGroups() }
+        // Heavy Marmot/MLS relay discovery is intentionally lazy.
+        // MainTabView keeps TalkView alive even when the timeline is active, so starting
+        // here would connect WhiteNoise/Marmot interop relays during timeline startup.
     }
 
     // MARK: - Group List

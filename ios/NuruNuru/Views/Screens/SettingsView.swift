@@ -158,7 +158,6 @@ struct SettingsView: View {
                     externalAppAddSection
                         .padding(NuruSpacing.space4)
 
-                    privacyPolicyLink
                 }
             }
             // カテゴリ横スワイプ（Android HorizontalPager に対応）
@@ -276,6 +275,7 @@ struct SettingsView: View {
             }
 
             Spacer()
+
 
             Button { showLogout = true } label: {
                 Text("ログアウト")
@@ -484,6 +484,16 @@ struct SettingsView: View {
                             }
                         }
                         .buttonStyle(.plain)
+                        .onLongPressGesture {
+                            if app.type == "external" {
+                                editingApp = app
+                            }
+                        }
+                        .contextMenu {
+                            if app.type == "external" {
+                                Button("編集") { editingApp = app }
+                            }
+                        }
                     }
                 }
             }
@@ -564,9 +574,6 @@ struct SettingsView: View {
                 // External app add section
                 externalAppAddSection
                     .padding(NuruSpacing.space4)
-
-                // Privacy policy link
-                privacyPolicyLink
             }
         }
     }
@@ -668,24 +675,6 @@ struct SettingsView: View {
             RoundedRectangle(cornerRadius: NuruSpacing.radiusXl)
                 .fill(theme.bgSecondary)
         )
-    }
-
-    // MARK: - Privacy Policy
-
-    private var privacyPolicyLink: some View {
-        Button {
-            if let url = URL(string: "https://tami1A84.github.io/null--nostr/privacy.html") {
-                UIApplication.shared.open(url)
-            }
-        } label: {
-            Text("プライバシーポリシー")
-                .font(.system(size: 13))
-                .foregroundStyle(theme.textTertiary)
-                .underline()
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: - Mini App Detail
@@ -849,21 +838,12 @@ private struct MiniAppRow: View {
 
                 Spacer()
 
-                if app.type == "external" {
-                    Button(action: { onDeleteExternal?() }) {
-                        Image(systemName: "trash")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(.red.opacity(0.9))
-                    }
-                    .buttonStyle(.plain)
-                } else {
-                    Button(action: onToggleFavorite) {
-                        Image(systemName: NuruIcons.star(filled: isFavorite))
-                            .font(.system(size: 20))
-                            .foregroundStyle(isFavorite ? Color(hex: "#FFD700") : theme.textTertiary)
-                    }
-                    .buttonStyle(.plain)
+                Button(action: onToggleFavorite) {
+                    Image(systemName: NuruIcons.star(filled: isFavorite))
+                        .font(.system(size: 20))
+                        .foregroundStyle(isFavorite ? Color(hex: "#FFD700") : theme.textTertiary)
                 }
+                .buttonStyle(.plain)
 
             }
             .padding(.horizontal, NuruSpacing.space4)

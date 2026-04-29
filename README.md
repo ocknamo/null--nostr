@@ -11,6 +11,13 @@
 [![License](https://img.shields.io/badge/license-Unlicense-blue)](#ライセンス--license)
 [![Nostr](https://img.shields.io/badge/Nostr-protocol-purple)](https://nostr.com)
 
+<a href="https://opensats.org/blog/sixteenth-wave-of-nostr-grants">
+  <img src="https://opensats.org/static/images/blog/105-sixteenth-wave-of-nostr-grants.jpg" alt="ぬるぬる × OpenSats" width="100%" />
+</a>
+
+**OpenSats の Nostr Grant により支援を受けています。**  
+**Supported by an OpenSats Nostr Grant.**
+
 [🇯🇵 日本語](#日本語) · [🌐 English](#english) · [📱 公式サイト](https://tami1a84.github.io/null--nostr/)
 
 </div>
@@ -20,6 +27,10 @@
 ## 日本語
 
 Nostrは、特定の企業やサーバーに依存しない自由なSNSプロトコルです。アカウントは暗号鍵で管理され、どのサービスにも縛られません。**ぬるぬる**はその入り口を、シンプルで使い慣れた画面で提供します。
+
+### OpenSats Grant
+
+ぬるぬる（null--nostr）は、OpenSats の Nostr Grant から支援を受けています。詳しくは OpenSats の記事「[Sixteenth Wave of Nostr Grants](https://opensats.org/blog/sixteenth-wave-of-nostr-grants)」をご覧ください。
 
 ### インストール
 
@@ -47,6 +58,10 @@ Nostrは、特定の企業やサーバーに依存しない自由なSNSプロト
 ## English
 
 Nostr is an open, censorship-resistant social protocol. Your identity is a cryptographic key pair — no company, no central server, no lock-in. **null--nostr** makes Nostr feel simple and accessible.
+
+### OpenSats Grant
+
+null--nostr is supported by an OpenSats Nostr Grant. Learn more in OpenSats’ article, “[Sixteenth Wave of Nostr Grants](https://opensats.org/blog/sixteenth-wave-of-nostr-grants).”
 
 ### Installation
 

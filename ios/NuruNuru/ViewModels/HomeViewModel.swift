@@ -114,8 +114,16 @@ final class HomeViewModel {
         await repository.resolveQuotedPosts(&resolvedPosts)
         await repository.resolveQuotedPosts(&resolvedLikedPosts)
 
-        posts = resolvedPosts
-        likedPosts = resolvedLikedPosts
+        if !resolvedPosts.isEmpty || posts.isEmpty {
+            posts = resolvedPosts
+        } else {
+            AppLogger.log("HomeVM", "Keeping existing posts because refresh returned 0 events")
+        }
+        if !resolvedLikedPosts.isEmpty || likedPosts.isEmpty {
+            likedPosts = resolvedLikedPosts
+        } else {
+            AppLogger.log("HomeVM", "Keeping existing liked posts because refresh returned 0 events")
+        }
 
         // Determine isFollowing for other users.
         if !isOwnProfile {

@@ -1,5 +1,30 @@
 import Foundation
 
+/// 通知を表示する送信者の範囲。
+enum NotificationSenderScope: String, CaseIterable, Identifiable {
+    case all
+    case following
+    case network
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .all: return "全員"
+        case .following: return "フォロー中のみ"
+        case .network: return "ネットワーク"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .all: return "すべてのユーザーからの通知を表示"
+        case .following: return "フォローしているユーザーからの通知のみ表示"
+        case .network: return "フォローしている人がフォローしているユーザーまで表示"
+        }
+    }
+}
+
 /// UserDefaults-backed application preferences.
 /// Private keys are NEVER stored here — use SecureKeyManager.
 /// Mirrors Android AppPreferences (non-sensitive fields only).
@@ -28,6 +53,9 @@ final class AppPreferences {
         static let nip65Relays                    = "nurunuru_nip65_relays"
         static let notificationEnabledKinds       = "nurunuru_notification_enabled_kinds"
         static let notificationEmojiReactionEnabled = "nurunuru_notification_emoji_reaction_enabled"
+        static let notificationSenderScope          = "nurunuru_notification_sender_scope"
+        static let notificationKnownFollowerPubkeys = "nurunuru_notification_known_follower_pubkeys"
+        static let notificationFollowLastSeenAt     = "nurunuru_notification_follow_last_seen_at"
         static let hiddenMlsGroupIds = "nurunuru_hidden_mls_group_ids"
         static let mlsJoinedAtByGroupId = "nurunuru_mls_joined_at_by_group_id"
         static let mlsSelfUpdateCompletedAtByGroupId = "nurunuru_mls_self_update_completed_at_by_group_id"
@@ -78,10 +106,20 @@ final class AppPreferences {
         set { defaults.set(newValue, forKey: Keys.uploadServer) }
     }
 
-    /// `UploadServer` enum として取得・設定する型安全なアクセサ。
+    /// `uploadServer` は enum rawValue だけでなく、Blossom のベース URL
+    /// (例: https://blossom.nostr.build) も保存される。URL 形式なら Blossom として扱う。
     var uploadServerEnum: UploadServer {
-        get { UploadServer(rawValue: uploadServer) ?? .nostrBuild }
+        get {
+            if let typed = UploadServer(rawValue: uploadServer) { return typed }
+            return .blossom
+        }
         set { uploadServer = newValue.rawValue }
+    }
+
+    var blossomUploadBaseUrl: String {
+        let raw = uploadServer.trimmingCharacters(in: .whitespacesAndNewlines)
+        if raw.hasPrefix("http://") || raw.hasPrefix("https://") { return raw }
+        return UploadServer.defaultBlossomUrl
     }
 
     // User-defined upload destination base URLs.
@@ -159,13 +197,13 @@ final class AppPreferences {
     }
 
     /// 通知で有効な Kind のセット (Android: notificationEnabledKinds)
-    /// デフォルト: reaction(7), zapReceipt(9735), repost(6), textNote(1), badgeAward(8)
+    /// デフォルト: reaction(7), zapReceipt(9735), repost(6), textNote(1), contactList(3), badgeAward(8)
     var notificationEnabledKinds: Set<Int> {
         get {
             guard let data = defaults.data(forKey: Keys.notificationEnabledKinds),
                   let arr = try? JSONDecoder().decode([Int].self, from: data) else {
                 return [NostrKind.reaction, NostrKind.zapReceipt, NostrKind.repost,
-                        NostrKind.textNote, NostrKind.badgeAward]
+                        NostrKind.textNote, NostrKind.contactList, NostrKind.badgeAward]
             }
             return Set(arr)
         }
@@ -180,6 +218,26 @@ final class AppPreferences {
     var notificationEmojiReactionEnabled: Bool {
         get { defaults.object(forKey: Keys.notificationEmojiReactionEnabled) as? Bool ?? true }
         set { defaults.set(newValue, forKey: Keys.notificationEmojiReactionEnabled) }
+    }
+
+    /// 通知の送信者フィルタ（全員 / フォロー中 / ネットワーク）。
+    var notificationSenderScope: NotificationSenderScope {
+        get {
+            NotificationSenderScope(rawValue: defaults.string(forKey: Keys.notificationSenderScope) ?? "") ?? .all
+        }
+        set { defaults.set(newValue.rawValue, forKey: Keys.notificationSenderScope) }
+    }
+
+    /// フォロー通知の重複抑止用: 既知フォロワー pubkey。
+    var notificationKnownFollowerPubkeys: Set<String> {
+        get { Set(defaults.stringArray(forKey: Keys.notificationKnownFollowerPubkeys) ?? []) }
+        set { defaults.set(Array(newValue), forKey: Keys.notificationKnownFollowerPubkeys) }
+    }
+
+    /// フォロー通知の重複抑止用: 処理済み Kind 3 の最大 created_at。
+    var notificationFollowLastSeenAt: Int64 {
+        get { Int64(defaults.integer(forKey: Keys.notificationFollowLastSeenAt)) }
+        set { defaults.set(Int(newValue), forKey: Keys.notificationFollowLastSeenAt) }
     }
 
     /// Hidden/stale MLS group IDs (persisted across app relaunch).

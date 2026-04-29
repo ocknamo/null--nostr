@@ -52,6 +52,13 @@ actor NostrClient {
 
     private var connections: [String: SingleRelayClient] = [:]
 
+    fileprivate static let noisyRelays: Set<String> = ["relay.nostr.band", "relay.nostr.wirednet.jp"]
+    /// Relays that are reachable only opportunistically. They are not auto-reconnected
+    /// after failures, and failures place them in a long local cooldown to avoid
+    /// creating load for relay operators. Users can still explicitly select them later.
+    fileprivate static let operatorFriendlyCooldownRelays: Set<String> = ["relay.nostr.wirednet.jp"]
+    fileprivate static let excludedRelays: Set<String> = ["wss://relay.nostr.band"]
+
     var isEmpty: Bool { connections.isEmpty }
 
     // MARK: - Connection
@@ -60,6 +67,7 @@ actor NostrClient {
     /// Already-connected relays are skipped; failed/disconnected ones are reconnected.
     /// Connections are established in parallel for faster startup.
     func connect(relayUrls: [String]) async {
+        let relayUrls = relayUrls.filter { !Self.excludedRelays.contains($0) }
         AppLogger.log("Relay", "Connecting to \(relayUrls.count) relays: \(relayUrls.joined(separator: ", "))")
 
         // Prepare connections map first (actor-isolated)
@@ -168,6 +176,7 @@ actor NostrClient {
         filters: [NostrFilter],
         timeoutSeconds: Double = 8.0
     ) async -> [NostrEvent] {
+        guard !Self.excludedRelays.contains(relayUrl) else { return [] }
         if let conn = connections[relayUrl] {
             var state = await conn.connectionState
 
@@ -202,47 +211,106 @@ actor NostrClient {
     // MARK: - Publish (fan-out to all relays)
 
     /// Publish an event to all connected relays.
-    /// Succeeds if at least one relay accepts the event.
+    /// Succeeds as soon as the first relay accepts the event; remaining relays continue in background.
     func publish(event: NostrEvent) async throws {
+        try await publish(event: event, waitForAllRelays: false)
+    }
+
+    /// Publish with selectable wait policy.
+    /// - waitForAllRelays=false: fastest UI path. Return after first relay OK, fan-out keeps running.
+    /// - waitForAllRelays=true: legacy behaviour for callers that need full relay completion.
+    func publish(event: NostrEvent, waitForAllRelays: Bool) async throws {
         guard !connections.isEmpty else { throw ClientError.notConnected }
-        var lastError: Error?
-        var succeeded = false
-        var okRelays: [String] = []
-        var ngRelays: [String] = []
+        let targets = Array(connections)
 
-        for (url, conn) in connections {
-            do {
-                try await conn.publish(event: event)
-                succeeded = true
-                okRelays.append(url)
-            } catch {
-                // Retry once after reconnect when relay is temporarily disconnected.
-                let errStr = String(describing: error)
-                if errStr.contains("notConnected") {
-                    do {
-                        try await conn.connect()
-                        try await conn.publish(event: event)
-                        succeeded = true
-                        okRelays.append(url)
-                        AppLogger.log("Relay", "publish retry ok relay=\(url) event=\(event.id)")
-                        continue
-                    } catch {
-                        lastError = error
-                        ngRelays.append(url)
-                        AppLogger.log("Relay", "publish retry fail relay=\(url) event=\(event.id) err=\(error)")
-                        continue
-                    }
-                }
-
-                lastError = error
-                ngRelays.append(url)
-                AppLogger.log("Relay", "publish fail relay=\(url) event=\(event.id) err=\(error)")
-            }
+        if waitForAllRelays {
+            _ = try await publishToRelays(event: event, targets: targets)
+            return
         }
 
-        AppLogger.log("Relay", "publish summary event=\(event.id) ok=\(okRelays.count)/\(connections.count) okRelays=\(okRelays) ngRelays=\(ngRelays)")
+        var lastError: Error?
+        var failures = 0
+        let firstOkRelay = await withTaskGroup(of: (String, Error?).self, returning: String?.self) { group in
+            for (url, conn) in targets {
+                group.addTask {
+                    do {
+                        try await self.publishToSingleRelay(event: event, relayUrl: url, conn: conn)
+                        return (url, nil)
+                    } catch {
+                        return (url, error)
+                    }
+                }
+            }
 
-        if !succeeded { throw lastError ?? ClientError.notConnected }
+            while let result = await group.next() {
+                if let error = result.1 {
+                    failures += 1
+                    lastError = error
+                    continue
+                }
+
+                // Important: returning here returns from the task-group closure only.
+                // Return the relay URL to the outer function and then return success below.
+                group.cancelAll()
+                return result.0
+            }
+            return nil
+        }
+
+        if let firstOkRelay {
+            AppLogger.log("Relay", "publish first-ok event=\(event.id) relay=\(firstOkRelay) fanout=\(targets.count)")
+            Task { await self.publishFanoutBestEffort(event: event, targets: targets, skipRelay: firstOkRelay) }
+            return
+        }
+
+        AppLogger.log("Relay", "publish failed event=\(event.id) failures=\(failures)/\(targets.count)")
+        throw lastError ?? ClientError.notConnected
+    }
+
+    private func publishToRelays(event: NostrEvent, targets: [(String, SingleRelayClient)]) async throws -> [String] {
+        var lastError: Error?
+        var okRelays: [String] = []
+        var ngRelays: [String] = []
+        await withTaskGroup(of: (String, Bool, Error?).self) { group in
+            for (url, conn) in targets {
+                group.addTask {
+                    do {
+                        try await self.publishToSingleRelay(event: event, relayUrl: url, conn: conn)
+                        return (url, true, nil)
+                    } catch {
+                        return (url, false, error)
+                    }
+                }
+            }
+            for await r in group {
+                if r.1 { okRelays.append(r.0) } else { ngRelays.append(r.0); lastError = r.2 }
+            }
+        }
+        AppLogger.log("Relay", "publish summary event=\(event.id) ok=\(okRelays.count)/\(targets.count) okRelays=\(okRelays) ngRelays=\(ngRelays)")
+        if okRelays.isEmpty { throw lastError ?? ClientError.notConnected }
+        return okRelays
+    }
+
+    private func publishFanoutBestEffort(event: NostrEvent, targets: [(String, SingleRelayClient)], skipRelay: String) async {
+        for (url, conn) in targets where url != skipRelay {
+            do { try await publishToSingleRelay(event: event, relayUrl: url, conn: conn) }
+            catch { AppLogger.log("Relay", "publish background fail relay=\(url) event=\(event.id) err=\(error)") }
+        }
+    }
+
+    private func publishToSingleRelay(event: NostrEvent, relayUrl: String, conn: SingleRelayClient) async throws {
+        do {
+            try await conn.publish(event: event)
+        } catch {
+            let errStr = String(describing: error)
+            if errStr.contains("notConnected") {
+                try await conn.connect()
+                try await conn.publish(event: event)
+                AppLogger.log("Relay", "publish retry ok relay=\(relayUrl) event=\(event.id)")
+            } else {
+                throw error
+            }
+        }
     }
 
     /// Publish a fully signed raw event JSON to a subset of relays.
@@ -387,7 +455,10 @@ private actor SingleRelayClient {
         reconnectTask = nil
         connectionState = .connecting
 
-        AppLogger.log("Relay", "Connecting to \(relayURL.absoluteString)…")
+        let isNoisyRelay = NostrClient.noisyRelays.contains(relayURL.host ?? "")
+        if !isNoisyRelay {
+            AppLogger.log("Relay", "Connecting to \(relayURL.absoluteString)…")
+        }
 
         // Create delegate to detect WebSocket open/close events
         let delegate = WebSocketDelegate(relayHost: relayURL.host ?? relayURL.absoluteString)
@@ -397,7 +468,7 @@ private actor SingleRelayClient {
         // IMPORTANT: Do NOT set timeoutIntervalForResource — its default is 7 days.
         // Setting it to a short value (e.g. 30s) kills long-lived WebSocket connections.
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest  = 15
+        config.timeoutIntervalForRequest  = isNoisyRelay ? 6 : 15
         config.waitsForConnectivity = true
         let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
         urlSession = session
@@ -406,7 +477,7 @@ private actor SingleRelayClient {
         task.resume()
 
         // Wait for actual WebSocket handshake (up to 15s)
-        let opened = await delegate.waitForOpen(timeout: 15.0)
+        let opened = await delegate.waitForOpen(timeout: isNoisyRelay ? 6.0 : 15.0)
         if opened {
             connectionState = .connected
             consecutiveFailures = 0
@@ -416,7 +487,9 @@ private actor SingleRelayClient {
         } else {
             let errorDesc = await delegate.lastError ?? "handshake timeout"
             connectionState = .failed(errorDesc)
-            AppLogger.log("Relay", "❌ Failed to connect to \(relayURL.absoluteString) — \(errorDesc)")
+            if !isNoisyRelay {
+                AppLogger.log("Relay", "❌ Failed to connect to \(relayURL.absoluteString) — \(errorDesc)")
+            }
             scheduleReconnect()
         }
     }
@@ -458,7 +531,9 @@ private actor SingleRelayClient {
         }
 
         guard state == .connected else {
-            AppLogger.log("Relay", "[\(relayURL.host ?? "?")] fetchEvents SKIPPED — state: \(state)")
+            if !NostrClient.noisyRelays.contains(relayURL.host ?? "") {
+                AppLogger.log("Relay", "[\(relayURL.host ?? "?")] fetchEvents SKIPPED — state: \(state)")
+            }
             return []
         }
         var events: [NostrEvent] = []
@@ -626,11 +701,32 @@ private actor SingleRelayClient {
         consecutiveFailures += 1
         reconnectTask?.cancel()
 
-        // Exponential backoff: 2s → 4s → 8s → 16s → 30s(cap)
-        let delaySecs = min(Double(2 << min(consecutiveFailures, 4)), 30.0)
+        let host = relayURL.host ?? ""
+        let isNoisyRelay = NostrClient.noisyRelays.contains(host)
+        let isOperatorFriendlyCooldownRelay = NostrClient.operatorFriendlyCooldownRelays.contains(host)
 
-        // Cooldown: skip all connect() attempts during the backoff period
+        let delaySecs: Double
+        if isOperatorFriendlyCooldownRelay {
+            // Operator-friendly temporary exclusion: after a failure, do not schedule
+            // automatic reconnects. Keep the relay locally cooled down for a long window
+            // so fan-out fetches do not repeatedly hit an unhealthy relay.
+            // 5m → 10m → 20m → 40m → 60m(cap)
+            delaySecs = min(300.0 * pow(2.0, Double(max(consecutiveFailures - 1, 0))), 3600.0)
+        } else if isNoisyRelay {
+            delaySecs = min(Double(30 << min(consecutiveFailures, 3)), 300.0)
+        } else {
+            // Exponential backoff: 2s → 4s → 8s → 16s → 30s(cap)
+            delaySecs = min(Double(2 << min(consecutiveFailures, 4)), 30.0)
+        }
+
+        // Cooldown: skip all connect() attempts during the backoff period.
         cooldownUntil = Date().addingTimeInterval(delaySecs)
+
+        guard !isOperatorFriendlyCooldownRelay else {
+            // No automatic reconnect for overloaded/flaky community relays. A later
+            // explicit user action or future fetch after cooldown may try once again.
+            return
+        }
 
         reconnectTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delaySecs * 1_000_000_000))

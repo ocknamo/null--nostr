@@ -20,6 +20,8 @@ final class ScoredPost: Identifiable {
     var isBookmarked: Bool         = false
     var isVerified:   Bool         = false
     var badges:       [String]     = []
+    /// Birdwatch / context notes associated with this post.
+    var birdwatchNotes: [NostrEvent] = []
     var quotedPost:   ScoredPost?  = nil  // safe: class reference type
     var repostedBy:   UserProfile? = nil
     var repostTime:   Int64?       = nil
@@ -56,6 +58,7 @@ final class ScoredPost: Identifiable {
         copy.isReposted   = isReposted
         copy.isBookmarked = isBookmarked
         copy.badges       = badges
+        copy.birdwatchNotes = birdwatchNotes
         copy.quotedPost   = quotedPost
         copy.repostedBy   = repostedBy
         return copy

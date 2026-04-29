@@ -22,11 +22,18 @@ extension NostrRepository {
             .map(\.url)
     }
 
-    /// ユーザー宛の通知（リアクション・Zap・リポスト・返信/メンション・バッジ付与）を取得する。
+    /// ユーザー宛の通知（リアクション・Zap・リポスト・返信/メンション・バッジ付与・フォロー）を取得する。
     /// NIP-65 read リレーを優先的に使用 (Android parity)。
     /// 24時間ウィンドウ、最大 `limit` 件。Android の `fetchNotifications()` に相当。
     func fetchNotifications(pubkey: String, limit: Int = 50) async -> [NotificationItem] {
         let oneDayAgo = Int64(Date().addingTimeInterval(-86400).timeIntervalSince1970)
+        let enabledKinds = prefs.notificationEnabledKinds
+        let emojiReactionEnabled = prefs.notificationEmojiReactionEnabled
+        let allowedSenders = await notificationAllowedSenderSet(for: pubkey)
+
+        func canNotify(sender: String) -> Bool {
+            sender != pubkey && (allowedSenders == nil || allowedSenders?.contains(sender) == true)
+        }
 
         // 種別ごとに個別フィルタを作成（Android と同構造）
         let reactionFilter = NostrFilter(
@@ -55,35 +62,44 @@ extension NostrRepository {
             since: oneDayAgo, limit: limit,
             tags: ["#p": [pubkey]]
         )
+        // Kind 3: フォロー通知 — 「自分を p タグに含む最新のコンタクトリスト更新」を通知
+        let followFilter = NostrFilter(
+            kinds: [NostrKind.contactList],
+            since: oneDayAgo, limit: limit,
+            tags: ["#p": [pubkey]]
+        )
 
         // NIP-65 read リレー優先 (Android parity)
         let readRelays = nip65ReadRelayUrls()
 
-        // 全種別を並列取得（NIP-65 read リレーがあればそちらを使用）
-        async let reactions = readRelays.isEmpty
-            ? fetchEvents(filters: [reactionFilter])
-            : fetchEventsFromReadRelays(readRelays, filters: [reactionFilter])
-        async let zaps = readRelays.isEmpty
-            ? fetchEvents(filters: [zapFilter])
-            : fetchEventsFromReadRelays(readRelays, filters: [zapFilter])
-        async let reposts = readRelays.isEmpty
-            ? fetchEvents(filters: [repostFilter])
-            : fetchEventsFromReadRelays(readRelays, filters: [repostFilter])
-        async let mentions = readRelays.isEmpty
-            ? fetchEvents(filters: [replyFilter])
-            : fetchEventsFromReadRelays(readRelays, filters: [replyFilter])
-        async let badges = readRelays.isEmpty
-            ? fetchEvents(filters: [badgeFilter])
-            : fetchEventsFromReadRelays(readRelays, filters: [badgeFilter])
+        // 全種別を並列取得（NIP-65 read リレーがあればそちらを使用）。設定でOFFの種別はリクエストしない。
+        async let reactions: [NostrEvent] = enabledKinds.contains(NostrKind.reaction)
+            ? (readRelays.isEmpty ? fetchEvents(filters: [reactionFilter]) : fetchEventsFromReadRelays(readRelays, filters: [reactionFilter]))
+            : []
+        async let zaps: [NostrEvent] = enabledKinds.contains(NostrKind.zapReceipt)
+            ? (readRelays.isEmpty ? fetchEvents(filters: [zapFilter]) : fetchEventsFromReadRelays(readRelays, filters: [zapFilter]))
+            : []
+        async let reposts: [NostrEvent] = enabledKinds.contains(NostrKind.repost)
+            ? (readRelays.isEmpty ? fetchEvents(filters: [repostFilter]) : fetchEventsFromReadRelays(readRelays, filters: [repostFilter]))
+            : []
+        async let mentions: [NostrEvent] = enabledKinds.contains(NostrKind.textNote)
+            ? (readRelays.isEmpty ? fetchEvents(filters: [replyFilter]) : fetchEventsFromReadRelays(readRelays, filters: [replyFilter]))
+            : []
+        async let badges: [NostrEvent] = enabledKinds.contains(NostrKind.badgeAward)
+            ? (readRelays.isEmpty ? fetchEvents(filters: [badgeFilter]) : fetchEventsFromReadRelays(readRelays, filters: [badgeFilter]))
+            : []
+        async let follows: [NostrEvent] = enabledKinds.contains(NostrKind.contactList)
+            ? (readRelays.isEmpty ? fetchEvents(filters: [followFilter]) : fetchEventsFromReadRelays(readRelays, filters: [followFilter]))
+            : []
 
-        let (reactionEvents, zapEvents, repostEvents, mentionEvents, badgeEvents) =
-            await (reactions, zaps, reposts, mentions, badges)
+        let (reactionEvents, zapEvents, repostEvents, mentionEvents, badgeEvents, followEvents) =
+            await (reactions, zaps, reposts, mentions, badges, follows)
 
         var items: [NotificationItem] = []
 
         // MARK: Reactions (Kind 7)
         for event in reactionEvents {
-            guard event.pubkey != pubkey else { continue }
+            guard canNotify(sender: event.pubkey) else { continue }
             let content  = event.content.isEmpty ? "+" : event.content
             let emojiTag = event.tags.first { $0.first == "emoji" }
             // "emoji" タグ: ["emoji", <name>, <url>]
@@ -91,6 +107,7 @@ extension NostrRepository {
             let isCustom = emojiUrl != nil ||
                 (content.hasPrefix(":") && content.hasSuffix(":") && content.count > 2)
 
+            if isCustom && !emojiReactionEnabled { continue }
             let reactionComment = (content != "+" && content != "-" && !content.isEmpty) ? content : nil
             items.append(NotificationItem(
                 id:            event.id,
@@ -128,7 +145,7 @@ extension NostrRepository {
                     }
                 }
             }
-            guard zapPubkey != pubkey else { continue }
+            guard canNotify(sender: zapPubkey) else { continue }
 
             let bolt11 = event.getTagValue("bolt11") ?? ""
             // bolt11 優先、パース失敗時は description の amount タグにフォールバック
@@ -149,7 +166,7 @@ extension NostrRepository {
 
         // MARK: Reposts (Kind 6)
         for event in repostEvents {
-            guard event.pubkey != pubkey else { continue }
+            guard canNotify(sender: event.pubkey) else { continue }
             items.append(NotificationItem(
                 id:            event.id,
                 pubkey:        event.pubkey,
@@ -165,18 +182,41 @@ extension NostrRepository {
 
         // MARK: Replies & Mentions (Kind 1)
         for event in mentionEvents {
-            guard event.pubkey != pubkey else { continue }
+            guard canNotify(sender: event.pubkey) else { continue }
 
             let eTags = event.tags.filter { $0.first == "e" }
             let hasReplyMarker = eTags.contains { $0.count >= 4 && $0[3] == "reply" }
             let hasRootMarker  = eTags.contains { $0.count >= 4 && $0[3] == "root" }
             let hasPTagToMe    = event.tags.contains { $0.first == "p" && $0.count >= 2 && $0[1] == pubkey }
-            let hasQTag        = event.tags.contains { $0.first == "q" }
+            let qTags          = event.tags.filter { $0.first == "q" }
+            let hasQuoteTag    = !qTags.isEmpty
+            let contentHasQuoteLink = event.content.range(
+                of: #"nostr:(?:note1|nevent1)[a-z0-9]{58,}"#,
+                options: [.regularExpression, .caseInsensitive]
+            ) != nil
+            let isQuotePost = hasQuoteTag || contentHasQuoteLink
 
-            // reply判定: 明示 reply marker / root+私宛p / 旧式 e+p（ただし quote は除外）
+            // NIP-18 引用投稿は、引用元作者の p タグが付くため #p フィルタに引っかかる。
+            // これは「メンションされた」通知ではなく「引用された投稿」の通知として扱う。
+            if isQuotePost {
+                items.append(NotificationItem(
+                    id:            event.id,
+                    pubkey:        event.pubkey,
+                    type:          "quote",
+                    createdAt:     event.createdAt,
+                    amount:        nil,
+                    comment:       String(removeNostrEventLinksForNotification(event.content).prefix(100)),
+                    targetEventId: qTags.first?.dropFirst().first ?? event.getTagValue("e"),
+                    emojiUrl:      nil,
+                    reactionEmoji: nil
+                ))
+                continue
+            }
+
+            // reply判定: 明示 reply marker / root+私宛p / 旧式 e+p（quote は上で除外済み）
             let isReply = hasReplyMarker
                 || (hasRootMarker && hasPTagToMe)
-                || (!eTags.isEmpty && hasPTagToMe && !hasQTag)
+                || (!eTags.isEmpty && hasPTagToMe)
 
             let mentionComment = isReply ? String(event.content.prefix(100)) : nil
             items.append(NotificationItem(
@@ -194,7 +234,7 @@ extension NostrRepository {
 
         // MARK: Badge Awards (Kind 8, NIP-58)
         for event in badgeEvents {
-            guard event.pubkey != pubkey else { continue }
+            guard canNotify(sender: event.pubkey) else { continue }
             // "a" タグ "30009:<pubkey>:<d-tag>" の d-tag 部分をバッジ名として使用
             let aRef = event.tags.first {
                 $0.first == "a" && ($0.dropFirst().first?.hasPrefix("30009:") == true)
@@ -217,7 +257,106 @@ extension NostrRepository {
             ))
         }
 
+        // MARK: Follow Events (Kind 3)
+        // Kind 3 は「フォロー一覧全体の更新」なので、#p に自分が含まれるだけで通知すると
+        // 既存フォロワーが連絡先リストを更新するたびに何度も「フォローしました」になってしまう。
+        // 直前の contact list 状態から「未フォロー → フォロー」に変化した時だけ通知する。
+        let followItems = await buildFollowNotificationItems(
+            followEvents: followEvents,
+            pubkey: pubkey,
+            windowStart: oneDayAgo,
+            canNotify: canNotify
+        )
+        items.append(contentsOf: followItems)
+
         return items.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    /// Kind 3 contact list 更新から「新規フォロー」だけを通知化する。
+    private func buildFollowNotificationItems(
+        followEvents: [NostrEvent],
+        pubkey: String,
+        windowStart: Int64,
+        canNotify: (String) -> Bool
+    ) async -> [NotificationItem] {
+        // canNotify（フォロー中のみ/ネットワーク）で除外した相手も「既存フォロワー」として記録する。
+        // 設定変更後に、古い Kind 3 更新が突然「新規フォロー」として出るのを防ぐため。
+        let allCandidates = followEvents
+            .filter { $0.pubkey != pubkey }
+            .filter { $0.tags.contains { $0.first == "p" && $0.dropFirst().first == pubkey } }
+            .sorted { $0.createdAt < $1.createdAt }
+        guard !allCandidates.isEmpty else { return [] }
+
+        let notifiableCandidates = allCandidates.filter { canNotify($0.pubkey) }
+        var knownFollowers = prefs.notificationKnownFollowerPubkeys
+        let previousHighWater = prefs.notificationFollowLastSeenAt
+        let maxSeenAt = max(previousHighWater, allCandidates.map(\.createdAt).max() ?? previousHighWater)
+
+        // 初回、または過去版で high-water だけ保存され known が空の状態は、まず現存フォロワーをベースライン化する。
+        // ここで通知は出さない（既存フォロワーの contact list 更新を重複通知しないため）。
+        if previousHighWater == 0 || knownFollowers.isEmpty {
+            knownFollowers.formUnion(allCandidates.map(\.pubkey))
+            prefs.notificationKnownFollowerPubkeys = knownFollowers
+            prefs.notificationFollowLastSeenAt = maxSeenAt
+            print("[NotificationFollow] baseline known=\(knownFollowers.count) highWater=\(maxSeenAt) all=\(allCandidates.count) notifiable=\(notifiableCandidates.count) reason=\(previousHighWater == 0 ? "first-run" : "empty-known")")
+            return []
+        }
+
+        var emittedAuthors = Set<String>()
+        var out: [NotificationItem] = []
+        for event in allCandidates {
+            let wasKnown = knownFollowers.contains(event.pubkey)
+            let isNewEvent = event.createdAt > previousHighWater
+            if isNewEvent,
+               !wasKnown,
+               canNotify(event.pubkey),
+               emittedAuthors.insert(event.pubkey).inserted {
+                out.append(NotificationItem(id: event.id, pubkey: event.pubkey, type: "follow", createdAt: event.createdAt, amount: nil, comment: nil, targetEventId: nil, emojiUrl: nil, reactionEmoji: nil))
+            }
+            knownFollowers.insert(event.pubkey)
+        }
+        prefs.notificationKnownFollowerPubkeys = knownFollowers
+        prefs.notificationFollowLastSeenAt = maxSeenAt
+        print("[NotificationFollow] all=\(allCandidates.count) notifiable=\(notifiableCandidates.count) emitted=\(out.count) known=\(knownFollowers.count) prevHighWater=\(previousHighWater) highWater=\(maxSeenAt)")
+        return out
+    }
+
+    /// 通知送信者フィルタ用の許可 pubkey セットを返す。nil は全員許可。
+    private func notificationAllowedSenderSet(for pubkey: String) async -> Set<String>? {
+        switch prefs.notificationSenderScope {
+        case .all:
+            return nil
+        case .following:
+            return Set(await fetchFollowList(pubkey: pubkey))
+        case .network:
+            let follows = await fetchFollowList(pubkey: pubkey)
+            var allowed = Set(follows)
+            let events = await fetchLatestContactLists(authors: follows)
+            for event in events {
+                for followed in event.tags where followed.first == "p" {
+                    if let pk = followed.dropFirst().first { allowed.insert(pk) }
+                }
+            }
+            return allowed
+        }
+    }
+
+    /// 指定ユーザー群の最新 Kind 3 をまとめて取得する（ネットワーク通知フィルタ用）。
+    private func fetchLatestContactLists(authors: [String], until: Int64? = nil) async -> [NostrEvent] {
+        let uniqueAuthors = Array(Set(authors))
+        guard !uniqueAuthors.isEmpty else { return [] }
+        let filter = NostrFilter(
+            authors: uniqueAuthors,
+            kinds: [NostrKind.contactList],
+            until: until,
+            limit: max(uniqueAuthors.count * 3, 100)
+        )
+        let events = await fetchEvents(filters: [filter], timeoutSeconds: 5.0)
+        var latestByAuthor: [String: NostrEvent] = [:]
+        for event in events where (latestByAuthor[event.pubkey]?.createdAt ?? 0) < event.createdAt {
+            latestByAuthor[event.pubkey] = event
+        }
+        return Array(latestByAuthor.values)
     }
 
     // MARK: - NotificationResult
@@ -263,39 +402,49 @@ extension NostrRepository {
     func fetchNotificationsWithContext(pubkey: String, skipCache: Bool = false) async -> NotificationResult {
         // キャッシュからの復元（skipCache でない場合のみ）
         if !skipCache, let cached = cache.getCachedNotificationResult() {
-            // キャッシュ済みアイテムのプロフィール・元投稿を再構築
+            // キャッシュ済みアイテムのプロフィール・元投稿を再構築。元投稿もキャッシュから即時表示する。
             let pubkeys = Array(Set(cached.items.map { $0.pubkey }))
-            let profileList = await fetchProfiles(pubkeys: pubkeys)
-            let profilesMap = Dictionary(profileList.map { ($0.pubkey, $0) }, uniquingKeysWith: { a, _ in a })
-            return NotificationResult(items: cached.items, profiles: profilesMap, originalPosts: [:])
+            async let profileList = fetchProfiles(pubkeys: pubkeys)
+            async let postMap = resolveOriginalPosts(for: cached.items, cachedOriginalPosts: cached.originalPosts ?? [])
+            let (profiles, originalPosts) = await (profileList, postMap)
+            let profilesMap = Dictionary(profiles.map { ($0.pubkey, $0) }, uniquingKeysWith: { a, _ in a })
+            if (cached.originalPosts ?? []).count != originalPosts.count {
+                cache.setCachedNotificationResult(cached.items, originalPosts: originalPosts)
+            }
+            return NotificationResult(items: cached.items, profiles: profilesMap, originalPosts: originalPosts)
         }
 
         let items = await fetchNotifications(pubkey: pubkey)
-
-        // キャッシュに保存
-        cache.setCachedNotificationResult(items)
 
         // プロフィール取得
         let pubkeys = Array(Set(items.map { $0.pubkey }))
         let profileList = await fetchProfiles(pubkeys: pubkeys)
         let profilesMap = Dictionary(profileList.map { ($0.pubkey, $0) }, uniquingKeysWith: { a, _ in a })
 
-        // 元投稿取得（reaction/repost/zap の対象イベント）
-        let targetIds = Set(items.compactMap { item -> String? in
-            guard ["reaction", "emoji_reaction", "repost", "zap"].contains(item.type) else { return nil }
-            return item.targetEventId
-        })
-        var originalPosts: [String: NostrEvent] = [:]
-        if !targetIds.isEmpty {
-            // 一括フェッチ（最大50件）
-            let filter = NostrFilter(ids: Array(targetIds).prefix(50).map { $0 }, limit: 50)
-            let events = await fetchEvents(filters: [filter])
-            for event in events {
-                originalPosts[event.id] = event
-            }
-        }
+        // 元投稿取得（reaction/repost/zap/quote の対象イベント）。取得後に通知結果ごとキャッシュし、次回表示を高速化。
+        let originalPosts = await resolveOriginalPosts(for: items)
+        cache.setCachedNotificationResult(items, originalPosts: originalPosts)
 
         return NotificationResult(items: items, profiles: profilesMap, originalPosts: originalPosts)
+    }
+
+    /// 通知に紐づく元投稿を解決する。キャッシュ済みイベントを優先し、不足分だけリレーから一括取得する。
+    private func resolveOriginalPosts(for items: [NotificationItem], cachedOriginalPosts: [NostrEvent] = []) async -> [String: NostrEvent] {
+        let previewTypes: Set<String> = ["reaction", "emoji_reaction", "repost", "zap", "quote"]
+        let targetIds = Set(items.compactMap { item -> String? in
+            guard previewTypes.contains(item.type) else { return nil }
+            return item.targetEventId
+        })
+        guard !targetIds.isEmpty else { return [:] }
+
+        var originalPosts = Dictionary(cachedOriginalPosts.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let missingIds = Array(targetIds.subtracting(originalPosts.keys).prefix(50))
+        if !missingIds.isEmpty {
+            let filter = NostrFilter(ids: missingIds, limit: missingIds.count)
+            let events = await fetchEvents(filters: [filter], timeoutSeconds: 5.0)
+            for event in events { originalPosts[event.id] = event }
+        }
+        return originalPosts.filter { targetIds.contains($0.key) }
     }
 
     // MARK: - fetchEvent
@@ -305,6 +454,16 @@ extension NostrRepository {
     func fetchEvent(eventId: String) async -> NostrEvent? {
         let filter = NostrFilter(ids: [eventId], limit: 1)
         return await fetchEvents(filters: [filter]).first
+    }
+
+
+    /// NIP-19 naddr の kind:pubkey:d 参照から addressable event を取得する。
+    func fetchAddressableEvent(aTag: String) async -> NostrEvent? {
+        let parts = aTag.split(separator: ":", maxSplits: 2).map(String.init)
+        guard parts.count == 3, let kind = Int(parts[0]) else { return nil }
+        let filter = NostrFilter(authors: [parts[1]], kinds: [kind], limit: 10, tags: ["#d": [parts[2]]])
+        return await fetchEvents(filters: [filter], timeoutSeconds: 5.0)
+            .max(by: { $0.createdAt < $1.createdAt })
     }
 
     // MARK: - BOLT-11 Amount Parser
@@ -351,4 +510,16 @@ extension NostrRepository {
         default:  return amount * 100_000_000_000   // whole BTC
         }
     }
+}
+
+
+private func removeNostrEventLinksForNotification(_ content: String) -> String {
+    let pattern = #"nostr:(?:note1|nevent1)[a-z0-9]{58,}"#
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return content }
+    let ns = content as NSString
+    return regex.stringByReplacingMatches(
+        in: content,
+        range: NSRange(location: 0, length: ns.length),
+        withTemplate: ""
+    ).trimmingCharacters(in: .whitespacesAndNewlines)
 }

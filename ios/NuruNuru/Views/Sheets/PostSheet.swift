@@ -10,6 +10,8 @@ struct PostSheet: View {
     let repository:   NostrRepository
     let myPubkeyHex:  String
     var myProfile:    UserProfile?
+    var initialText:  String = ""
+    var initialMentionProfile: UserProfile? = nil
     var replyToId:    String? = nil
     var onDismiss:    () -> Void = {}
     var onSuccess:    () -> Void = {}
@@ -35,6 +37,13 @@ struct PostSheet: View {
     // Custom emoji
     @State private var showEmojiPicker:      Bool          = false
     @State private var selectedCustomEmojis: [CustomEmoji] = []
+
+    // Mentions (NIP-27): @username suggestions are limited to followed users.
+    // NIP-05 (name@domain) and npub/nprofile can also be converted to nostr:npub... mentions.
+    @State private var followedMentionUsers: [MentionCandidate] = []
+    @State private var mentionSuggestions:   [MentionCandidate] = []
+    @State private var mentionAliases:       [String: String] = [:]  // lowercased display token -> pubkey
+    @State private var isLoadingMentions:    Bool = false
 
     // STT (Speech-to-Text)
     @State private var isSTTActive:    Bool          = false
@@ -127,6 +136,9 @@ struct PostSheet: View {
                                 .background(Color.clear)
                                 .focused($fieldFocused)
                                 .frame(minHeight: 120, maxHeight: 280)
+                                .onChange(of: text) { _, newValue in
+                                    updateMentionSuggestions(for: newValue)
+                                }
                                 .overlay(alignment: .topLeading) {
                                     if text.isEmpty {
                                         Text("いまどうしてる？")
@@ -142,6 +154,10 @@ struct PostSheet: View {
                     .padding(.horizontal, NuruSpacing.space4)
                     .padding(.vertical, NuruSpacing.space3)
 
+                    mentionSuggestionSection
+                        .padding(.horizontal, NuruSpacing.space4)
+                        .padding(.bottom, mentionSuggestions.isEmpty ? 0 : NuruSpacing.space2)
+
                     // Hashtag-highlighted preview
                     if !text.isEmpty && text.contains("#") {
                         hashtagPreview
@@ -156,17 +172,19 @@ struct PostSheet: View {
                             .padding(.bottom, NuruSpacing.space2)
                     }
 
+                    // Custom emoji preview row — mirrors Android PostModal.kt
+                    if !selectedCustomEmojis.isEmpty {
+                        customEmojiPreviewRow
+                            .padding(.horizontal, NuruSpacing.space4)
+                            .padding(.bottom, NuruSpacing.space2)
+                    }
+
                     // Upload progress
                     if !uploadProgress.isEmpty {
                         Text(uploadProgress)
                             .font(NuruFont.bodySmall())
                             .foregroundStyle(theme.textSecondary)
                             .padding(.horizontal, NuruSpacing.space4)
-                    }
-
-                    // Relay selection panel (collapsible)
-                    if showRelayPanel {
-                        relayPanelSection
                     }
                 }
             }
@@ -182,102 +200,92 @@ struct PostSheet: View {
 
             Divider().background(theme.borderColor)
 
-            // Bottom toolbar
-            HStack(spacing: NuruSpacing.space3) {
-                // Image picker
+            // Bottom toolbar — mirrors Android PostToolbar order/icons:
+            // Image / CW / Emoji / Mic / Router / spacer / remaining count
+            HStack(spacing: 4) {
                 PhotosPicker(
                     selection: $selectedItems,
-                    maxSelectionCount: 4,
+                    maxSelectionCount: 3,
                     matching: .images
                 ) {
-                    Image(systemName: "photo")
-                        .font(.system(size: NuruSpacing.iconMd))
-                        .foregroundStyle(selectedImages.isEmpty ? theme.textTertiary : NuruColors.lineGreen)
+                    toolbarIcon(tint: selectedImages.isEmpty ? theme.textTertiary : NuruColors.lineGreen) {
+                        PhotoIcon()
+                    }
                 }
+                .disabled(selectedImages.count >= 3)
+                .opacity(selectedImages.count >= 3 ? 0.35 : 1.0)
                 .onChange(of: selectedItems) { _, newItems in
                     Task { await loadSelectedImages(from: newItems) }
                 }
 
-                // CW toggle
-                Button {
+                toolbarButton {
                     withAnimation(.easeInOut(duration: 0.2)) { showCWInput.toggle() }
                     if !showCWInput { contentWarning = "" }
-                } label: {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: NuruSpacing.iconMd))
-                        .foregroundStyle(showCWInput
-                            ? Color(red: 0.98, green: 0.67, blue: 0.0)
-                            : theme.textTertiary)
-                }
-                .buttonStyle(.plain)
-
-                // Custom emoji picker
-                Button { showEmojiPicker.toggle() } label: {
-                    Image(systemName: "face.smiling")
-                        .font(.system(size: NuruSpacing.iconMd))
-                        .foregroundStyle(selectedCustomEmojis.isEmpty
-                            ? theme.textTertiary : NuruColors.lineGreen)
-                }
-                .buttonStyle(.plain)
-
-                // Relay selection
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { showRelayPanel.toggle() }
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "antenna.radiowaves.left.and.right")
-                            .font(.system(size: NuruSpacing.iconMd))
-                        if hasRelayCustomization {
-                            Circle().fill(NuruColors.lineGreen).frame(width: 6, height: 6)
-                        }
+                } icon: {
+                    toolbarIcon(tint: showCWInput ? Color(red: 1.0, green: 0.60, blue: 0.0) : theme.textTertiary) {
+                        WarningIcon()
                     }
-                    .foregroundStyle(hasRelayCustomization
-                        ? NuruColors.lineGreen : theme.textTertiary)
                 }
-                .buttonStyle(.plain)
 
-                // STT (Speech-to-Text)
-                Button {
-                    if isSTTActive { stopSTT() } else { startSTT() }
-                } label: {
-                    Image(systemName: isSTTActive ? "mic.fill" : "mic")
-                        .font(.system(size: NuruSpacing.iconMd))
-                        .foregroundStyle(isSTTActive ? NuruColors.lineGreen : theme.textTertiary)
+                toolbarButton {
+                    showEmojiPicker.toggle()
+                } icon: {
+                    toolbarIcon(tint: theme.textTertiary) {
+                        EmojiIcon()
+                    }
                 }
-                .buttonStyle(.plain)
+
+                toolbarButton {
+                    if isSTTActive { stopSTT() } else { startSTT() }
+                } icon: {
+                    toolbarIcon(tint: isSTTActive ? Color.red : theme.textTertiary) {
+                        MicIcon()
+                    }
+                }
+
+                toolbarButton {
+                    withAnimation(.easeInOut(duration: 0.2)) { showRelayPanel.toggle() }
+                    if showRelayPanel { showEmojiPicker = false }
+                } icon: {
+                    toolbarIcon(tint: (showRelayPanel || hasRelayCustomization) ? NuruColors.lineGreen : theme.textTertiary) {
+                        Image(systemName: "wifi.router")
+                            .font(.system(size: 22, weight: .regular))
+                    }
+                }
 
                 Spacer()
 
-                // Character counter — always visible
-                HStack(spacing: 4) {
-                    Text("\(remaining)")
-                        .font(NuruFont.bodySmall())
-                        .foregroundStyle(remaining < 0 ? NuruColors.colorError
-                            : remaining <= 20 ? Color(red: 0.98, green: 0.67, blue: 0.0)
-                            : theme.textTertiary)
-
-                    ZStack {
-                        Circle()
-                            .stroke(theme.bgTertiary, lineWidth: 2)
-                        Circle()
-                            .trim(from: 0, to: max(0, CGFloat(text.count) / CGFloat(UI.postMaxLength)))
-                            .stroke(remaining < 0 ? NuruColors.colorError : NuruColors.lineGreen, lineWidth: 2)
-                            .rotationEffect(.degrees(-90))
-                    }
-                    .frame(width: 20, height: 20)
-                    .animation(.easeInOut(duration: 0.1), value: text.count)
-                }
+                Text("\(remaining)")
+                    .font(.system(size: 12))
+                    .foregroundStyle(remaining < 0 ? NuruColors.colorError
+                        : remaining < 20 ? Color(red: 1.0, green: 0.60, blue: 0.0)
+                        : theme.textTertiary)
+                    .padding(.trailing, 8)
             }
-            .padding(.horizontal, NuruSpacing.space4)
-            .padding(.vertical, NuruSpacing.space3)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+
+            if showRelayPanel {
+                relayPanelSection
+            }
         }
         .background(theme.bgPrimary.ignoresSafeArea())
         .onAppear {
+            if let target = initialMentionProfile {
+                mentionAliases[target.displayedName.lowercased()] = target.pubkey
+                if let name = target.name, !name.isEmpty { mentionAliases[name.lowercased()] = target.pubkey }
+                if text.isEmpty {
+                    text = "@\(target.displayedName) "
+                }
+            } else if text.isEmpty && !initialText.isEmpty {
+                text = initialText
+            }
             fieldFocused = true
             Task {
                 let relays = await repository.getSavedRelayUrls()
                 allRelays = relays
                 selectedRelays = Set(relays)
+                await loadMentionCandidates()
             }
         }
         .onDisappear { stopSTT() }
@@ -287,12 +295,208 @@ struct PostSheet: View {
             EmojiPickerSheet(
                 repository: repository,
                 pubkeyHex: myPubkeyHex,
+                individualOnly: true,
                 onSelect: { emoji in
                     insertCustomEmoji(emoji)
                 }
             )
             .presentationDetents([.medium, .large])
         }
+    }
+
+
+    // MARK: - Mentions
+
+    @ViewBuilder
+    private var mentionSuggestionSection: some View {
+        if !mentionSuggestions.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(mentionSuggestions) { candidate in
+                        Button {
+                            insertMention(candidate)
+                        } label: {
+                            HStack(spacing: 6) {
+                                AvatarView(
+                                    url: candidate.profile.picture,
+                                    name: candidate.displayName,
+                                    size: 24
+                                )
+                                VStack(alignment: .leading, spacing: 0) {
+                                    Text("@\(candidate.displayName)")
+                                        .font(NuruFont.labelSmall())
+                                        .foregroundStyle(theme.textPrimary)
+                                        .lineLimit(1)
+                                    if let nip05 = candidate.profile.nip05, !nip05.isEmpty {
+                                        Text(formatPostSheetNip05(nip05))
+                                            .font(.system(size: 10))
+                                            .foregroundStyle(theme.textTertiary)
+                                            .lineLimit(1)
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(theme.bgSecondary)
+                            .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    private func loadMentionCandidates() async {
+        guard followedMentionUsers.isEmpty else { return }
+        let follows = await repository.fetchFollowList(pubkey: myPubkeyHex)
+        let profiles = await repository.fetchProfiles(pubkeys: follows)
+        let profileMap = Dictionary(uniqueKeysWithValues: profiles.map { ($0.pubkey, $0) })
+        let candidates = follows.map { pubkey -> MentionCandidate in
+            MentionCandidate(profile: profileMap[pubkey] ?? UserProfile(pubkey: pubkey))
+        }
+        await MainActor.run {
+            followedMentionUsers = candidates.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+            updateMentionSuggestions(for: text)
+        }
+    }
+
+    private func currentMentionToken(in input: String) -> String? {
+        guard let atIndex = input.lastIndex(of: "@") else { return nil }
+        let token = String(input[atIndex...])
+        guard !token.dropFirst().isEmpty,
+              token.rangeOfCharacter(from: .whitespacesAndNewlines) == nil else { return nil }
+        return token
+    }
+
+    private func updateMentionSuggestions(for input: String) {
+        guard let token = currentMentionToken(in: input) else {
+            mentionSuggestions = []
+            return
+        }
+        let query = String(token.dropFirst()).lowercased()
+        guard !query.contains("@"), !query.hasPrefix("npub1"), !query.hasPrefix("nprofile1") else {
+            mentionSuggestions = []
+            return
+        }
+        // Username search is intentionally restricted to followed users only.
+        mentionSuggestions = followedMentionUsers.filter { candidate in
+            candidate.searchKeys.contains { $0.contains(query) }
+        }.prefix(8).map { $0 }
+    }
+
+    private func insertMention(_ candidate: MentionCandidate) {
+        mentionAliases[candidate.displayName.lowercased()] = candidate.profile.pubkey
+        if let name = candidate.profile.name, !name.isEmpty { mentionAliases[name.lowercased()] = candidate.profile.pubkey }
+        replaceCurrentMentionToken(with: "@\(candidate.displayName) ")
+    }
+
+    private func replaceCurrentMentionToken(with replacement: String) {
+        guard let atIndex = text.lastIndex(of: "@") else { return }
+        let prefix = String(text[..<atIndex])
+        let newText = prefix + replacement
+        guard newText.count <= UI.postMaxLength else {
+            errorMessage = "投稿は\(UI.postMaxLength)文字以内で入力してください"
+            return
+        }
+        text = newText
+        mentionSuggestions = []
+    }
+
+
+    private func normalizeTypedMentions(in content: String) async -> String {
+        let pattern = #"@[\p{L}\p{N}._+\-]+(?:@[A-Za-z0-9.-]+)?"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return content }
+        let ns = content as NSString
+        let matches = regex.matches(in: content, range: NSRange(location: 0, length: ns.length)).reversed()
+        var output = content
+
+        for match in matches {
+            let raw = ns.substring(with: match.range)
+            let token = String(raw.dropFirst())
+            guard !token.isEmpty else { continue }
+
+            let npub: String?
+            let lowered = token.lowercased()
+            if lowered.hasPrefix("npub1") || lowered.hasPrefix("nprofile1") {
+                npub = npubForMentionBech32(lowered)
+            } else if token.contains("@") {
+                npub = await npubForNip05(token)
+            } else {
+                // Username mentions are intentionally limited to followed users only.
+                npub = npubForFollowedUsername(token)
+            }
+
+            guard let npub else { continue }
+            if let range = Range(match.range, in: output) {
+                output.replaceSubrange(range, with: "nostr:\(npub)")
+            }
+        }
+        return output
+    }
+
+    private func npubForMentionBech32(_ bech32: String) -> String? {
+        guard let parsed = NostrBech32.decode(bech32),
+              parsed.type == .npub || parsed.type == .nprofile,
+              let bytes = NostrKeyUtils.hexToBytes(parsed.hex), bytes.count == 32 else { return nil }
+        return NIP19.encodeNpub(bytes)
+    }
+
+    private func npubForNip05(_ identifier: String) async -> String? {
+        guard let pubkey = await repository.resolveNip05(identifier),
+              let bytes = NostrKeyUtils.hexToBytes(pubkey), bytes.count == 32 else { return nil }
+        return NIP19.encodeNpub(bytes)
+    }
+
+    private func npubForFollowedUsername(_ username: String) -> String? {
+        let lowered = username.lowercased()
+        if let pubkey = mentionAliases[lowered],
+           let bytes = NostrKeyUtils.hexToBytes(pubkey), bytes.count == 32 {
+            return NIP19.encodeNpub(bytes)
+        }
+        guard let candidate = followedMentionUsers.first(where: { candidate in
+            let names = [candidate.profile.name, candidate.profile.displayName, candidate.displayName]
+            return names.compactMap { $0?.lowercased() }.contains(lowered)
+        }) else { return nil }
+        return candidate.npub
+    }
+
+    private func extractMentionPTags(from content: String) -> [[String]] {
+        let pattern = #"nostr:(?:npub1|nprofile1)[a-z0-9]+"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [] }
+        let ns = content as NSString
+        var seen = Set<String>()
+        var tags: [[String]] = []
+        for match in regex.matches(in: content, range: NSRange(location: 0, length: ns.length)) {
+            let raw = ns.substring(with: match.range)
+            let bech32 = String(raw.dropFirst("nostr:".count)).lowercased()
+            guard let parsed = NostrBech32.decode(bech32),
+                  (parsed.type == .npub || parsed.type == .nprofile),
+                  seen.insert(parsed.hex).inserted else { continue }
+            tags.append(["p", parsed.hex])
+        }
+        return tags
+    }
+
+    // MARK: - Android-style Toolbar Helpers
+
+    private func toolbarButton<Icon: View>(
+        action: @escaping () -> Void,
+        @ViewBuilder icon: () -> Icon
+    ) -> some View {
+        Button(action: action) { icon() }
+            .buttonStyle(.plain)
+    }
+
+    private func toolbarIcon<Icon: View>(
+        tint: Color,
+        @ViewBuilder icon: () -> Icon
+    ) -> some View {
+        icon()
+            .frame(width: 24, height: 24)
+            .foregroundStyle(tint)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
     }
 
     // MARK: - Hashtag Preview
@@ -384,6 +588,37 @@ struct PostSheet: View {
                         .buttonStyle(.plain)
                         .padding(4)
                     }
+                }
+            }
+        }
+    }
+
+    // MARK: - Custom Emoji Preview
+
+    private var customEmojiPreviewRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(selectedCustomEmojis) { emoji in
+                    HStack(spacing: 4) {
+                        if let url = URL(string: emoji.url) {
+                            AsyncImage(url: url) { phase in
+                                if case .success(let img) = phase {
+                                    img.resizable().scaledToFit()
+                                } else {
+                                    Color.clear
+                                }
+                            }
+                            .frame(width: 18, height: 18)
+                        }
+                        Text(":\(emoji.shortcode):")
+                            .font(.system(size: 11))
+                            .foregroundStyle(theme.textTertiary)
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(theme.bgSecondary)
+                    .clipShape(Capsule())
                 }
             }
         }
@@ -512,6 +747,7 @@ struct PostSheet: View {
             let urls = await uploadService.uploadImages(
                 selectedImages,
                 server: server,
+                blossomBaseUrl: repository.prefs.blossomUploadBaseUrl,
                 onProgress: { current, _ in
                     Task { @MainActor in
                         self.uploadProgress = "画像をアップロード中 (\(current)/\(total))..."
@@ -533,11 +769,24 @@ struct PostSheet: View {
             uploadProgress = ""
         }
 
-        // Build custom emoji tags
-        var emojiTags: [[String]] = []
-        for emoji in selectedCustomEmojis {
-            emojiTags.append(["emoji", emoji.shortcode, emoji.url])
+        // Convert typed mentions before signing:
+        // - @npub1... / @nprofile1... → nostr:...
+        // - @name@domain (NIP-05) → resolve and convert to nostr:npub...
+        // - @username → followed users only (exact profile name/display-name match)
+        content = await normalizeTypedMentions(in: content)
+        guard content.count <= UI.postMaxLength else {
+            errorMessage = "メンション展開後の投稿は\(UI.postMaxLength)文字以内で入力してください"
+            isPosting = false
+            return
         }
+
+        // Build custom emoji + mention tags.
+        // NIP-27 profile mentions are written as nostr:npub... in content and p tags in the event.
+        var customTags: [[String]] = []
+        for emoji in selectedCustomEmojis {
+            customTags.append(["emoji", emoji.shortcode, emoji.url])
+        }
+        customTags.append(contentsOf: extractMentionPTags(from: content))
 
         // targetRelays: nil = broadcast to all, non-nil = specific relays only
         let targetRelayList: [String]? = selectedRelays.count != allRelays.count
@@ -548,7 +797,7 @@ struct PostSheet: View {
                 content:        content,
                 replyToId:      replyToId,
                 contentWarning: showCWInput && !contentWarning.isEmpty ? contentWarning : nil,
-                customTags:     emojiTags,
+                customTags:     customTags,
                 targetRelays:   targetRelayList,
                 nip70Protected: nip70Protected
             )
@@ -558,4 +807,27 @@ struct PostSheet: View {
         }
         isPosting = false
     }
+}
+
+
+private struct MentionCandidate: Identifiable {
+    let profile: UserProfile
+    var id: String { profile.pubkey }
+
+    var displayName: String { profile.displayedName }
+
+    var npub: String? {
+        guard let bytes = NostrKeyUtils.hexToBytes(profile.pubkey), bytes.count == 32 else { return nil }
+        return NIP19.encodeNpub(bytes)
+    }
+
+    var searchKeys: [String] {
+        [profile.displayName, profile.name, profile.nip05]
+            .compactMap { $0?.lowercased() }
+            .filter { !$0.isEmpty }
+    }
+}
+
+private func formatPostSheetNip05(_ nip05: String) -> String {
+    nip05.hasPrefix("_@") ? String(nip05.dropFirst(2)) : nip05
 }

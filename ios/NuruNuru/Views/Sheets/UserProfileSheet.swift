@@ -19,6 +19,7 @@ struct UserProfileSheet: View {
     @State private var showMenu       = false
     @State private var postToDelete:  String? = nil
     @State private var showDeleteConfirm      = false
+    @State private var showMentionPostSheet   = false
 
     init(pubkey: String, myPubkeyHex: String, repository: NostrRepository, onStartDM: ((String) -> Void)? = nil) {
         self.pubkey      = pubkey
@@ -31,20 +32,21 @@ struct UserProfileSheet: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            // ── Top bar ─────────────────────────────────────────────────
+        ZStack(alignment: .bottomTrailing) {
+            VStack(spacing: 0) {
+                // ── Top bar ─────────────────────────────────────────────────
             topBar
 
-            // ── Search bar ───────────────────────────────────────────────
-            if showSearch {
+                // ── Search bar ───────────────────────────────────────────────
+                if showSearch {
                 searchBar
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
 
-            Divider().background(theme.borderColor)
+                Divider().background(theme.borderColor)
 
-            // ── Content ─────────────────────────────────────────────────
-            ScrollView {
+                // ── Content ─────────────────────────────────────────────────
+                ScrollView {
                 LazyVStack(spacing: 0) {
                     ProfileHeader(
                         profile:          vm.profile,
@@ -118,6 +120,21 @@ struct UserProfileSheet: View {
                         }
                     }
             )
+            }
+
+            Button { showMentionPostSheet = true } label: {
+                Image(systemName: NuruIcons.compose)
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 56, height: 56)
+                    .background(NuruColors.lineGreen)
+                    .clipShape(Circle())
+                    .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, NuruSpacing.space4)
+            .padding(.bottom, NuruSpacing.space4)
+            .zIndex(10)
         }
         .background(theme.bgPrimary.ignoresSafeArea())
         .task { await vm.loadProfile() }
@@ -128,16 +145,32 @@ struct UserProfileSheet: View {
             }
             Button("キャンセル", role: .cancel) {}
         }
+        .sheet(isPresented: $showMentionPostSheet) {
+            PostSheet(
+                repository:  repository,
+                myPubkeyHex: myPubkeyHex,
+                myProfile:   repository.getCachedProfile(pubkey: myPubkeyHex),
+                initialMentionProfile: vm.profile ?? UserProfile(pubkey: pubkey),
+                onDismiss:   { showMentionPostSheet = false },
+                onSuccess:   {
+                    showMentionPostSheet = false
+                    Task { await vm.refresh() }
+                }
+            )
+            .presentationDetents([.medium, .large])
+        }
         .sheet(isPresented: $showFollowList) {
             FollowListSheet(
                 pubkeys:      vm.followList,
                 profiles:     [:],
+                repository:   repository,
                 onDismiss:    { showFollowList = false },
                 onUnfollow:   { _ in showFollowList = false },
                 onProfileTap: { _ in showFollowList = false }
             )
         }
     }
+
 
     // MARK: - Top Bar
 

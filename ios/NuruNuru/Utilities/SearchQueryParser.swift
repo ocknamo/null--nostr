@@ -63,7 +63,7 @@ enum SearchQueryParser {
     // MARK: Regex patterns
 
     private static let exactRegex   = try! NSRegularExpression(pattern: #""([^"]+)""#)
-    private static let hashtagRegex = try! NSRegularExpression(pattern: #"(?<!\S)#(\w+)"#)
+    private static let hashtagRegex = try! NSRegularExpression(pattern: #"(?<!\S)#([\p{L}\p{N}_]+)"#)
     private static let fromRegex    = try! NSRegularExpression(pattern: #"from:(\S+)"#)
     private static let sinceRegex   = try! NSRegularExpression(pattern: #"since:(\d{4}-\d{2}-\d{2})"#)
     private static let untilRegex   = try! NSRegularExpression(pattern: #"until:(\d{4}-\d{2}-\d{2})"#)

@@ -737,6 +737,7 @@
 				DEVELOPMENT_TEAM = 66G7S3P755;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = NuruNuru/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "ぬるぬる";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -882,6 +883,7 @@
 				DEVELOPMENT_TEAM = 66G7S3P755;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = NuruNuru/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "ぬるぬる";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (

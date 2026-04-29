@@ -34,7 +34,7 @@ enum UploadServer: String, CaseIterable, Identifiable, Codable {
 enum ImageUploadError: LocalizedError {
     case compressionFailed
     case invalidUrl(String)
-    case httpError(Int)
+    case httpError(Int, String? = nil)
     case noUrl
     case timeout
     case signingFailed
@@ -43,7 +43,9 @@ enum ImageUploadError: LocalizedError {
         switch self {
         case .compressionFailed:    return "画像の圧縮に失敗しました"
         case .invalidUrl(let u):    return "不正なURL: \(u)"
-        case .httpError(let code):  return "サーバーエラー (HTTP \(code))"
+        case .httpError(let code, let message):
+            if let message, !message.isEmpty { return "サーバーエラー (HTTP \(code)): \(message)" }
+            return "サーバーエラー (HTTP \(code))"
         case .noUrl:                return "アップロードURLを取得できませんでした"
         case .timeout:              return "アップロードがタイムアウトしました"
         case .signingFailed:        return "NIP-98 認証に失敗しました"
@@ -133,7 +135,7 @@ struct ImageUploadService {
 
         let (resp, http) = try await urlSession.data(for: request)
         let code = (http as? HTTPURLResponse)?.statusCode ?? 0
-        guard (200..<300).contains(code) else { throw ImageUploadError.httpError(code) }
+        guard (200..<300).contains(code) else { throw ImageUploadError.httpError(code, responseMessage(resp)) }
 
         // nostr.build V2 レスポンス: {"status":"success","data":[{"url":"..."}]}
         struct V2: Decodable {
@@ -142,9 +144,11 @@ struct ImageUploadService {
             let data:   [Item]?
             let url:    String?          // fallback
         }
-        let decoded = try JSONDecoder().decode(V2.self, from: resp)
-        if let u = decoded.data?.first?.url { return u }
-        if let u = decoded.url { return u }
+        if let decoded = try? JSONDecoder().decode(V2.self, from: resp) {
+            if let u = decoded.data?.first?.url { return u }
+            if let u = decoded.url { return u }
+        }
+        if let u = extractFirstHttpUrl(from: resp) { return u }
         throw ImageUploadError.noUrl
     }
 
@@ -159,17 +163,19 @@ struct ImageUploadService {
 
         let (resp, http) = try await urlSession.data(for: request)
         let code = (http as? HTTPURLResponse)?.statusCode ?? 0
-        guard (200..<300).contains(code) else { throw ImageUploadError.httpError(code) }
+        guard (200..<300).contains(code) else { throw ImageUploadError.httpError(code, responseMessage(resp)) }
 
         // NIP-94 互換レスポンス
         struct R: Decodable {
             struct Nip94: Decodable { let tags: [[String]] }
             let status: String?; let nip94_event: Nip94?; let url: String?
         }
-        let decoded = try JSONDecoder().decode(R.self, from: resp)
-        if let u = decoded.url { return u }
-        if let u = decoded.nip94_event?.tags
-            .first(where: { $0.first == "url" })?[safe: 1] { return u }
+        if let decoded = try? JSONDecoder().decode(R.self, from: resp) {
+            if let u = decoded.url { return u }
+            if let u = decoded.nip94_event?.tags
+                .first(where: { $0.first == "url" })?[safe: 1] { return u }
+        }
+        if let u = extractFirstHttpUrl(from: resp) { return u }
         throw ImageUploadError.noUrl
     }
 
@@ -188,14 +194,18 @@ struct ImageUploadService {
         request.setValue(mimeType, forHTTPHeaderField: "Content-Type")
         request.httpBody   = data
         request.timeoutInterval = timeoutInterval
-        try addNip98Auth(to: &request, url: endpoint, method: "PUT")
+        try addBlossomAuth(to: &request, data: data)
 
         let (resp, http) = try await urlSession.data(for: request)
         let code = (http as? HTTPURLResponse)?.statusCode ?? 0
-        guard (200..<300).contains(code) else { throw ImageUploadError.httpError(code) }
+        guard (200..<300).contains(code) else {
+            AppLogger.log("Upload", "Blossom upload failed: HTTP \(code) \(responseMessage(resp) ?? "")")
+            throw ImageUploadError.httpError(code, responseMessage(resp))
+        }
 
         struct R: Decodable { let url: String? }
         if let u = (try? JSONDecoder().decode(R.self, from: resp))?.url { return u }
+        if let u = extractFirstHttpUrl(from: resp) { return u }
         throw ImageUploadError.noUrl
     }
 
@@ -205,25 +215,60 @@ struct ImageUploadService {
     /// Android: `requestBuilder.addHeader("Authorization", "Nostr $authHeader")` に対応。
     private func addNip98Auth(to request: inout URLRequest, url: String, method: String) throws {
         guard let signer else { return }   // 認証なしの場合はスキップ
-        guard let event = try? signer.signEvent(
-            kind:    27235,
-            tags:    [["u", url], ["method", method]],
-            content: ""
-        ) else { throw ImageUploadError.signingFailed }
+        // nostr.build / yabu.me は Android 実装と同じく payload タグなしの NIP-98 を使う。
+        // multipart body の hash を payload に入れるとサーバー側実装によって 401 になるため付与しない。
+        let authTags = [["u", url], ["method", method]]
+        let event = try signUploadAuthEvent(kind: 27235, tags: authTags, content: "")
+        request.setValue("Nostr \(base64EventJson(event))", forHTTPHeaderField: "Authorization")
+    }
 
-        // NIP-98 サーバーは NIP-01 準拠の JSON フィールド順序を期待する。
-        // JSONEncoder はキーをアルファベット順にするため、手動で正しい順序の JSON を構築する。
-        // Android: Rust FFI の .asJson() が同じ順序を保証している。
+    /// Blossom は Android と同じ BUD-03/Blossom 認証（kind 24242）を使う。
+    /// NIP-98(kind 27235) では blossom.nostr.build が拒否するケースがある。
+    private func addBlossomAuth(to request: inout URLRequest, data: Data) throws {
+        guard signer != nil else { return }
+        let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let expiration = String(Int64(Date().timeIntervalSince1970) + 300)
+        let tags = [
+            ["t", "upload"],
+            ["x", hash],
+            ["expiration", expiration]
+        ]
+        let event = try signUploadAuthEvent(kind: 24242, tags: tags, content: "Upload to Blossom")
+        request.setValue("Nostr \(base64EventJson(event))", forHTTPHeaderField: "Authorization")
+    }
+
+    private func signUploadAuthEvent(kind: Int, tags: [[String]], content: String) throws -> NostrEvent {
+        guard let signer else { throw ImageUploadError.signingFailed }
+        guard let event = try? signer.signEvent(kind: kind, tags: tags, content: content) else {
+            throw ImageUploadError.signingFailed
+        }
+        return event
+    }
+
+    private func base64EventJson(_ event: NostrEvent) -> String {
+        // NIP-01 準拠の JSON フィールド順序で1行 JSON を構築する。
         let tagsJson = "[" + event.tags.map { tag in
             "[" + tag.map { "\"\($0.nip98Escaped)\"" }.joined(separator: ",") + "]"
         }.joined(separator: ",") + "]"
-
-        // 重要: 改行やインデントを含めないように1行で構築する
         let jsonString = "{\"id\":\"\(event.id)\",\"pubkey\":\"\(event.pubkey)\",\"created_at\":\(event.createdAt),\"kind\":\(event.kind),\"tags\":\(tagsJson),\"content\":\"\(event.content.nip98Escaped)\",\"sig\":\"\(event.sig)\"}"
+        return Data(jsonString.utf8).base64EncodedString()
+    }
 
-        guard let jsonData = jsonString.data(using: .utf8) else { throw ImageUploadError.signingFailed }
-        let b64 = jsonData.base64EncodedString()
-        request.setValue("Nostr \(b64)", forHTTPHeaderField: "Authorization")
+    // MARK: - Response Helpers
+
+    private func responseMessage(_ data: Data) -> String? {
+        guard let text = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+        return String(text.prefix(160))
+    }
+
+    private func extractFirstHttpUrl(from data: Data) -> String? {
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+        let pattern = #"https?://[^\s\"'<>]+"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
+        let ns = text as NSString
+        guard let match = regex.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)) else { return nil }
+        return ns.substring(with: match.range)
     }
 
     // MARK: - Multipart Builder

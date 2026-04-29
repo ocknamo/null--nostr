@@ -99,7 +99,7 @@ extension NostrRepository {
         content:       String,
         contextType:   String,
         sourceUrl:     String? = nil
-    ) async throws {
+    ) async throws -> NostrEvent {
         var tags: [[String]] = [
             ["e", targetEventId],
             ["L", "social.birdwatch"],
@@ -115,7 +115,7 @@ extension NostrRepository {
         } else {
             fullContent = content
         }
-        try await publishEvent(kind: NostrKind.label, tags: tags, content: fullContent)
+        return try await publishEventAndReturnSigned(kind: NostrKind.label, tags: tags, content: fullContent)
     }
 
     /// 指定イベント ID 群に付与された Birdwatch ラベル (Kind 1985) を取得する。
@@ -136,8 +136,10 @@ extension NostrRepository {
 
         var result: [String: [NostrEvent]] = [:]
         for event in events {
-            // Birdwatch ラベルのみ対象 (["L", "birdwatch"] タグが必須)
-            guard event.tags.contains(where: { $0.first == "L" && $0[safe: 1] == "birdwatch" }) else { continue }
+            // Birdwatch ラベルのみ対象。Android/旧実装の "birdwatch" と NIP-32 namespace の "social.birdwatch" の両方を許容。
+            guard event.tags.contains(where: {
+                $0.first == "L" && ($0[safe: 1] == "birdwatch" || $0[safe: 1] == "social.birdwatch")
+            }) else { continue }
             // 対象イベント ID を取得
             guard let targetId = event.tags
                 .first(where: { $0.first == "e" && eventIds.contains($0[safe: 1] ?? "") })?[safe: 1]

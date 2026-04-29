@@ -19,6 +19,7 @@ struct LongFormPostItem: View {
     @State private var showReader        = false
     @State private var showBirdwatch     = false
     @State private var showReport        = false
+    @State private var fetchedBirdwatchNotes: [NostrEvent] = []
 
     @Environment(\.nuruTheme) private var theme
 
@@ -26,6 +27,10 @@ struct LongFormPostItem: View {
     private var image:   String? { post.event.getTagValue("image") }
     private var summary: String  {
         post.event.getTagValue("summary") ?? String(post.event.content.prefix(200))
+    }
+
+    private var effectiveBirdwatchNotes: [NostrEvent] {
+        birdwatchNotes.isEmpty ? fetchedBirdwatchNotes : birdwatchNotes
     }
 
     var body: some View {
@@ -48,7 +53,8 @@ struct LongFormPostItem: View {
                         repository:   repository,
                         onDelete:     onDelete,
                         onMute:       onMute,
-                        onReport:     onReport != nil ? { showReport = true } : nil
+                        onReport:     onReport != nil ? { showReport = true } : nil,
+                        onBirdwatch:  (onBirdwatch != nil || repository != nil) ? { showBirdwatch = true } : nil
                     )
 
                     Spacer().frame(height: 8)
@@ -76,9 +82,9 @@ struct LongFormPostItem: View {
 
                     Spacer().frame(height: 12)
 
-                    if !birdwatchNotes.isEmpty {
+                    if !effectiveBirdwatchNotes.isEmpty {
                         BirdwatchDisplay(
-                            notes:         birdwatchNotes,
+                            notes:         effectiveBirdwatchNotes,
                             onAuthorClick: onProfileTap
                         )
                         Spacer().frame(height: 8)
@@ -116,6 +122,11 @@ struct LongFormPostItem: View {
                 }
             }
         }
+        .task(id: post.event.id) {
+            guard let repo = repository, birdwatchNotes.isEmpty else { return }
+            let result = await repo.fetchBirdwatchNotes(eventIds: [post.event.id])
+            fetchedBirdwatchNotes = result[post.event.id] ?? []
+        }
         .fullScreenCover(isPresented: $showReader) {
             ArticleReaderView(
                 post:        post,
@@ -130,11 +141,25 @@ struct LongFormPostItem: View {
                 onDismiss: { showBirdwatch = false },
                 onSubmit: { type, content, url in
                     showBirdwatch = false
-                    onBirdwatch?(type, content, url)
+                    if let repo = repository {
+                        Task {
+                            if let signed = try? await repo.publishBirdwatchNote(
+                                targetEventId: post.event.id,
+                                content:       content,
+                                contextType:   type,
+                                sourceUrl:     url.isEmpty ? nil : url
+                            ) {
+                                fetchedBirdwatchNotes.append(signed)
+                            }
+                        }
+                    } else {
+                        onBirdwatch?(type, content, url)
+                    }
                 },
-                existingNotes: birdwatchNotes
+                existingNotes: effectiveBirdwatchNotes
             )
-            .presentationDetents([.medium, .large])
+            .presentationDetents([.large])
+            .interactiveDismissDisabled(true)
         }
         .sheet(isPresented: $showReport) {
             ReportSheet(

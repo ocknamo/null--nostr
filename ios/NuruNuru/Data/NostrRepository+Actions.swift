@@ -108,12 +108,18 @@ extension NostrRepository {
     }
 
     /// リポストを発行する (kind 6, NIP-18)。
-    func publishRepost(event: NostrEvent) async throws {
+    @discardableResult
+    func publishRepostAndReturn(event: NostrEvent) async throws -> NostrEvent {
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
         let eventJSON = (try? encoder.encode(event)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
         let tags: [[String]] = [["e", event.id], ["p", event.pubkey]]
-        try await publishEvent(kind: NostrKind.repost, tags: tags, content: eventJSON)
+        return try await publishEventAndReturnSigned(kind: NostrKind.repost, tags: tags, content: eventJSON)
+    }
+
+    /// リポストを発行する (kind 6, NIP-18)。
+    func publishRepost(event: NostrEvent) async throws {
+        _ = try await publishRepostAndReturn(event: event)
     }
 
     // MARK: - Mute List (Kind 10000, NIP-51)

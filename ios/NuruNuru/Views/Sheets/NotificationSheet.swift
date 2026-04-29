@@ -15,8 +15,12 @@ struct NotificationSheet: View {
     @State private var notifications: [NotificationItem] = []
     @State private var profiles:      [String: UserProfile] = [:]
     @State private var originalPosts: [String: NostrEvent] = [:]
+    @State private var originalPostLoadingIds: Set<String> = []
+    @State private var originalPostFailedIds: Set<String> = []
     @State private var isLoading:     Bool = true
     @State private var isRefreshing:  Bool = false
+    @State private var selectedPostTarget: NotificationPostTarget? = nil
+    @State private var expandedPreviewPost: NotificationPreviewPost? = nil
 
     // ライブポーリング + 新着Pill (Android LaunchedEffect while(true) { delay(10_000) } 相当)
     @State private var pendingNew:   [NotificationItem] = []
@@ -26,6 +30,7 @@ struct NotificationSheet: View {
     @State private var showKindSettings: Bool = false
     @State private var enabledKinds:     Set<Int> = []
     @State private var emojiReactionEnabled: Bool = true
+    @State private var senderScope: NotificationSenderScope = .all
 
     var body: some View {
         VStack(spacing: 0) {
@@ -33,7 +38,8 @@ struct NotificationSheet: View {
 
             if isLoading {
                 Spacer()
-                ProgressView().tint(NuruColors.lineGreen)
+                SoftRefreshIndicator(title: "通知を読み込み中")
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
                 Spacer()
             } else if notifications.isEmpty && pendingNew.isEmpty {
                 Spacer()
@@ -59,11 +65,19 @@ struct NotificationSheet: View {
                         isRefreshing = false
                     }
 
+                    if isRefreshing {
+                        SoftRefreshIndicator(title: "更新中", compact: true)
+                            .padding(.top, NuruSpacing.space3)
+                            .transition(.move(edge: .top).combined(with: .opacity).combined(with: .scale(scale: 0.96)))
+                            .zIndex(2)
+                    }
+
                     // 新着Pill (Android AnimatedVisibility + 「新着 N 件」 相当)
                     if !pendingNew.isEmpty {
                         newNotificationPill
-                            .padding(.top, NuruSpacing.space3)
-                            .transition(.move(edge: .top).combined(with: .opacity))
+                            .padding(.top, isRefreshing ? 62 : NuruSpacing.space3)
+                            .transition(.move(edge: .top).combined(with: .opacity).combined(with: .scale(scale: 0.96)))
+                            .zIndex(1)
                     }
                 }
             }
@@ -73,6 +87,7 @@ struct NotificationSheet: View {
             // 初期設定読み込み
             enabledKinds = prefs.notificationEnabledKinds
             emojiReactionEnabled = prefs.notificationEmojiReactionEnabled
+            senderScope = prefs.notificationSenderScope
 
             await loadNotifications()
 
@@ -85,15 +100,15 @@ struct NotificationSheet: View {
                         pubkey: myPubkeyHex, skipCache: true
                     )
                     let existingIds = Set(notifications.map(\.id) + pendingNew.map(\.id))
-                    let newItems = fresh.items.filter { !existingIds.contains($0.id) }
+                    let latestVisibleCreatedAt = (notifications + pendingNew).map(\.createdAt).max() ?? 0
+                    // 遅れてリレーから返ってきた古い通知は「新着」として上に積まない。
+                    // 新着Pill は現在表示中の最新時刻より新しいものだけに限定する。
+                    let newItems = fresh.items.filter {
+                        !existingIds.contains($0.id) && $0.createdAt > latestVisibleCreatedAt
+                    }
                     if !newItems.isEmpty {
                         await MainActor.run {
-                            pendingNew = (newItems + pendingNew)
-                                .reduce(into: [NotificationItem]()) { result, item in
-                                    if !result.contains(where: { $0.id == item.id }) {
-                                        result.append(item)
-                                    }
-                                }
+                            pendingNew = dedupAndSortNotifications(newItems + pendingNew)
                             // プロフィール・元投稿も更新
                             profiles.merge(fresh.profiles) { _, new in new }
                             originalPosts.merge(fresh.originalPosts) { _, new in new }
@@ -107,12 +122,38 @@ struct NotificationSheet: View {
             NotificationKindSettingsSheet(
                 enabledKinds: $enabledKinds,
                 emojiReactionEnabled: $emojiReactionEnabled,
+                senderScope: $senderScope,
                 onSave: {
                     prefs.notificationEnabledKinds = enabledKinds
                     prefs.notificationEmojiReactionEnabled = emojiReactionEnabled
+                    prefs.notificationSenderScope = senderScope
+                    pendingNew = []
+                    Task { await loadNotifications(skipCache: true) }
                 }
             )
-            .presentationDetents([.medium])
+            .presentationDetents([.large])
+        }
+        .sheet(item: $selectedPostTarget) { target in
+            NavigationStack {
+                if let event = target.initialEvent {
+                    // 通知から開く投稿詳細は全種別で同じ表示に統一する。
+                    // `showsInlineCloseButton` はスクロール本文内に「閉じる」を置くため、
+                    // 種別によって位置が下がって見える。通知では通常のナビゲーションバーの
+                    // 「閉じる」に統一し、返信通知と同じ表示にする。
+                    PostDetailView(
+                        post: ScoredPost(event: event),
+                        repository: repository,
+                        myPubkeyHex: myPubkeyHex,
+                        showsInlineCloseButton: false
+                    )
+                } else {
+                    PostDetailView(
+                        eventId: target.eventId,
+                        repository: repository,
+                        myPubkeyHex: myPubkeyHex
+                    )
+                }
+            }
         }
     }
 
@@ -197,12 +238,7 @@ struct NotificationSheet: View {
     private var newNotificationPill: some View {
         Button {
             withAnimation(.spring(response: 0.3)) {
-                notifications = (pendingNew + notifications)
-                    .reduce(into: [NotificationItem]()) { result, item in
-                        if !result.contains(where: { $0.id == item.id }) {
-                            result.append(item)
-                        }
-                    }
+                notifications = dedupAndSortNotifications(pendingNew + notifications)
                 pendingNew = []
             }
         } label: {
@@ -248,8 +284,16 @@ struct NotificationSheet: View {
             }
             .padding(.horizontal, NuruSpacing.space4)
             .padding(.vertical, 10)
-            .background(Capsule().fill(NuruColors.lineGreen))
-            .shadow(color: .black.opacity(0.15), radius: 8, y: 4)
+            .background(
+                Capsule()
+                    .fill(LinearGradient(
+                        colors: [NuruColors.lineGreen, NuruColors.lineGreenDark],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ))
+            )
+            .overlay(Capsule().stroke(Color.white.opacity(0.14), lineWidth: 1))
+            .shadow(color: NuruColors.lineGreen.opacity(0.22), radius: 14, x: 0, y: 7)
         }
         .buttonStyle(.plain)
     }
@@ -261,10 +305,7 @@ struct NotificationSheet: View {
         let style = notifStyle(for: notif.type)
         let profile = profiles[notif.pubkey]
 
-        Button {
-            onProfileTap(notif.pubkey)
-        } label: {
-            HStack(alignment: .top, spacing: NuruSpacing.space3) {
+        HStack(alignment: .top, spacing: NuruSpacing.space3) {
                 // Avatar + type badge (Android: Box with avatar + BottomEnd badge)
                 ZStack(alignment: .bottomTrailing) {
                     avatarView(profile: profile, size: 46)
@@ -283,6 +324,10 @@ struct NotificationSheet: View {
                                 }
                             }
                             .frame(width: 13, height: 13)
+                        } else if notif.type == "repost" {
+                            RepostIcon()
+                                .frame(width: 12, height: 12)
+                                .foregroundStyle(.white)
                         } else {
                             Image(systemName: style.icon)
                                 .font(.system(size: 9, weight: .bold))
@@ -297,7 +342,7 @@ struct NotificationSheet: View {
                 VStack(alignment: .leading, spacing: 3) {
                     // 名前 + 相対時刻
                     HStack(spacing: 4) {
-                        Text(profile?.displayedName ?? shortenPubkey(notif.pubkey))
+                        Text(wrapLongNotificationText(profile?.displayedName ?? shortenPubkey(notif.pubkey), chunkSize: 14))
                             .font(NuruFont.bodyMedium())
                             .fontWeight(.semibold)
                             .foregroundStyle(theme.textPrimary)
@@ -311,54 +356,100 @@ struct NotificationSheet: View {
                     // アクション説明 (Android NotificationRow 各タイプ分岐に対応)
                     actionView(for: notif, style: style)
 
-                    // コメント表示
-                    if let comment = notif.comment, !comment.isEmpty,
+                    // コメント表示（nostr参照・URL・カスタム絵文字を読み込んで表示）
+                    if let commentEvent = notificationCommentEvent(for: notif),
                        notif.type != "reaction" && notif.type != "emoji_reaction" {
-                        Text(comment)
-                            .font(NuruFont.bodySmall())
-                            .foregroundStyle(
-                                notif.type == "reply" || notif.type == "mention"
-                                    ? theme.textPrimary.opacity(0.85)
-                                    : theme.textSecondary
-                            )
-                            .lineLimit(notif.type == "reply" || notif.type == "mention" ? 3 : 2)
-                            .padding(.top, 3)
+                        NotificationContentPreview(
+                            event: commentEvent,
+                            repository: repository,
+                            onProfileTap: onProfileTap,
+                            onPostTap: { eventId in selectedPostTarget = NotificationPostTarget(eventId: eventId, initialEvent: originalPosts[eventId]) },
+                            compact: true
+                        )
+                        .padding(.top, 3)
                     }
 
                     // 元投稿プレビュー (Android: originalPost preview card)
                     if let targetId = notif.targetEventId,
-                       let original = originalPosts[targetId],
-                       ["reaction", "emoji_reaction", "repost", "zap"].contains(notif.type) {
-                        let previewText = removeImageUrls(original.content)
-                            .prefix(100)
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !previewText.isEmpty {
-                            HStack(spacing: 8) {
-                                RoundedRectangle(cornerRadius: 2)
-                                    .fill(NuruColors.lineGreen)
-                                    .frame(width: 3, height: 36)
-                                Text(previewText)
-                                    .font(NuruFont.labelSmall())
-                                    .foregroundStyle(theme.textSecondary)
-                                    .lineLimit(2)
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .background(
-                                RoundedRectangle(cornerRadius: 10)
-                                    .fill(theme.bgSecondary)
+                       ["reaction", "emoji_reaction", "repost", "zap", "quote"].contains(notif.type) {
+                        if let original = originalPosts[targetId] {
+                            NotificationOriginalPostPreview(
+                                event: original,
+                                repository: repository,
+                                onProfileTap: onProfileTap,
+                                onPostTap: { eventId in selectedPostTarget = NotificationPostTarget(eventId: eventId, initialEvent: originalPosts[eventId]) },
+                                onOpen: { selectedPostTarget = NotificationPostTarget(eventId: targetId, initialEvent: original) }
                             )
                             .padding(.top, 8)
+                        } else {
+                            NotificationOriginalPostPlaceholder(
+                                isLoading: originalPostLoadingIds.contains(targetId),
+                                didFail: originalPostFailedIds.contains(targetId),
+                                onRetry: { Task { await loadOriginalPostIfNeeded(targetId, force: true) } }
+                            )
+                            .padding(.top, 8)
+                            .task(id: targetId) { await loadOriginalPostIfNeeded(targetId) }
                         }
                     }
                 }
 
                 Spacer(minLength: 0)
-            }
-            .padding(.horizontal, NuruSpacing.space4)
-            .padding(.vertical, 14)
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, NuruSpacing.space4)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            openNotificationTarget(notif)
+        }
+    }
+
+    private func openNotificationTarget(_ notif: NotificationItem) {
+        if let eventId = postTargetEventId(for: notif) {
+            selectedPostTarget = NotificationPostTarget(
+                eventId: eventId,
+                initialEvent: originalPosts[eventId]
+            )
+        } else {
+            onProfileTap(notif.pubkey)
+        }
+    }
+
+    @MainActor
+    private func loadOriginalPostIfNeeded(_ eventId: String, force: Bool = false) async {
+        if originalPosts[eventId] != nil { return }
+        if originalPostLoadingIds.contains(eventId) { return }
+        if originalPostFailedIds.contains(eventId) && !force { return }
+
+        originalPostLoadingIds.insert(eventId)
+        if force { originalPostFailedIds.remove(eventId) }
+
+        let event = await repository.fetchEvent(eventId: eventId)
+        if let event {
+            originalPosts[eventId] = event
+            originalPostFailedIds.remove(eventId)
+        } else {
+            originalPostFailedIds.insert(eventId)
+        }
+        originalPostLoadingIds.remove(eventId)
+    }
+
+    private func postTargetEventId(for notif: NotificationItem) -> String? {
+        switch notif.type {
+        case "reply", "mention", "quote":
+            // 返信・メンション・引用は「通知を発生させた投稿」へ遷移する。
+            return notif.id
+        case "reaction", "emoji_reaction", "repost", "zap":
+            // リアクション等は対象元投稿へ遷移する。
+            return notif.targetEventId
+        default:
+            return notif.targetEventId
+        }
+    }
+
+    private func notificationCommentEvent(for notif: NotificationItem) -> NostrEvent? {
+        guard let comment = notif.comment, !comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return NostrEvent(id: notif.id + "_comment", pubkey: notif.pubkey, createdAt: notif.createdAt, kind: NostrKind.textNote, tags: [], content: comment, sig: "")
     }
 
     // MARK: - Action View (Android NotificationRow type 分岐)
@@ -422,7 +513,7 @@ struct NotificationSheet: View {
                     .font(NuruFont.bodySmall())
                     .foregroundStyle(theme.textSecondary)
             }
-        case "reply", "mention":
+        case "reply", "mention", "quote", "follow":
             Text(style.label)
                 .font(NuruFont.bodySmall())
                 .foregroundStyle(theme.textSecondary)
@@ -435,14 +526,29 @@ struct NotificationSheet: View {
 
     // MARK: - Load
 
+
+    private func dedupAndSortNotifications(_ items: [NotificationItem]) -> [NotificationItem] {
+        items.reduce(into: [NotificationItem]()) { result, item in
+            if !result.contains(where: { $0.id == item.id }) {
+                result.append(item)
+            }
+        }
+        .sorted { lhs, rhs in
+            if lhs.createdAt == rhs.createdAt { return lhs.id > rhs.id }
+            return lhs.createdAt > rhs.createdAt
+        }
+    }
+
     private func loadNotifications(skipCache: Bool = false) async {
         isLoading = notifications.isEmpty
         let result = await repository.fetchNotificationsWithContext(
             pubkey: myPubkeyHex, skipCache: skipCache
         )
-        notifications = result.items
+        notifications = dedupAndSortNotifications(result.items)
         profiles = result.profiles
         originalPosts = result.originalPosts
+        originalPostFailedIds.subtract(result.originalPosts.keys)
+        originalPostLoadingIds = []
         isLoading = false
     }
 
@@ -466,6 +572,10 @@ struct NotificationSheet: View {
             return .init(icon: "arrowshape.turn.up.left.fill", color: NuruColors.lineGreen, bg: NuruColors.lineGreen.opacity(0.15), label: "返信")
         case "mention":
             return .init(icon: "at",                  color: NuruColors.colorInfo,     bg: NuruColors.colorInfo.opacity(0.15),     label: "メンション")
+        case "quote":
+            return .init(icon: "quote.opening",       color: NuruColors.lineGreen,     bg: NuruColors.lineGreen.opacity(0.15),     label: "引用")
+        case "follow":
+            return .init(icon: "person.crop.circle.badge.plus", color: NuruColors.lineGreen, bg: NuruColors.lineGreen.opacity(0.15), label: "フォローしました")
         case "badge":
             return .init(icon: "trophy.fill",         color: Color(red: 1, green: 0.843, blue: 0), bg: Color(red: 1, green: 0.843, blue: 0).opacity(0.15), label: "バッジ")
         case "birthday":
@@ -483,6 +593,8 @@ struct NotificationSheet: View {
         case "repost":         return "リポストしました"
         case "reply":          return "返信しました"
         case "mention":        return "メンションしました"
+        case "quote":          return "引用しました"
+        case "follow":         return "フォローしました"
         case "badge":          return "バッジを授与されました"
         case "birthday":       return "お誕生日おめでとうございます!"
         default:               return "通知"
@@ -545,11 +657,249 @@ struct NotificationSheet: View {
     }
 }
 
+private struct NotificationPostTarget: Identifiable {
+    let eventId: String
+    let initialEvent: NostrEvent?
+    var id: String { eventId }
+
+    init(eventId: String, initialEvent: NostrEvent? = nil) {
+        self.eventId = eventId
+        self.initialEvent = initialEvent
+    }
+}
+
+
+private struct NotificationPreviewPost: Identifiable { let event: NostrEvent; var id: String { event.id } }
+
+private struct NotificationOriginalPostPreview: View {
+    let event: NostrEvent
+    let repository: NostrRepository
+    var onProfileTap: (String) -> Void
+    var onPostTap: (String) -> Void
+    var onOpen: () -> Void
+
+    @Environment(\.nuruTheme) private var theme
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(NuruColors.lineGreen)
+                .frame(width: 3)
+            NotificationContentPreview(
+                event: event,
+                repository: repository,
+                onProfileTap: onProfileTap,
+                onPostTap: onPostTap,
+                compact: true
+            )
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 10).fill(theme.bgSecondary))
+        .contentShape(RoundedRectangle(cornerRadius: 10))
+        .onTapGesture { onOpen() }
+    }
+}
+
+private struct NotificationOriginalPostPlaceholder: View {
+    let isLoading: Bool
+    let didFail: Bool
+    var onRetry: () -> Void
+
+    @Environment(\.nuruTheme) private var theme
+
+    var body: some View {
+        Button(action: onRetry) {
+            HStack(spacing: 8) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(NuruColors.lineGreen.opacity(0.65))
+                    .frame(width: 3)
+                if isLoading {
+                    ProgressView()
+                        .scaleEffect(0.65)
+                        .tint(NuruColors.lineGreen)
+                    Text("投稿を読み込み中…")
+                } else if didFail {
+                    Image(systemName: "arrow.clockwise")
+                    Text("投稿を再取得")
+                } else {
+                    ProgressView()
+                        .scaleEffect(0.65)
+                        .tint(NuruColors.lineGreen)
+                    Text("投稿を準備中…")
+                }
+                Spacer(minLength: 0)
+            }
+            .font(NuruFont.labelSmall())
+            .foregroundStyle(theme.textSecondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 10).fill(theme.bgSecondary))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct NotificationContentPreview: View {
+    let event: NostrEvent; let repository: NostrRepository; var onProfileTap: (String) -> Void; var onPostTap: (String) -> Void; var compact: Bool = true
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            NotificationRichText(event: event, repository: repository, onProfileTap: onProfileTap, onPostTap: onPostTap, compact: compact)
+            if !compact {
+                let images = notificationImageUrls(for: event)
+                if !images.isEmpty { PostImageGrid(images: images, authorPubkey: event.pubkey).frame(maxHeight: .infinity).clipped() }
+                if let video = notificationVideoUrl(in: event.content) { VideoPlayer(videoUrl: video).frame(height: 220).clipShape(RoundedRectangle(cornerRadius: NuruSpacing.radiusMd)) }
+            } else {
+                NotificationMediaSummary(event: event)
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct NotificationMediaSummary: View {
+    let event: NostrEvent
+    @Environment(\.nuruTheme) private var theme
+
+    var body: some View {
+        let imageCount = notificationImageUrls(for: event).count
+        let hasVideo = notificationVideoUrl(in: event.content) != nil
+        let hasReference = parseNotificationContent(event.content, emojiTags: event.tags).contains { part in
+            if case .nostr = part { return true }
+            return false
+        }
+        if imageCount > 0 || hasVideo || hasReference {
+            HStack(spacing: 6) {
+                if imageCount > 0 { chip(icon: "photo", text: imageCount == 1 ? "画像" : "画像 \(imageCount)枚") }
+                if hasVideo { chip(icon: "play.rectangle", text: "動画") }
+                if hasReference { chip(icon: "link", text: "参照") }
+            }
+        }
+    }
+
+    private func chip(icon: String, text: String) -> some View {
+        Label(text, systemImage: icon)
+            .font(NuruFont.labelSmall())
+            .foregroundStyle(theme.textSecondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Capsule().fill(theme.bgTertiary.opacity(0.8)))
+    }
+}
+
+private struct NotificationRichText: View {
+    let event: NostrEvent; let repository: NostrRepository; var onProfileTap: (String) -> Void; var onPostTap: (String) -> Void; var compact: Bool
+    @Environment(\.nuruTheme) private var theme
+    @State private var mentionLabels: [String: String] = [:]
+    private var parts: [NotificationContentPart] { parseNotificationContent(event.content, emojiTags: event.tags) }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if compact {
+                Text(notificationCompactText(parts: parts))
+                    .font(NuruFont.bodySmall())
+                    .foregroundStyle(theme.textSecondary)
+                    .lineLimit(4)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                WrappingHStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(parts.enumerated()), id: \.offset) { _, part in partView(part) }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                ForEach(Array(parts.enumerated()), id: \.offset) { _, part in
+                    if case .nostr(let link) = part {
+                        NotificationNostrReferenceCard(link: link, repository: repository, onProfileTap: onProfileTap, onPostTap: onPostTap)
+                    }
+                }
+            }
+        }.task(id: event.id) { if !compact { await resolveMentions() } }
+    }
+    @ViewBuilder private func partView(_ part: NotificationContentPart) -> some View {
+        switch part {
+        case .plain(let text): Text(wrapLongNotificationText(text)).font(NuruFont.labelSmall()).foregroundStyle(theme.textSecondary)
+        case .link(let url): Text(shortUrl(url)).font(NuruFont.labelSmall()).foregroundStyle(NuruColors.lineGreen)
+        case .mention(let bech32): Text(mentionLabels[bech32] ?? "@" + String(bech32.prefix(12)) + "…").font(NuruFont.labelSmall()).foregroundStyle(NuruColors.lineGreen).onTapGesture { if let parsed = NostrBech32.decode(bech32) { onProfileTap(parsed.hex) } }
+        case .nostr: EmptyView()
+        case .emoji(let code, let url): if !compact, let url, let imageUrl = URL(string: url) { CachedAsyncImage(url: imageUrl) { Color.clear.frame(width: 18, height: 18) }.frame(width: 18, height: 18).clipShape(RoundedRectangle(cornerRadius: 2)).padding(.horizontal, 1) } else { Text(code).font(NuruFont.labelSmall()).foregroundStyle(theme.textSecondary) }
+        }
+    }
+    private func resolveMentions() async { var updated = mentionLabels; for part in parts { guard case .mention(let bech32) = part, updated[bech32] == nil, let parsed = NostrBech32.decode(bech32) else { continue }; if let profile = await repository.fetchProfile(pubkey: parsed.hex) { updated[bech32] = "@\(profile.displayedName)" } }; mentionLabels = updated }
+}
+
+private struct NotificationNostrReferenceCard: View {
+    let link: String; let repository: NostrRepository; var onProfileTap: (String) -> Void; var onPostTap: (String) -> Void
+    @Environment(\.nuruTheme) private var theme
+    @State private var event: NostrEvent?; @State private var profile: UserProfile?; @State private var loading = true
+    var body: some View { Group { if let event { Button { onPostTap(event.id) } label: { VStack(alignment: .leading, spacing: 4) { Text(profile?.displayedName ?? event.pubkey.shortenedPubkey).font(NuruFont.labelSmall()).fontWeight(.semibold).foregroundStyle(theme.textPrimary).lineLimit(1); NotificationContentPreview(event: event, repository: repository, onProfileTap: onProfileTap, onPostTap: onPostTap, compact: true) }.padding(8).background(RoundedRectangle(cornerRadius: 10).fill(theme.bgTertiary.opacity(0.35))).overlay(RoundedRectangle(cornerRadius: 10).stroke(theme.borderColor.opacity(0.45), lineWidth: 0.5)) }.buttonStyle(.plain) } else if let profile { Button { onProfileTap(profile.pubkey) } label: { HStack(spacing: 8) { AvatarView(url: profile.picture, name: profile.displayedName, size: 24); Text(profile.displayedName).font(NuruFont.labelSmall()).fontWeight(.semibold).foregroundStyle(theme.textPrimary).lineLimit(1) }.padding(8).background(RoundedRectangle(cornerRadius: 10).fill(theme.bgTertiary.opacity(0.35))) }.buttonStyle(.plain) } else if loading { ProgressView().scaleEffect(0.6) } }.task(id: link) { await load() } }
+    private func load() async { loading = true; let bech32 = normalizedNostrBech32(link); if let parsed = NostrBech32.decode(bech32) { switch parsed.type { case .note, .nevent: event = await repository.fetchEvent(eventId: parsed.hex); if let event { profile = await repository.fetchProfile(pubkey: event.pubkey) }; case .npub, .nprofile: if let p = await repository.fetchProfile(pubkey: parsed.hex) { profile = p } } } else if bech32.hasPrefix("naddr1"), let a = NostrBech32.decodeNaddrToA(bech32) { event = await repository.fetchAddressableEvent(aTag: a); if let event { profile = await repository.fetchProfile(pubkey: event.pubkey) } }; loading = false }
+}
+
+private struct NotificationPreviewDetailView: View {
+    let event: NostrEvent
+    let repository: NostrRepository
+    var onDismiss: () -> Void
+    var onProfileTap: (String) -> Void
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                PostRow(
+                    post: ScoredPost(event: event),
+                    repository: repository,
+                    onProfileTap: onProfileTap
+                )
+            }
+            .navigationTitle("投稿")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarLeading) { Button("閉じる") { onDismiss() } } }
+        }
+    }
+}
+
+private enum NotificationContentPart { case plain(String), link(String), nostr(String), mention(String), emoji(String, String?) }
+private func notificationCompactText(parts: [NotificationContentPart]) -> String {
+    var out = ""
+    for part in parts {
+        switch part {
+        case .plain(let text):
+            out += text
+        case .link(let url):
+            out += shortUrl(url)
+        case .mention(let bech32):
+            out += "@" + String(bech32.prefix(12)) + "…"
+        case .nostr:
+            // 参照は NotificationMediaSummary の「参照」チップで示す。本文には長い bech32 を出さない。
+            if !out.hasSuffix(" ") && !out.isEmpty { out += " " }
+        case .emoji(let code, _):
+            out += code
+        }
+    }
+    let normalized = out.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    return wrapLongNotificationText(normalized.isEmpty ? " " : normalized, chunkSize: 14)
+}
+private func parseNotificationContent(_ text: String, emojiTags: [[String]]) -> [NotificationContentPart] {
+    let emojiMap: [String: String] = emojiTags.filter { $0.first == "emoji" && $0.count >= 3 }.reduce(into: [:]) { $0[$1[1]] = $1[2] }
+    let pattern = #"(nostr:(?:note1|nevent1|npub1|nprofile1|naddr1)[a-z0-9]+|(?<!nostr:)(?:note1|nevent1)[a-z0-9]+|https?://[^\s]+|#[\p{L}\p{N}_]+|:[A-Za-z0-9_+\-]+:)"#
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [.plain(text)] }
+    let ns = text as NSString; let matches = regex.matches(in: text, range: NSRange(location: 0, length: ns.length)); var parts: [NotificationContentPart] = []; var last = 0
+    for m in matches { if m.range.location > last { parts.append(.plain(ns.substring(with: NSRange(location: last, length: m.range.location - last)))) }; let value = ns.substring(with: m.range); if value.hasPrefix("http") { if !notificationIsMediaUrl(value) { parts.append(.link(value)) } } else if value.hasPrefix("#") { parts.append(.plain(value)) } else if value.hasPrefix(":") { let code = String(value.dropFirst().dropLast()); parts.append(.emoji(value, emojiMap[code])) } else { let b = normalizedNostrBech32(value); if b.hasPrefix("npub1") || b.hasPrefix("nprofile1") { parts.append(.mention(b)) } else { parts.append(.nostr(value)) } }; last = m.range.location + m.range.length }
+    if last < ns.length { parts.append(.plain(ns.substring(from: last))) }
+    return parts.filter { if case .plain(let s) = $0 { return !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }; return true }
+}
+private func normalizedNostrBech32(_ raw: String) -> String { raw.hasPrefix("nostr:") ? String(raw.dropFirst("nostr:".count)) : raw }
+private func notificationImageUrls(for event: NostrEvent) -> [String] { var seen = Set<String>(); var out: [String] = []; for u in extractPostImages(event.content) + event.extractImetaUrls() { let t = u.trimmingCharacters(in: .whitespacesAndNewlines); if seen.insert(t).inserted { out.append(t) } }; return out }
+private func notificationVideoUrl(in content: String) -> String? { let ns = content as NSString; guard let regex = try? NSRegularExpression(pattern: #"https?://[^\s]+\.(?:mp4|mov|webm|m3u8)(?:\?[^\s]*)?"#, options: [.caseInsensitive]), let m = regex.firstMatch(in: content, range: NSRange(location: 0, length: ns.length)) else { return nil }; return ns.substring(with: m.range) }
+private func notificationIsMediaUrl(_ url: String) -> Bool { if notificationVideoUrl(in: url) != nil { return true }; return !extractPostImages(url).isEmpty }
+private func shortUrl(_ url: String) -> String { url.count > 40 ? String(url.prefix(40)) + "…" : url }
+
 // MARK: - NotificationKindSettingsSheet (Android AlertDialog 相当)
 
 private struct NotificationKindSettingsSheet: View {
     @Binding var enabledKinds: Set<Int>
     @Binding var emojiReactionEnabled: Bool
+    @Binding var senderScope: NotificationSenderScope
     var onSave: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -563,7 +913,21 @@ private struct NotificationKindSettingsSheet: View {
                 kindToggle(label: "Zap", kind: NostrKind.zapReceipt)
                 kindToggle(label: "リポスト", kind: NostrKind.repost)
                 kindToggle(label: "返信・メンション", kind: NostrKind.textNote)
+                kindToggle(label: "フォロー", kind: NostrKind.contactList)
                 kindToggle(label: "バッジ", kind: NostrKind.badgeAward)
+
+                Section("表示する送信者") {
+                    Picker("範囲", selection: $senderScope) {
+                        ForEach(NotificationSenderScope.allCases) { scope in
+                            Text(scope.label).tag(scope)
+                        }
+                    }
+                    .pickerStyle(.inline)
+
+                    Text(senderScope.description)
+                        .font(NuruFont.labelSmall())
+                        .foregroundStyle(theme.textSecondary)
+                }
             }
             .listStyle(.insetGrouped)
             .navigationTitle("通知の種類")
@@ -596,4 +960,17 @@ private struct NotificationKindSettingsSheet: View {
         Toggle("絵文字リアクション", isOn: $emojiReactionEnabled)
             .tint(NuruColors.lineGreen)
     }
+}
+
+private func wrapLongNotificationText(_ text: String, chunkSize: Int = 18) -> String {
+    text.split(separator: " ", omittingEmptySubsequences: false).map { tokenSub in
+        let token = String(tokenSub)
+        guard token.count > chunkSize else { return token }
+        var out = ""
+        for (idx, ch) in token.enumerated() {
+            if idx > 0 && idx % chunkSize == 0 { out.append("\u{200B}") }
+            out.append(ch)
+        }
+        return out
+    }.joined(separator: " ")
 }

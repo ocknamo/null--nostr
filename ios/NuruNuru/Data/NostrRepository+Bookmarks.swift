@@ -13,6 +13,24 @@ extension NostrRepository {
     /// - Parameter pubkeyHex: 取得対象ユーザーの hex 公開鍵。
     /// - Returns: "e" タグに含まれるブックマーク済みイベント ID 配列。
     func fetchBookmarkEventIds(pubkeyHex: String) async -> [String] {
+        let now = Date()
+        if let cached = bookmarkEventIdCache[pubkeyHex],
+           now.timeIntervalSince(cached.cachedAt) < 30 {
+            return cached.ids
+        }
+        if let task = bookmarkEventIdFetchTasks[pubkeyHex] {
+            return await task.value
+        }
+
+        let task = Task { await self.fetchBookmarkEventIdsUncached(pubkeyHex: pubkeyHex) }
+        bookmarkEventIdFetchTasks[pubkeyHex] = task
+        let ids = await task.value
+        bookmarkEventIdCache[pubkeyHex] = (ids: ids, cachedAt: Date())
+        bookmarkEventIdFetchTasks[pubkeyHex] = nil
+        return ids
+    }
+
+    private func fetchBookmarkEventIdsUncached(pubkeyHex: String) async -> [String] {
         AppLogger.log("Bookmarks", "fetchBookmarkEventIds for \(pubkeyHex.prefix(16))…")
         var filter = NostrFilter()
         filter.kinds   = [NostrKind.bookmarks]
@@ -26,7 +44,7 @@ extension NostrRepository {
         // メインリレーで見つからない場合、各リレーに個別に問い合わせ
         if events.isEmpty {
             let relayUrls = getSavedRelayUrls()
-            AppLogger.log("Bookmarks", "Retrying on individual relays: \(relayUrls)")
+            AppLogger.log("Bookmarks", "Retrying on individual relays: \(relayUrls.prefix(4))")
             for url in relayUrls.prefix(4) {
                 let relayEvents = await client.fetchEventsFromRelay(url, filters: [filter], timeoutSeconds: 4.0)
                 if !relayEvents.isEmpty {
@@ -102,6 +120,7 @@ extension NostrRepository {
         let tags: [[String]] = existing.map { ["e", $0] }
         do {
             try await publishEvent(kind: NostrKind.bookmarks, tags: tags, content: "")
+            bookmarkEventIdCache[pubkeyHex] = (ids: existing, cachedAt: Date())
             AppLogger.log("Bookmarks", "Bookmark published successfully — \(existing.count) total")
         } catch {
             AppLogger.log("Bookmarks", "Bookmark publish failed: \(error.localizedDescription)")
@@ -124,6 +143,7 @@ extension NostrRepository {
         guard existing.count != before else { return }
         let tags: [[String]] = existing.map { ["e", $0] }
         try await publishEvent(kind: NostrKind.bookmarks, tags: tags, content: "")
+        bookmarkEventIdCache[pubkeyHex] = (ids: existing, cachedAt: Date())
     }
 
     // MARK: - isBookmarked

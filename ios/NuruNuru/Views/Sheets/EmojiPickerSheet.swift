@@ -7,29 +7,55 @@ struct EmojiPickerSheet: View {
 
     let repository:  NostrRepository
     let pubkeyHex:   String
+    /// true: Android PostModal と同じく、通常時は kind-10030 の個別登録(emojiタグ)のみ表示。
+    /// 検索時だけ登録済みセットも横断検索する。
+    var individualOnly: Bool = false
     var onSelect:    (CustomEmoji) -> Void = { _ in }
 
     @Environment(\.dismiss)    private var dismiss
     @Environment(\.nuruTheme) private var theme
 
-    @State private var emojiSets:   [EmojiSet]    = []
-    @State private var isLoading:   Bool          = true
-    @State private var searchQuery: String        = ""
-    @State private var selectedTab: String        = "all"
+    @State private var favoriteEmojis: [CustomEmoji] = []
+    @State private var emojiSets:      [EmojiSet]    = []
+    @State private var isLoading:      Bool          = true
+    @State private var searchQuery:    String        = ""
+    @State private var selectedTab:    String        = "all"
+
+    private var searchPool: [CustomEmoji] {
+        dedupeEmojis(favoriteEmojis + emojiSets.flatMap { $0.emojis })
+    }
 
     private var allEmojis: [CustomEmoji] {
-        emojiSets.flatMap { $0.emojis }
+        searchPool
     }
 
     private var filteredEmojis: [CustomEmoji] {
-        let base: [CustomEmoji]
-        if selectedTab == "all" {
-            base = allEmojis
-        } else {
-            base = emojiSets.first(where: { $0.id == selectedTab })?.emojis ?? []
+        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !q.isEmpty {
+            // Android: individualOnly=true でも検索時は全セット横断
+            return searchPool.filter { $0.shortcode.localizedCaseInsensitiveContains(q) }
         }
-        if searchQuery.isEmpty { return base }
-        return base.filter { $0.shortcode.localizedCaseInsensitiveContains(searchQuery) }
+
+        if individualOnly {
+            // Android PostModal: 検索なしでは個別登録(emojiタグ)だけ表示
+            return favoriteEmojis
+        }
+
+        if selectedTab == "all" {
+            return allEmojis
+        } else if selectedTab == "user" {
+            return favoriteEmojis
+        } else {
+            return emojiSets.first(where: { $0.id == selectedTab })?.emojis ?? []
+        }
+    }
+
+    private var tabs: [(id: String, label: String)] {
+        guard !individualOnly else { return [] }
+        var out: [(String, String)] = [("all", "すべて")]
+        if !favoriteEmojis.isEmpty { out.append(("user", "個別")) }
+        out.append(contentsOf: emojiSets.map { ($0.id, $0.name) })
+        return out
     }
 
     var body: some View {
@@ -56,7 +82,7 @@ struct EmojiPickerSheet: View {
                 Spacer()
                 ProgressView().tint(NuruColors.lineGreen)
                 Spacer()
-            } else if allEmojis.isEmpty {
+            } else if searchPool.isEmpty {
                 Spacer()
                 VStack(spacing: NuruSpacing.space3) {
                     Image(systemName: "face.smiling")
@@ -73,12 +99,12 @@ struct EmojiPickerSheet: View {
                 Spacer()
             } else {
                 // Set tabs
-                if emojiSets.count > 1 {
+                if searchQuery.isEmpty && tabs.count > 1 {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: NuruSpacing.space2) {
-                            tabChip("all", "すべて")
-                            ForEach(emojiSets) { set in
-                                tabChip(set.id, set.name)
+                            ForEach(tabs.indices, id: \.self) { idx in
+                                let tab = tabs[idx]
+                                tabChip(tab.id, tab.label)
                             }
                         }
                         .padding(.horizontal, NuruSpacing.space4)
@@ -132,8 +158,16 @@ struct EmojiPickerSheet: View {
 
     private func loadEmojis() async {
         isLoading = true
-        emojiSets = await repository.fetchEmojiSets(pubkeyHex: pubkeyHex)
+        async let favTask = repository.fetchFavoriteEmojis(pubkeyHex: pubkeyHex)
+        async let setsTask = repository.fetchEmojiSets(pubkeyHex: pubkeyHex)
+        favoriteEmojis = await favTask
+        emojiSets = await setsTask
         isLoading = false
+    }
+
+    private func dedupeEmojis(_ emojis: [CustomEmoji]) -> [CustomEmoji] {
+        var seen = Set<String>()
+        return emojis.filter { seen.insert($0.shortcode).inserted }
     }
 }
 

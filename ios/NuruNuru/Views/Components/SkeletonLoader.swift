@@ -156,3 +156,58 @@ struct ListItemSkeleton: View {
         .background(theme.bgPrimary)
     }
 }
+
+// MARK: - Soft Refresh Indicator
+
+/// 柔らかい更新/ロード表示。標準 ProgressView より機械的に見えないよう、
+/// ふわっと脈動するブランドカラーのドットで表現する。
+struct SoftRefreshIndicator: View {
+    var title: String? = nil
+    var compact: Bool = false
+
+    @Environment(\.nuruTheme) private var theme
+    @State private var animate = false
+
+    var body: some View {
+        HStack(spacing: compact ? 8 : 10) {
+            ZStack {
+                ForEach(0..<3, id: \.self) { i in
+                    Circle()
+                        .fill(NuruColors.lineGreen.opacity(0.28 - Double(i) * 0.06))
+                        .frame(width: compact ? 24 : 34, height: compact ? 24 : 34)
+                        .scaleEffect(animate ? 1.0 + CGFloat(i) * 0.18 : 0.58 + CGFloat(i) * 0.08)
+                        .opacity(animate ? 0.12 : 0.42)
+                        .animation(
+                            .easeInOut(duration: 1.25)
+                                .repeatForever(autoreverses: true)
+                                .delay(Double(i) * 0.13),
+                            value: animate
+                        )
+                }
+                Circle()
+                    .fill(NuruColors.lineGreen)
+                    .frame(width: compact ? 8 : 10, height: compact ? 8 : 10)
+                    .scaleEffect(animate ? 1.18 : 0.82)
+                    .animation(.easeInOut(duration: 0.72).repeatForever(autoreverses: true), value: animate)
+            }
+            .frame(width: compact ? 28 : 38, height: compact ? 28 : 38)
+
+            if let title {
+                Text(title)
+                    .font(compact ? NuruFont.labelSmall() : NuruFont.bodySmall())
+                    .fontWeight(.semibold)
+                    .foregroundStyle(theme.textPrimary)
+            }
+        }
+        .padding(.horizontal, compact ? 12 : 16)
+        .padding(.vertical, compact ? 8 : 12)
+        .background(
+            Capsule()
+                .fill(theme.bgSecondary.opacity(0.94))
+                .overlay(Capsule().stroke(NuruColors.lineGreen.opacity(0.18), lineWidth: 1))
+        )
+        .shadow(color: .black.opacity(0.18), radius: 14, x: 0, y: 8)
+        .onAppear { animate = true }
+    }
+}
+

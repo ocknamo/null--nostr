@@ -32,10 +32,16 @@ struct BirdwatchModal: View {
     @State private var noteContent:   String  = ""
     @State private var sourceUrl:     String  = ""
     @State private var showExisting:  Bool    = false
+    @FocusState private var focusedField: BirdwatchFocusedField?
 
     @Environment(\.nuruTheme) private var theme
 
     private static let blue = Color(red: 0.13, green: 0.59, blue: 0.95)
+
+    private enum BirdwatchFocusedField: Hashable {
+        case content
+        case sourceUrl
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -55,7 +61,10 @@ struct BirdwatchModal: View {
                     .fontWeight(.bold)
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
-                Button(action: onDismiss) {
+                Button {
+                    focusedField = nil
+                    onDismiss()
+                } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 16))
                         .foregroundStyle(theme.textTertiary)
@@ -67,8 +76,7 @@ struct BirdwatchModal: View {
 
             Divider().background(theme.borderColor)
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 16) {
                     // Existing notes toggle
                     if !existingNotes.isEmpty {
                         existingNotesSection
@@ -86,17 +94,20 @@ struct BirdwatchModal: View {
 
                     // Source URL
                     sourceUrlSection
-                }
-                .padding(.horizontal, 24)
-                .padding(.top, 16)
-                .padding(.bottom, 8)
             }
+            .padding(.horizontal, 24)
+            .padding(.top, 16)
+            .padding(.bottom, 16)
+            .frame(maxHeight: .infinity, alignment: .top)
 
             Divider().background(theme.borderColor)
 
             // Footer buttons
             HStack(spacing: 12) {
-                Button(action: onDismiss) {
+                Button {
+                    focusedField = nil
+                    onDismiss()
+                } label: {
                     Text("キャンセル")
                         .font(NuruFont.bodyMedium())
                         .foregroundStyle(theme.textPrimary)
@@ -108,6 +119,7 @@ struct BirdwatchModal: View {
                 .buttonStyle(.plain)
 
                 Button {
+                    focusedField = nil
                     if let type = selectedType {
                         onSubmit(type, noteContent, sourceUrl)
                     }
@@ -136,10 +148,22 @@ struct BirdwatchModal: View {
         }
         .background(theme.bgPrimary)
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        // Prevent the iOS keyboard swipe-down gesture from dismissing the entire sheet.
+        // Birdwatch can still be closed explicitly via xmark / キャンセル / 追加する.
+        .interactiveDismissDisabled(true)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("完了") {
+                    focusedField = nil
+                }
+                .font(.system(size: 15, weight: .semibold))
+            }
+        }
     }
 
     private var canSubmit: Bool {
-        selectedType != nil && !noteContent.trimmingCharacters(in: .whitespaces).isEmpty && !isSubmitting
+        selectedType != nil && !noteContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSubmitting
     }
 
     // MARK: - Sections
@@ -207,30 +231,38 @@ struct BirdwatchModal: View {
             Text("コンテキストの内容 *")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(theme.textSecondary)
-            TextEditor(text: $noteContent)
-                .font(NuruFont.bodySmall())
-                .foregroundStyle(theme.textPrimary)
-                .frame(height: 120)
-                .padding(8)
-                .background(theme.bgSecondary)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(noteContent.isEmpty ? theme.borderColor : Self.blue, lineWidth: 1)
-                )
-                .onChange(of: noteContent) {
-                    if noteContent.count > 1000 {
-                        noteContent = String(noteContent.prefix(1000))
-                    }
-                }
-            if noteContent.isEmpty {
-                Text("この投稿に関する追加情報を入力してください...")
+            ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(theme.bgSecondary)
+
+                TextEditor(text: $noteContent)
                     .font(NuruFont.bodySmall())
-                    .foregroundStyle(theme.textTertiary)
-                    .allowsHitTesting(false)
-                    .padding(.horizontal, 12)
-                    .padding(.top, -100)
+                    .foregroundStyle(theme.textPrimary)
+                    .scrollContentBackground(.hidden)
+                    .background(Color.clear)
+                    .padding(8)
+                    .focused($focusedField, equals: .content)
+                    .onChange(of: noteContent) { _, newValue in
+                        if newValue.count > 1000 {
+                            noteContent = String(newValue.prefix(1000))
+                        }
+                    }
+
+                if noteContent.isEmpty {
+                    Text("この投稿に関する追加情報を入力してください...")
+                        .font(NuruFont.bodySmall())
+                        .foregroundStyle(theme.textTertiary)
+                        .allowsHitTesting(false)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 18)
+                }
             }
+            .frame(height: 140)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(noteContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? theme.borderColor : Self.blue, lineWidth: 1)
+            )
         }
     }
 
@@ -245,6 +277,7 @@ struct BirdwatchModal: View {
                 .keyboardType(.URL)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+                .focused($focusedField, equals: .sourceUrl)
                 .padding(10)
                 .background(theme.bgSecondary)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -267,6 +300,11 @@ private struct BirdwatchTypeButton: View {
     @Environment(\.nuruTheme) private var theme
 
     private static let blue = Color(red: 0.13, green: 0.59, blue: 0.95)
+
+    private enum BirdwatchFocusedField: Hashable {
+        case content
+        case sourceUrl
+    }
 
     var body: some View {
         Button(action: onSelect) {

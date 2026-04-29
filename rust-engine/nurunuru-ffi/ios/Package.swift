@@ -20,7 +20,7 @@ import PackageDescription
 let package = Package(
     name: "NuruNuru",
     platforms: [
-        .iOS(.v16),
+        .iOS(.v17),
         .macOS(.v13),
     ],
     products: [

@@ -24,7 +24,6 @@ struct ImageViewerView: View {
         ZStack(alignment: .top) {
             Color.black.ignoresSafeArea()
 
-            // Pager
             TabView(selection: $currentIndex) {
                 ForEach(images.indices, id: \.self) { i in
                     ZoomableImageView(url: images[i], authorPubkey: authorPubkey, onZoomChanged: { isZoomed = $0 })
@@ -33,11 +32,10 @@ struct ImageViewerView: View {
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
-            .disabled(isZoomed) // lock paging when zoomed
+            // `.disabled(isZoomed)` は子ビューのダブルタップ/ドラッグまで無効化してしまうため使わない。
+            // ズーム中の操作は ZoomableImageView 側のジェスチャーで処理する。
 
-            // Top bar
             HStack {
-                // Page counter (only when multiple)
                 if images.count > 1 {
                     Text("\(currentIndex + 1) / \(images.count)")
                         .font(.system(size: 13, weight: .medium))
@@ -49,21 +47,21 @@ struct ImageViewerView: View {
                 }
                 Spacer()
 
-                // Close button
                 Button(action: onDismiss) {
                     Image(systemName: NuruIcons.close)
                         .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(.white)
-                        .frame(width: 32, height: 32)
+                        .frame(width: 44, height: 44)
                         .background(Color.black.opacity(0.55))
                         .clipShape(Circle())
                 }
                 .buttonStyle(.plain)
+                .zIndex(10)
             }
             .padding(.horizontal, NuruSpacing.space4)
             .padding(.top, NuruSpacing.space4)
+            .allowsHitTesting(true)
 
-            // Page dots indicator (only when multiple)
             if images.count > 1 {
                 VStack {
                     Spacer()
@@ -78,82 +76,129 @@ struct ImageViewerView: View {
                     }
                     .padding(.bottom, 32)
                 }
+                .allowsHitTesting(false)
             }
         }
     }
 }
-
-// MARK: - Zoomable Image
 
 private struct ZoomableImageView: View {
     let url: String
     let authorPubkey: String?
     let onZoomChanged: (Bool) -> Void
 
-    @State private var scale: CGFloat   = 1.0
-    @State private var offset: CGSize   = .zero
-    @State private var isError          = false
+    @State private var scale: CGFloat = 1.0
+    @State private var lastScale: CGFloat = 1.0
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
 
     var body: some View {
         GeometryReader { geo in
             ZStack {
                 Color.black
 
-                if isError {
-                    Text("画像を読み込めませんでした")
-                        .foregroundStyle(Color.white.opacity(0.7))
-                        .font(NuruFont.bodyMedium())
-                } else {
-                    CachedAsyncImage(url: URL(string: url), authorPubkey: authorPubkey, contentMode: .fit) {
-                        Color.black.overlay(ProgressView().tint(.white))
-                    }
-                    .frame(maxWidth: geo.size.width, maxHeight: geo.size.height)
-                    .scaleEffect(scale)
-                    .offset(offset)
-                    .gesture(doubleTapGesture)
-                    .gesture(
-                        MagnificationGesture()
-                            .onChanged { value in
-                                let newScale = (scale * value).clamped(to: 1...5)
-                                scale = newScale
-                                onZoomChanged(newScale > 1)
-                            }
-                            .onEnded { _ in
-                                if scale < 1 { scale = 1; offset = .zero; onZoomChanged(false) }
-                            }
-                    )
-                    .simultaneousGesture(
-                        DragGesture()
-                            .onChanged { value in
-                                if scale > 1 { offset = value.translation }
-                            }
-                            .onEnded { _ in
-                                if scale <= 1 { offset = .zero }
-                            }
-                    )
+                CachedAsyncImage(url: URL(string: url), authorPubkey: authorPubkey, contentMode: .fit) {
+                    Color.black.overlay(ProgressView().tint(.white))
                 }
+                .frame(width: geo.size.width, height: geo.size.height)
+                .scaleEffect(scale)
+                .offset(offset)
+                .contentShape(Rectangle())
+                .highPriorityGesture(doubleTapGesture)
+                .simultaneousGesture(magnifyGesture(container: geo.size))
+                .simultaneousGesture(dragGesture(container: geo.size))
             }
             .frame(width: geo.size.width, height: geo.size.height)
         }
+        .onDisappear { resetZoom(animated: false) }
+    }
+
+    private func magnifyGesture(container: CGSize) -> some Gesture {
+        MagnificationGesture()
+            .onChanged { value in
+                let newScale = (lastScale * value).clamped(to: 1...5)
+                scale = newScale
+                if newScale <= 1.01 {
+                    offset = .zero
+                } else {
+                    offset = clampedOffset(offset, scale: newScale, container: container)
+                }
+                onZoomChanged(newScale > 1.01)
+            }
+            .onEnded { _ in
+                if scale <= 1.01 {
+                    resetZoom(animated: true)
+                } else {
+                    scale = scale.clamped(to: 1...5)
+                    offset = clampedOffset(offset, scale: scale, container: container)
+                    lastScale = scale
+                    lastOffset = offset
+                    onZoomChanged(true)
+                }
+            }
+    }
+
+    private func dragGesture(container: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                guard scale > 1.01 else { return }
+                let proposed = CGSize(
+                    width: lastOffset.width + value.translation.width,
+                    height: lastOffset.height + value.translation.height
+                )
+                offset = clampedOffset(proposed, scale: scale, container: container)
+            }
+            .onEnded { _ in
+                guard scale > 1.01 else {
+                    offset = .zero
+                    lastOffset = .zero
+                    return
+                }
+                lastOffset = offset
+            }
     }
 
     private var doubleTapGesture: some Gesture {
         TapGesture(count: 2).onEnded {
-            withAnimation(.spring(duration: 0.25)) {
-                if scale > 1.5 {
-                    scale  = 1
-                    offset = .zero
-                    onZoomChanged(false)
-                } else {
+            if scale > 1.01 {
+                resetZoom(animated: true)
+            } else {
+                withAnimation(.spring(duration: 0.25)) {
                     scale = 2.5
+                    lastScale = 2.5
+                    offset = .zero
+                    lastOffset = .zero
                     onZoomChanged(true)
                 }
             }
         }
     }
-}
 
-// MARK: - Comparable+clamped helper (local)
+    private func resetZoom(animated: Bool) {
+        let changes = {
+            scale = 1
+            lastScale = 1
+            offset = .zero
+            lastOffset = .zero
+            onZoomChanged(false)
+        }
+        if animated {
+            withAnimation(.spring(duration: 0.25)) { changes() }
+        } else {
+            changes()
+        }
+    }
+
+    private func clampedOffset(_ value: CGSize, scale: CGFloat, container: CGSize) -> CGSize {
+        guard scale > 1 else { return .zero }
+        let maxX = max(0, container.width * (scale - 1) / 2)
+        let maxY = max(0, container.height * (scale - 1) / 2)
+        return CGSize(
+            width: value.width.clamped(to: -maxX...maxX),
+            height: value.height.clamped(to: -maxY...maxY)
+        )
+    }
+}
 
 private extension Comparable {
     func clamped(to range: ClosedRange<Self>) -> Self {

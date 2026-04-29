@@ -31,6 +31,16 @@ actor NostrRepository {
     /// Used to prevent fetchEvents from running before any connections exist.
     private var isConnected = false
 
+    /// Bookmark Kind 10003 cache/in-flight de-dupe.
+    var bookmarkEventIdCache: [String: (ids: [String], cachedAt: Date)] = [:]
+    var bookmarkEventIdFetchTasks: [String: Task<[String], Never>] = [:]
+
+    /// Fast relay selection cache (relay URL -> scored posts, cachedAt).
+    var relayTimelineCache: [String: (posts: [ScoredPost], cachedAt: Date)] = [:]
+
+    /// Quote event/profile cache to avoid repeated quote-card loading.
+    var quotedPostCache: [String: ScoredPost] = [:]
+
     // MARK: - MLS Session State (actor-isolated)
     // Rust SQLite (MDK) が single source of truth。アプリ側はセッション内の二重処理防止のみ。
 
@@ -167,19 +177,26 @@ actor NostrRepository {
 
     /// Build the canonical relay list used for initial connection and lazy fetch recovery.
     private func buildRelayConnectionUrls() -> [String] {
+        // Startup should stay lean: prefer NIP-65/default read relays, cap persistent
+        // connections, and avoid adding every selected/fallback relay immediately.
         var relayUrls = getSavedRelayUrls()
-        let selectedSet = Set(relayUrls)
-        for url in prefs.selectedRelays where !selectedSet.contains(url) {
-            relayUrls.append(url)
-        }
         if relayUrls.isEmpty {
             AppLogger.log("Repository", "No relays configured — using defaults")
             relayUrls = defaultRelays
         }
-        if !relayUrls.contains(searchRelayUrl) {
-            relayUrls.append(searchRelayUrl)
+        relayUrls = relayUrls.filter { !Self.deadRelays.contains($0) && !Self.temporarilyDeprioritizedRelays.contains($0) }
+
+        // Keep JP/default relays first and cap to 4 general relays. Search relay is added
+        // separately because NIP-50 queries rely on it.
+        var compact: [String] = []
+        for url in relayUrls where !compact.contains(url) && url != searchRelayUrl {
+            compact.append(url)
+            if compact.count >= 4 { break }
         }
-        return relayUrls
+        if !compact.contains(searchRelayUrl), !Self.deadRelays.contains(searchRelayUrl) {
+            compact.append(searchRelayUrl)
+        }
+        return compact
     }
 
     /// Disconnect all relays and clean up.
@@ -300,6 +317,18 @@ actor NostrRepository {
     /// These relays have permanent DNS failures or are permanently offline.
     private static let deadRelays: Set<String> = [
         "wss://relay.nostr.bg",
+        // Frequently times out on iOS startup and causes noisy retries/logs.
+        // Users can still target it explicitly from relay-specific features if re-added later.
+        "wss://relay.nostr.band",
+    ]
+
+    /// Relays that are not permanently dead, but should not be used for startup fan-out
+    /// or background prefetch because recent device logs showed repeated handshake
+    /// timeouts. Keeping them out of automatic traffic avoids load on relay operators.
+    /// Explicit user-selected relay fetches can still try them through NostrClient's
+    /// long cooldown path.
+    static let temporarilyDeprioritizedRelays: Set<String> = [
+        "wss://relay.nostr.wirednet.jp",
     ]
 
     /// Return the saved relay URL list from preferences.

@@ -54,6 +54,9 @@ final class TimelineViewModel {
     private var livePollingTask: Task<Void, Never>? = nil
     // リレー切替リフレッシュの重複実行防止
     private var relaySelectionTask: Task<Void, Never>? = nil
+    // SwiftUI may evaluate MainTabView.init multiple times. Keep network side effects
+    // out of init and start them exactly once for the retained @State instance.
+    private var didStartInitialLoad: Bool = false
 
     // MARK: - Dependencies
 
@@ -105,16 +108,32 @@ final class TimelineViewModel {
             isFollowingLoading = true
         }
 
+    }
+
+    /// Starts network work for the retained ViewModel instance.
+    /// Do not perform this in init: SwiftUI can recreate View structs and evaluate
+    /// @State(initialValue:) arguments repeatedly, which previously caused duplicate
+    /// timeline loads, bookmark fetches, and relay reconnects during startup.
+    func startInitialLoadIfNeeded() {
+        guard !didStartInitialLoad else { return }
+        didStartInitialLoad = true
+
         // ── Step 1: リレーデータ取得 + NIP-65 sync をバックグラウンドで並列実行 ──
         // Android 同様: syncNip65Relays は Dispatchers.IO の launch で UI をブロックしない。
         Task {
             // リレー URL をまず取得（ドロップダウン表示用）
             savedRelayUrls = await repository.getSavedRelayUrls()
+            for url in savedRelayUrls.prefix(3) {
+                Task { await repository.prefetchRelayTimeline(url) }
+            }
 
             // NIP-65 sync + prefetch をバックグラウンドで実行（メインフローをブロックしない）
             Task {
                 await repository.syncNip65Relays()
                 savedRelayUrls = await repository.getSavedRelayUrls()
+                for url in savedRelayUrls.prefix(3) {
+                    Task { await repository.prefetchRelayTimeline(url) }
+                }
                 AppLogger.log("Timeline", "NIP-65 sync complete — relays: \(savedRelayUrls)")
             }
 
@@ -318,11 +337,29 @@ final class TimelineViewModel {
 
         // 進行中の切替処理をキャンセルして最新選択のみ反映
         relaySelectionTask?.cancel()
+
         isRelayRefreshing = true
+
         relaySelectionTask = Task { [weak self] in
             guard let self else { return }
-            await refreshRelay()
+            if let url = selectedRelayUrl,
+               let cached = await repository.getCachedRelayTimeline(url),
+               !cached.isEmpty {
+                guard !Task.isCancelled else { return }
+                relayPosts = cached
+                isRelayRefreshing = false
+                restartRelayLivePolling()
+                return
+            }
+
+            let fresh: [ScoredPost]
+            if let url = selectedRelayUrl {
+                fresh = await repository.fetchGlobalTimelineFromRelay(url, fast: true)
+            } else {
+                fresh = await repository.fetchGlobalTimeline()
+            }
             guard !Task.isCancelled else { return }
+            if !fresh.isEmpty || relayPosts.isEmpty { relayPosts = fresh }
             isRelayRefreshing = false
             // リレー変更時にライブポーリングを再起動して、選択リレーのみから新着を受信する
             restartRelayLivePolling()
@@ -346,15 +383,25 @@ final class TimelineViewModel {
     }
 
     func toggleRepost(post: ScoredPost) async {
-        guard !post.isReposted else { return }
-        post.isReposted  = true
-        post.repostCount += 1
+        let wasReposted = post.isReposted
+        post.isReposted = !wasReposted
+        post.repostCount += wasReposted ? -1 : 1
         triggerUpdate()
         do {
-            try await repository.publishRepost(event: post.event)
+            if wasReposted {
+                if let repostId = post.myRepostEventId {
+                    try await repository.publishDelete(eventId: repostId)
+                    post.myRepostEventId = nil
+                } else {
+                    throw NSError(domain: "NuruNuru", code: 1, userInfo: [NSLocalizedDescriptionKey: "リポストイベントが見つかりません"])
+                }
+            } else {
+                let repostEvent = try await repository.publishRepostAndReturn(event: post.event)
+                post.myRepostEventId = repostEvent.id
+            }
         } catch {
-            post.isReposted  = false
-            post.repostCount -= 1
+            post.isReposted = wasReposted
+            post.repostCount += wasReposted ? 1 : -1
             triggerUpdate()
         }
     }
@@ -397,14 +444,28 @@ final class TimelineViewModel {
     }
 
     func submitBirdwatch(post: ScoredPost, type: String, content: String, url: String) async {
-        var tags: [[String]] = [
-            ["e", post.event.id],
-            ["p", post.event.pubkey],
-            ["L", "social.birdwatch"],
-            ["l", type, "social.birdwatch"]
-        ]
-        if !url.isEmpty { tags.append(["r", url]) }
-        try? await repository.publishEvent(kind: NostrKind.label, tags: tags, content: content)
+        if let signed = try? await repository.publishBirdwatchNote(
+            targetEventId: post.event.id,
+            content:       content,
+            contextType:   type,
+            sourceUrl:     url.isEmpty ? nil : url
+        ) {
+            appendBirdwatchNote(signed, to: post.event.id)
+        }
+    }
+
+    private func appendBirdwatchNote(_ note: NostrEvent, to eventId: String) {
+        for item in relayPosts where item.event.id == eventId {
+            if !item.birdwatchNotes.contains(where: { $0.id == note.id }) {
+                item.birdwatchNotes.append(note)
+            }
+        }
+        for item in followingPosts where item.event.id == eventId {
+            if !item.birdwatchNotes.contains(where: { $0.id == note.id }) {
+                item.birdwatchNotes.append(note)
+            }
+        }
+        triggerUpdate()
     }
 
     // Forces @Observable to re-render views that read the arrays.

@@ -136,49 +136,48 @@ struct PostHeader: View {
     @State private var nip05Verified: Bool? = nil
 
     var body: some View {
-        HStack(spacing: 4) {
-            // Name + NIP-05 + badges (mirrors Android PostHeader)
+        VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 4) {
-                Button {
-                    onProfileTap(post.event.pubkey)
-                } label: {
-                    Text(post.profile?.displayedName ?? post.event.pubkey.shortenedPubkey)
-                        .font(NuruFont.bodyMedium())
-                        .fontWeight(.semibold)
-                        .foregroundStyle(theme.textPrimary)
-                        .lineLimit(1)
-                }
-                .buttonStyle(.plain)
+                // Name + badges (mirrors Android PostHeader)
+                HStack(spacing: 4) {
+                    Button {
+                        onProfileTap(post.event.pubkey)
+                    } label: {
+                        Text(wrapLongTokens(post.profile?.displayedName ?? post.event.pubkey.shortenedPubkey, chunkSize: 14))
+                            .font(NuruFont.bodyMedium())
+                            .fontWeight(.semibold)
+                            .foregroundStyle(theme.textPrimary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    .buttonStyle(.plain)
 
-                // NIP-05 — 検証済みの場合のみチェック表示
-                if let nip05 = post.profile?.nip05, !nip05.isEmpty {
-                    if (nip05Verified ?? post.isVerified) {
+                    if let nip05 = post.profile?.nip05, !nip05.isEmpty, (nip05Verified ?? post.isVerified) {
                         VerifiedIcon()
                             .frame(width: 14, height: 14)
                             .fixedSize()
                     }
+
+                    // Badges (self-fetching via BadgeDisplay, or static from post.badges)
+                    if let repo = repository {
+                        BadgeDisplay(pubkey: post.event.pubkey, repository: repo, initialBadges: post.badges)
+                            .fixedSize()
+                    } else if !post.badges.isEmpty {
+                        badgesStatic
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-                // Badges (self-fetching via BadgeDisplay, or static from post.badges)
-                if let repo = repository {
-                    BadgeDisplay(pubkey: post.event.pubkey, repository: repo, initialBadges: post.badges)
-                        .fixedSize()
-                } else if !post.badges.isEmpty {
-                    badgesStatic
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+                Spacer(minLength: 4)
 
-            Spacer(minLength: 4)
+                // Timestamp
+                Text(post.event.createdAt.relativeTimeString)
+                    .font(NuruFont.bodySmall())
+                    .foregroundStyle(theme.textTertiary)
 
-            // Timestamp
-            Text(post.event.createdAt.relativeTimeString)
-                .font(NuruFont.bodySmall())
-                .foregroundStyle(theme.textTertiary)
-
-            // ⋮ menu — mirrors Android DropdownMenu order:
-            // テキストをコピー → この投稿に興味がない → Birdwatch → 通報 → ミュート → 削除
-            Menu {
+                // ⋮ menu — mirrors Android DropdownMenu order:
+                // テキストをコピー → この投稿に興味がない → Birdwatch → 通報 → ミュート → 削除
+                Menu {
                 // テキストをコピー (mirrors Android "テキストをコピー")
                 Button {
                     UIPasteboard.general.string = post.event.content
@@ -221,14 +220,28 @@ struct PostHeader: View {
                         Label("削除", systemImage: NuruIcons.trash)
                     }
                 }
-            } label: {
-                MoreVertIcon()
-                    .frame(width: 16, height: 16)
-                    .foregroundStyle(theme.textTertiary)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
+                } label: {
+                    MoreVertIcon()
+                        .frame(width: 16, height: 16)
+                        .foregroundStyle(theme.textTertiary)
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+            }
+
+            // ユーザー名と本文の間に NIP-05 を表示。未設定時は余計な空行を作らない。
+            if let nip05 = post.profile?.nip05, !nip05.isEmpty {
+                HStack(spacing: 4) {
+                    Text(formatNip05(nip05))
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle((nip05Verified ?? post.isVerified) ? NuruColors.lineGreen : theme.textTertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .accessibilityLabel("NIP-05 \(formatNip05(nip05))")
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .task(id: post.profile?.nip05 ?? "") {
             guard let nip05 = post.profile?.nip05, !nip05.isEmpty, let repo = repository else {
                 nip05Verified = post.isVerified
@@ -273,6 +286,22 @@ private func formatNip05(_ nip05: String) -> String {
     nip05.hasPrefix("_@") ? String(nip05.dropFirst(2)) : nip05
 }
 
+/// Inserts soft break opportunities into very long unbroken tokens so a single
+/// long word / URL-like string cannot force timeline rows wider than the screen.
+private func wrapLongTokens(_ text: String, chunkSize: Int = 18) -> String {
+    text.split(separator: " ", omittingEmptySubsequences: false).map { tokenSub in
+        let token = String(tokenSub)
+        guard token.count > chunkSize,
+              token.rangeOfCharacter(from: .whitespacesAndNewlines) == nil else { return token }
+        var out = ""
+        for (idx, ch) in token.enumerated() {
+            if idx > 0 && idx % chunkSize == 0 { out.append("\u{200B}") }
+            out.append(ch)
+        }
+        return out
+    }.joined(separator: " ")
+}
+
 // MARK: - Post Content (text with URL / hashtag / emoji parsing)
 
 /// Renders post text with tappable hashtags, @mentions, and URL highlights.
@@ -290,8 +319,14 @@ struct PostContentView: View {
 
     var body: some View {
         let raw     = post.event.content
-        // 画像URL・動画URLをテキスト表示から除外（カードとして別途レンダリング）
-        let display = removeMediaUrls(raw).trimmingCharacters(in: .whitespacesAndNewlines)
+        // 画像URL・動画URLをテキスト表示から除外（カードとして別途レンダリング）。
+        // 引用元カードを別表示する場合は content 末尾の nostr:note/nevent も本文から除去し、
+        // 「本文」と「引用カード」の間に改行だけの大きな余白が残らないようにする。
+        var display = removeMediaUrls(raw)
+        if quotedPostEventId != nil {
+            display = removeNostrEventLinks(display)
+        }
+        display = display.trimmingCharacters(in: .whitespacesAndNewlines)
         if display.isEmpty { return AnyView(EmptyView()) }
 
         let parts = parseContent(display)
@@ -311,7 +346,7 @@ struct PostContentView: View {
 
         return AnyView(
             VStack(alignment: .leading, spacing: NuruSpacing.space2) {
-                // インラインテキスト（動画URL・画像URLは除外済み）
+                // インラインテキスト（動画URL・画像URL・引用リンクは除外済み）
                 inlineText(parts: parts)
 
                 // 動画インライン再生（最大1本）
@@ -342,6 +377,8 @@ struct PostContentView: View {
                     }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .clipped()
         )
     }
 
@@ -360,7 +397,7 @@ struct PostContentView: View {
         if hasCustomEmojiImages {
             // カスタム絵文字画像を含む場合: FlowLayout でテキスト + 画像を混合レンダリング
             // Android の InlineTextContent + appendInlineContent に対応
-            EmojiRichText(parts: parts, theme: theme)
+            EmojiRichText(parts: parts, mentionLabels: mentionLabels, theme: theme)
         } else {
             // 絵文字画像なし: 従来の Text 連結（パフォーマンス最適）
             plainInlineText(parts: parts)
@@ -368,33 +405,78 @@ struct PostContentView: View {
     }
 
     private func plainInlineText(parts: [ContentPart]) -> some View {
-        var text = Text("")
+        Text(attributedInlineText(parts: parts))
+            .font(NuruFont.bodyMedium())
+            .lineSpacing(2)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .environment(\.openURL, OpenURLAction { url in
+                guard url.scheme == "nurunuru" else { return .systemAction }
+                if url.host == "hashtag" {
+                    let tag = url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent
+                    onHashtagTap?(tag)
+                    return .handled
+                }
+                if url.host == "profile" {
+                    let pubkey = url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent
+                    onProfileTap(pubkey)
+                    return .handled
+                }
+                return .systemAction
+            })
+            .task(id: post.event.id) { await resolveMentionLabels(parts: parts) }
+    }
+
+    private func attributedInlineText(parts: [ContentPart]) -> AttributedString {
+        var out = AttributedString("")
         for part in parts {
             switch part {
             case .plain(let s):
-                text = text + Text(s).foregroundStyle(theme.textPrimary)
+                var attr = AttributedString(wrapLongTokens(s))
+                attr.foregroundColor = theme.textPrimary
+                out.append(attr)
             case .hashtag(let tag):
-                text = text + Text(tag).foregroundStyle(NuruColors.lineGreen).fontWeight(.medium)
+                var attr = AttributedString(tag)
+                attr.foregroundColor = NuruColors.lineGreen
+                attr.font = NuruFont.bodyMedium().weight(.medium)
+                let rawTag = String(tag.dropFirst())
+                if let encoded = rawTag.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+                   let url = URL(string: "nurunuru://hashtag/\(encoded)") {
+                    attr.link = url
+                    attr.underlineStyle = nil
+                }
+                out.append(attr)
             case .mention(let raw, let label):
-                let bech32 = raw.replacingOccurrences(of: "nostr:", with: "")
+                let bech32 = raw.replacingOccurrences(of: "nostr:", with: "").lowercased()
                 let resolved = mentionLabels[bech32] ?? label
-                text = text + Text(resolved).foregroundStyle(NuruColors.lineGreen).fontWeight(.medium)
+                var attr = AttributedString(resolved)
+                attr.foregroundColor = NuruColors.lineGreen
+                attr.font = NuruFont.bodyMedium().weight(.medium)
+                if let parsed = NostrBech32.decode(bech32),
+                   (parsed.type == .npub || parsed.type == .nprofile),
+                   let encoded = parsed.hex.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+                   let url = URL(string: "nurunuru://profile/\(encoded)") {
+                    attr.link = url
+                    attr.underlineStyle = nil
+                }
+                out.append(attr)
             case .link(let url):
                 if !isVideoUrl(url) {
                     let shortened = url.count > 40 ? String(url.prefix(40)) + "…" : url
-                    text = text + Text(shortened).foregroundStyle(NuruColors.lineGreen)
+                    var attr = AttributedString(shortened)
+                    attr.foregroundColor = NuruColors.lineGreen
+                    if let link = URL(string: url) { attr.link = link }
+                    out.append(attr)
                 }
             case .nostr:
                 break
             case .emoji(let code, _):
-                text = text + Text(code).foregroundStyle(theme.textPrimary)
+                var attr = AttributedString(code)
+                attr.foregroundColor = theme.textPrimary
+                out.append(attr)
             }
         }
-        return text
-            .font(NuruFont.bodyMedium())
-            .lineSpacing(2)
-            .fixedSize(horizontal: false, vertical: true)
-            .task(id: post.event.id) { await resolveMentionLabels(parts: parts) }
+        return out
     }
 
     // MARK: Content Parser
@@ -403,7 +485,7 @@ struct PostContentView: View {
         guard let repo = repository else { return }
         let bech32s = parts.compactMap { part -> String? in
             if case .mention(let raw, _) = part {
-                return raw.replacingOccurrences(of: "nostr:", with: "")
+                return raw.replacingOccurrences(of: "nostr:", with: "").lowercased()
             }
             return nil
         }
@@ -423,8 +505,8 @@ struct PostContentView: View {
 
     private func parseContent(_ text: String) -> [ContentPart] {
         var parts: [ContentPart] = []
-        let pattern = #"(https?://[^\s]+|nostr:(?:note1|nevent1|npub1|nprofile1|naddr1)[a-z0-9]{58,}|#\w+|:\w+:)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+        let pattern = #"(https?://[^\s]+|nostr:(?:note1|nevent1|npub1|nprofile1|naddr1)[a-z0-9]+|(?<!nostr:)(?:note1|nevent1|npub1|nprofile1)[a-z0-9]+|#[\p{L}\p{N}_]+|:\w+:)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
             return [.plain(text)]
         }
 
@@ -443,15 +525,20 @@ struct PostContentView: View {
                 parts.append(.plain(plain))
             }
             let value = nsText.substring(with: range)
-            if value.hasPrefix("http") {
+            let loweredValue = value.lowercased()
+            if loweredValue.hasPrefix("http") {
                 parts.append(.link(value))
-            } else if value.hasPrefix("nostr:") {
-                let bech32 = String(value.dropFirst("nostr:".count))
+            } else if loweredValue.hasPrefix("nostr:") {
+                let bech32 = String(value.dropFirst("nostr:".count)).lowercased()
                 if bech32.hasPrefix("npub1") || bech32.hasPrefix("nprofile1") {
                     parts.append(.mention(value, "@" + bech32.prefix(12) + "…"))
                 } else {
                     parts.append(.nostr(value))
                 }
+            } else if loweredValue.hasPrefix("npub1") || loweredValue.hasPrefix("nprofile1") {
+                parts.append(.mention(value, "@" + loweredValue.prefix(12) + "…"))
+            } else if loweredValue.hasPrefix("note1") || loweredValue.hasPrefix("nevent1") {
+                parts.append(.nostr(value))
             } else if value.hasPrefix("#") {
                 parts.append(.hashtag(value))
             } else if value.hasPrefix(":") && value.hasSuffix(":") {
@@ -486,6 +573,7 @@ private enum ContentPart {
 /// テキストを行単位に分割し FlowLayout 風に Text + AsyncImage を混合レンダリングする。
 private struct EmojiRichText: View {
     let parts: [ContentPart]
+    let mentionLabels: [String: String]
     let theme: NuruTheme
 
     var body: some View {
@@ -508,6 +596,8 @@ private struct EmojiRichText: View {
                         }
                         .frame(width: 20, height: 20)
                         .clipShape(RoundedRectangle(cornerRadius: 2))
+                        .padding(.horizontal, 1)
+                        .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] }
                     }
                 }
             }
@@ -532,18 +622,50 @@ private struct EmojiRichText: View {
             }
         }
 
+        func appendTextChunks(_ text: String, color: Color) {
+            // SwiftUI Text は長い1セグメントだと幅を占有し、後続のカスタム絵文字が
+            // 不自然に次行へ落ちやすい。投稿は140文字上限なので、短い単位に分割して
+            // Android InlineTextContent に近い折り返しにする。
+            var buffer = ""
+            func emit(_ value: String) {
+                guard !value.isEmpty else { return }
+                var attr = AttributedString(value)
+                attr.foregroundColor = color
+                currentText.append(attr)
+                flushText()
+            }
+
+            for ch in text {
+                if ch.isWhitespace || ch.isNewline {
+                    emit(buffer)
+                    buffer = ""
+                    emit(String(ch))
+                } else if ch.unicodeScalars.allSatisfy({ $0.value <= 0x007F }) {
+                    buffer.append(ch)
+                    if buffer.count >= 12 {
+                        emit(buffer)
+                        buffer = ""
+                    }
+                } else {
+                    emit(buffer)
+                    buffer = ""
+                    emit(String(ch))
+                }
+            }
+            emit(buffer)
+        }
+
         for part in parts {
             switch part {
             case .plain(let s):
-                var attr = AttributedString(s)
-                attr.foregroundColor = theme.textPrimary
-                currentText.append(attr)
+                appendTextChunks(wrapLongTokens(s), color: theme.textPrimary)
             case .hashtag(let tag):
                 var attr = AttributedString(tag)
                 attr.foregroundColor = NuruColors.lineGreen
                 currentText.append(attr)
-            case .mention(_, let label):
-                var attr = AttributedString(label)
+            case .mention(let raw, let label):
+                let bech32 = raw.replacingOccurrences(of: "nostr:", with: "").lowercased()
+                var attr = AttributedString(mentionLabels[bech32] ?? label)
                 attr.foregroundColor = NuruColors.lineGreen
                 currentText.append(attr)
             case .link(let url):
@@ -576,7 +698,7 @@ private struct EmojiRichText: View {
 
 /// 子ビューを水平に並べ、行末で自動折り返しするレイアウト。
 /// Android の InlineTextContent のテキスト折り返しに対応。
-private struct WrappingHStack: Layout {
+struct WrappingHStack: Layout {
     var alignment: HorizontalAlignment = .leading
     var spacing: CGFloat = 0
 
@@ -606,7 +728,7 @@ private struct WrappingHStack: Layout {
         var totalWidth: CGFloat = 0
 
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
+            let size = subview.sizeThatFits(ProposedViewSize(width: maxWidth.isFinite ? maxWidth : nil, height: nil))
             if x + size.width > maxWidth && x > 0 {
                 // 改行
                 y += rowHeight + spacing
@@ -620,7 +742,7 @@ private struct WrappingHStack: Layout {
         }
 
         return LayoutResult(
-            size: CGSize(width: totalWidth, height: y + rowHeight),
+            size: CGSize(width: maxWidth.isFinite ? min(totalWidth, maxWidth) : totalWidth, height: y + rowHeight),
             positions: positions
         )
     }
@@ -695,13 +817,32 @@ struct PostImageGrid: View {
 
         Group {
             if images.count == 1 {
-                // Single image full-width (stable height to prevent layout jump after load)
-                asyncImage(url: images[0], height: nil, maxHeight: nil)
-                    .frame(maxWidth: .infinity)
-                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                    .background(Color(white: 0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: NuruSpacing.radiusMd))
+                // Single image: modern full-bleed card. scaledToFill avoids the old letterboxed side bars
+                // while the explicit geometry keeps horizontal overflow impossible.
+                GeometryReader { geo in
+                    let width = max(0, geo.size.width)
+                    let height = min(320, max(190, width * 0.72))
+                    CachedAsyncImage(url: URL(string: images[0]), authorPubkey: authorPubkey, contentMode: .fill) {
+                        RoundedRectangle(cornerRadius: NuruSpacing.radiusLg)
+                            .fill(Color(white: 0.12))
+                            .overlay(ProgressView().tint(.white).scaleEffect(0.6))
+                    }
+                    .frame(width: width, height: height)
+                    .clipped()
+                    .overlay(
+                        LinearGradient(
+                            colors: [Color.black.opacity(0.0), Color.black.opacity(0.08)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: NuruSpacing.radiusLg, style: .continuous))
+                    .contentShape(RoundedRectangle(cornerRadius: NuruSpacing.radiusLg, style: .continuous))
                     .onTapGesture { onImageTap?(0) }
+                }
+                .frame(height: 220)
+                .frame(maxWidth: .infinity)
+                .clipped()
 
             } else if images.count == 3 && !showAll {
                 // 3 images: left full-height + right 2-stacked
@@ -946,7 +1087,7 @@ struct EmbeddedNostrCard: View {
                             name: note.profile?.displayedName ?? "?",
                             size: 20
                         )
-                        Text(note.profile?.displayedName ?? note.event.pubkey.shortenedPubkey)
+                        Text(wrapLongTokens(note.profile?.displayedName ?? note.event.pubkey.shortenedPubkey, chunkSize: 14))
                             .font(NuruFont.bodySmall())
                             .fontWeight(.bold)
                             .foregroundStyle(theme.textPrimary)
@@ -955,7 +1096,7 @@ struct EmbeddedNostrCard: View {
                     .contentShape(Rectangle())
                     .onTapGesture { onProfileTap(note.event.pubkey) }
 
-                    Text(note.event.content)
+                    Text(wrapLongTokens(note.event.content))
                         .font(NuruFont.bodySmall())
                         .foregroundStyle(theme.textSecondary)
                         .lineLimit(3)
@@ -963,11 +1104,15 @@ struct EmbeddedNostrCard: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(NuruSpacing.space3)
-                .background(theme.bgTertiary.opacity(0.3))
-                .clipShape(RoundedRectangle(cornerRadius: NuruSpacing.radiusMd))
+                .background(
+                    RoundedRectangle(cornerRadius: NuruSpacing.radiusXl)
+                        .fill(theme.bgSecondary.opacity(0.92))
+                        .overlay(LinearGradient(colors: [NuruColors.lineGreen.opacity(0.10), Color.clear], startPoint: .topLeading, endPoint: .bottomTrailing))
+                )
+                .clipShape(RoundedRectangle(cornerRadius: NuruSpacing.radiusXl))
                 .overlay(
-                    RoundedRectangle(cornerRadius: NuruSpacing.radiusMd)
-                        .stroke(theme.borderColor.opacity(0.5), lineWidth: 0.5)
+                    RoundedRectangle(cornerRadius: NuruSpacing.radiusXl)
+                        .stroke(NuruColors.lineGreen.opacity(0.22), lineWidth: 1)
                 )
                 .padding(.vertical, 6)
             } else if let pk = profilePubkey {
@@ -1041,6 +1186,23 @@ struct EmbeddedNostrCard: View {
             isLoading = false
         }
     }
+}
+
+
+/// content 内の nostr:note1... / nostr:nevent1... を除去する。
+/// 引用カードを別レンダリングする場合、本文末尾の引用リンクだけが改行として残って
+/// 大きな余白に見えるのを防ぐ。
+func removeNostrEventLinks(_ content: String) -> String {
+    let pattern = #"(?:nostr:)?(?:note1|nevent1)[a-z0-9]+"#
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+        return content
+    }
+    let ns = content as NSString
+    return regex.stringByReplacingMatches(
+        in: content,
+        range: NSRange(location: 0, length: ns.length),
+        withTemplate: ""
+    )
 }
 
 /// 動画URL と画像URL の両方をテキストから除去する。

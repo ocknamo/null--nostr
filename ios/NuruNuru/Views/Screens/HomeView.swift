@@ -10,7 +10,7 @@ struct HomeView: View {
 
     let viewModel:      HomeViewModel
     let repository:     NostrRepository
-    var onLogout:       () -> Void        = {}
+    var onSettingsTap:  () -> Void        = {}
     var onPostTap:      () -> Void        = {}
     var onProfileTap:   (String) -> Void  = { _ in }   // kept for external callers
     var onMessageTap:   ((String) -> Void)? = nil
@@ -28,11 +28,12 @@ struct HomeView: View {
     @State private var viewingPubkey:     String? = nil
     /// Currently selected pager page — mirrors Android pagerState.currentPage
     @State private var selectedPage:      Int     = 0
+    @State private var isRefreshingProfile      = false
 
     // (Collapsing header removed — profile now scrolls with content naturally)
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
+        ZStack(alignment: .top) {
             VStack(spacing: 0) {
 
                 // ── Top App Bar — mirrors Android TopAppBar (fixed) ─────
@@ -57,6 +58,16 @@ struct HomeView: View {
                 }
                 .padding(.trailing, NuruSpacing.space4)
                 .padding(.bottom, NuruSpacing.space4)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                .zIndex(10)
+            }
+
+            if isRefreshingProfile {
+                SoftRefreshIndicator(title: "更新中", compact: true)
+                    .padding(.top, 56 + NuruSpacing.space2)
+                    .allowsHitTesting(false)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .zIndex(30)
             }
         }
         .background(theme.bgPrimary)
@@ -164,7 +175,16 @@ struct HomeView: View {
                 }
             }
         }
-        .refreshable { await viewModel.refresh() }
+        .refreshable {
+            await MainActor.run {
+                withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { isRefreshingProfile = true }
+            }
+            await viewModel.refresh()
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            await MainActor.run {
+                withAnimation(.easeOut(duration: 0.22)) { isRefreshingProfile = false }
+            }
+        }
         // 横スワイプでタブ切り替え（Android HorizontalPager に対応）
         // simultaneousGesture を使用して ScrollView のスクロールを妨げない
         .simultaneousGesture(
@@ -293,16 +313,25 @@ struct HomeView: View {
                     .foregroundStyle(theme.textPrimary)
                 Spacer()
                 if viewModel.isOwnProfile {
-                    // Mirrors Android: bookmark IconButton + ログアウト TextButton
-                    Button(action: { showBookmarkList = true }) {
-                        BookmarkIcon(filled: false)
-                            .frame(width: 16, height: 16)
-                            .foregroundStyle(theme.textSecondary)
-                    }
-                    Button(action: onLogout) {
-                        Text("ログアウト")
-                            .font(.system(size: 14))
-                            .foregroundStyle(theme.textSecondary)
+                    // Mirrors Android: bookmark IconButton + settings IconButton
+                    HStack(spacing: 2) {
+                        Button(action: { showBookmarkList = true }) {
+                            BookmarkIcon(filled: false)
+                                .frame(width: 22, height: 22)
+                                .foregroundStyle(theme.textSecondary)
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+
+                        Button(action: onSettingsTap) {
+                            Image(systemName: "gearshape")
+                                .font(.system(size: 21))
+                                .foregroundStyle(theme.textSecondary)
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -320,6 +349,7 @@ struct HomeView: View {
         FollowListSheet(
             pubkeys:  viewModel.followList,
             profiles: [:],
+            repository: repository,
             onDismiss:   { showFollowList = false },
             onUnfollow:  { pk in
                 Task {

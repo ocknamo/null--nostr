@@ -19,6 +19,9 @@ WORKSPACE_DIR := $(shell cd "$(CRATE_DIR)/.." && pwd)
 BINDGEN_DIR := $(CRATE_DIR)/bindgen
 IOS_DIR := $(CRATE_DIR)/ios
 SWIFT_PACKAGE_SOURCES_DIR := $(IOS_DIR)/Sources/NuruNuru
+IOS_DEPLOYMENT_TARGET := 17.0
+IOS_RUSTFLAGS := -C link-arg=-miphoneos-version-min=$(IOS_DEPLOYMENT_TARGET)
+IOS_SIM_RUSTFLAGS := -C link-arg=-mios-simulator-version-min=$(IOS_DEPLOYMENT_TARGET)
 
 .PHONY: swift kotlin ios-device ios-sim xcframework android-arm64 android-x86_64 android-all clean
 
@@ -29,15 +32,15 @@ swift:
 
 ios-device:
 	@echo "==> Building for iOS device (aarch64-apple-ios, staticlib only)..."
-	cd $(CRATE_DIR) && cargo rustc --release --lib --target aarch64-apple-ios --crate-type staticlib
+	cd $(CRATE_DIR) && IPHONEOS_DEPLOYMENT_TARGET=$(IOS_DEPLOYMENT_TARGET) RUSTFLAGS="$(IOS_RUSTFLAGS)" cargo rustc --release --lib --target aarch64-apple-ios --crate-type staticlib
 
 ios-sim-arm64:
 	@echo "==> Building for iOS Simulator ARM64 (aarch64-apple-ios-sim, staticlib only)..."
-	cd $(CRATE_DIR) && cargo rustc --release --lib --target aarch64-apple-ios-sim --crate-type staticlib
+	cd $(CRATE_DIR) && IPHONEOS_DEPLOYMENT_TARGET=$(IOS_DEPLOYMENT_TARGET) RUSTFLAGS="$(IOS_SIM_RUSTFLAGS)" cargo rustc --release --lib --target aarch64-apple-ios-sim --crate-type staticlib
 
 ios-sim-x86:
 	@echo "==> Building for iOS Simulator x86_64 (x86_64-apple-ios, staticlib only)..."
-	cd $(CRATE_DIR) && cargo rustc --release --lib --target x86_64-apple-ios --crate-type staticlib
+	cd $(CRATE_DIR) && IPHONEOS_DEPLOYMENT_TARGET=$(IOS_DEPLOYMENT_TARGET) RUSTFLAGS="$(IOS_SIM_RUSTFLAGS)" cargo rustc --release --lib --target x86_64-apple-ios --crate-type staticlib
 
 ios-sim: ios-sim-arm64 ios-sim-x86
 	@echo "==> Creating fat library for iOS Simulator..."

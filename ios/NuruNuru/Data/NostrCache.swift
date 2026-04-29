@@ -201,10 +201,11 @@ final class NostrCache {
         let items:         [NotificationItem]
         let profileKeys:   [String]          // profiles の pubkey 一覧
         let originalKeys:  [String]          // originalPosts の event ID 一覧
+        let originalPosts: [NostrEvent]?     // 元投稿プレビューを即時表示するためのイベントキャッシュ
         let cachedAt:      Int64
     }
 
-    private let notificationCacheKey = "notification_result"
+    private let notificationCacheKey = "notification_result_v3"
 
     /// 通知結果をキャッシュから取得。
     /// Android: `cache.getCachedNotifications()` に対応。
@@ -218,13 +219,14 @@ final class NostrCache {
 
     /// 通知結果をキャッシュに保存。
     /// Android: `cache.setCachedNotifications(result)` に対応。
-    func setCachedNotificationResult(_ items: [NotificationItem]) {
+    func setCachedNotificationResult(_ items: [NotificationItem], originalPosts: [String: NostrEvent] = [:]) {
         guard notificationEnabled else { return }
         let result = CachedNotificationResult(
-            items:        items,
-            profileKeys:  Array(Set(items.map(\.pubkey))),
-            originalKeys: items.compactMap(\.targetEventId),
-            cachedAt:     Int64(Date().timeIntervalSince1970 * 1000)
+            items:         items,
+            profileKeys:   Array(Set(items.map(\.pubkey))),
+            originalKeys:  items.compactMap(\.targetEventId),
+            originalPosts: Array(originalPosts.values),
+            cachedAt:      Int64(Date().timeIntervalSince1970 * 1000)
         )
         guard let data = try? encoder.encode(result),
               let json = String(data: data, encoding: .utf8) else { return }
