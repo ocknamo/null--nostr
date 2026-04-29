@@ -1,6 +1,7 @@
 import SwiftUI
 import PhotosUI
 import Speech
+import AVFoundation
 
 /// 引用リポスト作成シート — NIP-18 準拠 (Kind 1 + "q" タグ + nostr:note1... 埋め込み)。
 /// Android QuoteRepostModal.kt に対応。PostSheet と同じツールバーボタンを表示。
@@ -41,6 +42,7 @@ struct QuoteRepostSheet: View {
     @State private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest? = nil
     @State private var recognitionTask:   SFSpeechRecognitionTask? = nil
     @State private var audioEngine:       AVAudioEngine? = nil
+    @State private var sttBaseText:       String        = ""
 
     private var remaining: Int { UI.postMaxLength - text.count }
     private var canPost: Bool {
@@ -429,24 +431,39 @@ struct QuoteRepostSheet: View {
     // MARK: - STT (Speech-to-Text) — mirrors PostSheet
 
     private func startSTT() {
-        SFSpeechRecognizer.requestAuthorization { status in
-            DispatchQueue.main.async {
-                guard status == .authorized else {
+        guard !isSTTActive else { return }
+        errorMessage = nil
+
+        SFSpeechRecognizer.requestAuthorization { speechStatus in
+            guard speechStatus == .authorized else {
+                DispatchQueue.main.async {
                     errorMessage = "音声認識の許可が必要です"
-                    return
                 }
-                beginRecording()
+                return
+            }
+
+            AVAudioApplication.requestRecordPermission { granted in
+                DispatchQueue.main.async {
+                    guard granted else {
+                        errorMessage = "マイクの許可が必要です"
+                        return
+                    }
+                    beginRecording()
+                }
             }
         }
     }
 
     private func beginRecording() {
+        stopSTT(resetBaseText: false)
+
         let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "ja-JP"))
         guard let recognizer, recognizer.isAvailable else {
             errorMessage = "音声認識が利用できません"
             return
         }
         speechRecognizer = recognizer
+        sttBaseText = text
 
         let engine = AVAudioEngine()
         let request = SFSpeechAudioBufferRecognitionRequest()
@@ -454,7 +471,7 @@ struct QuoteRepostSheet: View {
 
         do {
             let audioSession = AVAudioSession.sharedInstance()
-            try audioSession.setCategory(.record, mode: .measurement)
+            try audioSession.setCategory(.record, mode: .measurement, options: [.duckOthers])
             try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
 
             let inputNode = engine.inputNode
@@ -463,15 +480,14 @@ struct QuoteRepostSheet: View {
                 request.append(buffer)
             }
 
-            engine.prepare()
-            try engine.start()
-
             recognitionTask = recognizer.recognitionTask(with: request) { result, error in
                 if let result {
                     let transcribed = result.bestTranscription.formattedString
                     DispatchQueue.main.async {
-                        if transcribed.count <= UI.postMaxLength {
-                            self.text = transcribed
+                        let separator = self.sttBaseText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : " "
+                        let combined = self.sttBaseText + separator + transcribed
+                        if combined.count <= UI.postMaxLength {
+                            self.text = combined
                         }
                     }
                 }
@@ -480,15 +496,24 @@ struct QuoteRepostSheet: View {
                 }
             }
 
+            engine.prepare()
+            try engine.start()
+
             self.audioEngine = engine
             self.recognitionRequest = request
             isSTTActive = true
         } catch {
-            errorMessage = "録音を開始できませんでした"
+            inputNodeRemoveTapSafely(engine: engine)
+            recognitionTask?.cancel()
+            recognitionTask = nil
+            recognitionRequest = nil
+            audioEngine = nil
+            isSTTActive = false
+            errorMessage = "録音を開始できませんでした: \(error.localizedDescription)"
         }
     }
 
-    private func stopSTT() {
+    private func stopSTT(resetBaseText: Bool = true) {
         audioEngine?.stop()
         audioEngine?.inputNode.removeTap(onBus: 0)
         recognitionRequest?.endAudio()
@@ -498,6 +523,13 @@ struct QuoteRepostSheet: View {
         recognitionRequest = nil
         recognitionTask = nil
         isSTTActive = false
+        if resetBaseText { sttBaseText = "" }
+
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    private func inputNodeRemoveTapSafely(engine: AVAudioEngine) {
+        engine.inputNode.removeTap(onBus: 0)
     }
 
     // MARK: - 投稿処理 (NIP-18: Kind 1 + "q" タグ + nostr:note1... 埋め込み)

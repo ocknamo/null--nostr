@@ -317,11 +317,8 @@ struct NotificationSheet: View {
                         if let emojiUrl = notif.emojiUrl,
                            notif.type == "reaction" || notif.type == "emoji_reaction",
                            let url = URL(string: emojiUrl) {
-                            AsyncImage(url: url) { phase in
-                                switch phase {
-                                case .success(let img): img.resizable().scaledToFit()
-                                default: EmptyView()
-                                }
+                            AnimatedRemoteImage(url: url) {
+                                EmptyView()
                             }
                             .frame(width: 13, height: 13)
                         } else if notif.type == "repost" {
@@ -460,11 +457,8 @@ struct NotificationSheet: View {
         case "reaction", "emoji_reaction":
             HStack(spacing: 5) {
                 if let emojiUrl = notif.emojiUrl, let url = URL(string: emojiUrl) {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .success(let img): img.resizable().scaledToFit()
-                        default: EmptyView()
-                        }
+                    AnimatedRemoteImage(url: url) {
+                        EmptyView()
                     }
                     .frame(width: 18, height: 18)
                 } else {
@@ -821,7 +815,7 @@ private struct NotificationRichText: View {
         case .link(let url): Text(shortUrl(url)).font(NuruFont.labelSmall()).foregroundStyle(NuruColors.lineGreen)
         case .mention(let bech32): Text(mentionLabels[bech32] ?? "@" + String(bech32.prefix(12)) + "…").font(NuruFont.labelSmall()).foregroundStyle(NuruColors.lineGreen).onTapGesture { if let parsed = NostrBech32.decode(bech32) { onProfileTap(parsed.hex) } }
         case .nostr: EmptyView()
-        case .emoji(let code, let url): if !compact, let url, let imageUrl = URL(string: url) { CachedAsyncImage(url: imageUrl) { Color.clear.frame(width: 18, height: 18) }.frame(width: 18, height: 18).clipShape(RoundedRectangle(cornerRadius: 2)).padding(.horizontal, 1) } else { Text(code).font(NuruFont.labelSmall()).foregroundStyle(theme.textSecondary) }
+        case .emoji(let code, let url): if !compact, let url, let imageUrl = URL(string: url) { AnimatedRemoteImage(url: imageUrl) { Color.clear.frame(width: 18, height: 18) }.frame(width: 18, height: 18).clipShape(RoundedRectangle(cornerRadius: 2)).padding(.horizontal, 1) } else { Text(code).font(NuruFont.labelSmall()).foregroundStyle(theme.textSecondary) }
         }
     }
     private func resolveMentions() async { var updated = mentionLabels; for part in parts { guard case .mention(let bech32) = part, updated[bech32] == nil, let parsed = NostrBech32.decode(bech32) else { continue }; if let profile = await repository.fetchProfile(pubkey: parsed.hex) { updated[bech32] = "@\(profile.displayedName)" } }; mentionLabels = updated }

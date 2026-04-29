@@ -44,6 +44,143 @@ enum CachedImageContentMode {
     case fit
 }
 
+// MARK: - Animated Remote Image (for custom emoji)
+
+/// URLCache-backed remote image view that preserves animated GIF/APNG frames.
+///
+/// SwiftUI `AsyncImage` and `Image(uiImage:)` render animated emoji as a single
+/// static frame. Custom emoji (NIP-30) often uses GIF/APNG, so emoji-sized
+/// images should be rendered through `UIImageView`, which can play an
+/// `UIImage.animatedImage`.
+struct AnimatedRemoteImage<Placeholder: View>: View {
+    let url: URL?
+    let contentMode: UIView.ContentMode
+    @ViewBuilder let placeholder: () -> Placeholder
+
+    @State private var image: UIImage?
+    @State private var loadTask: Task<Void, Never>?
+
+    init(
+        url: URL?,
+        contentMode: UIView.ContentMode = .scaleAspectFit,
+        @ViewBuilder placeholder: @escaping () -> Placeholder
+    ) {
+        self.url = url
+        self.contentMode = contentMode
+        self.placeholder = placeholder
+    }
+
+    var body: some View {
+        Group {
+            if let image {
+                AnimatedUIImageView(image: image, contentMode: contentMode)
+            } else {
+                placeholder()
+            }
+        }
+        .onAppear { loadIfNeeded() }
+        .onChange(of: url) { _, _ in
+            loadTask?.cancel()
+            image = nil
+            loadIfNeeded()
+        }
+    }
+
+    private func loadIfNeeded() {
+        guard image == nil, let url else { return }
+        loadTask = Task {
+            do {
+                let (data, response) = try await ImageCacheManager.shared.session.data(from: url)
+                guard !Task.isCancelled else { return }
+                if let http = response as? HTTPURLResponse,
+                   !(200..<300).contains(http.statusCode) {
+                    return
+                }
+                if let decoded = Self.decodeAnimatedImage(data) ?? UIImage(data: data) {
+                    await MainActor.run { image = decoded }
+                }
+            } catch {
+                // Keep placeholder; custom emoji failures are non-fatal.
+            }
+        }
+    }
+
+    private static func decodeAnimatedImage(_ data: Data) -> UIImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let frameCount = CGImageSourceGetCount(source)
+        guard frameCount > 1 else { return nil }
+
+        var frames: [UIImage] = []
+        var totalDuration: TimeInterval = 0
+        frames.reserveCapacity(frameCount)
+
+        for index in 0..<frameCount {
+            guard let cgImage = CGImageSourceCreateImageAtIndex(source, index, nil) else { continue }
+            frames.append(UIImage(cgImage: cgImage))
+            totalDuration += Self.frameDuration(at: index, source: source)
+        }
+
+        guard !frames.isEmpty else { return nil }
+        if totalDuration <= 0 { totalDuration = Double(frames.count) * 0.1 }
+        return UIImage.animatedImage(with: frames, duration: totalDuration)
+    }
+
+    private static func frameDuration(at index: Int, source: CGImageSource) -> TimeInterval {
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any] else {
+            return 0.1
+        }
+
+        let gifProperties = properties[kCGImagePropertyGIFDictionary] as? [CFString: Any]
+        let pngProperties = properties[kCGImagePropertyPNGDictionary] as? [CFString: Any]
+
+        let unclamped = (gifProperties?[kCGImagePropertyGIFUnclampedDelayTime] as? NSNumber)?.doubleValue
+            ?? (pngProperties?[kCGImagePropertyAPNGUnclampedDelayTime] as? NSNumber)?.doubleValue
+        let clamped = (gifProperties?[kCGImagePropertyGIFDelayTime] as? NSNumber)?.doubleValue
+            ?? (pngProperties?[kCGImagePropertyAPNGDelayTime] as? NSNumber)?.doubleValue
+
+        let delay = unclamped ?? clamped ?? 0.1
+        // Very small GIF delays are commonly used as 10ms placeholders; clamp to
+        // avoid excessive CPU use and match browser-like playback behavior.
+        return delay < 0.02 ? 0.1 : delay
+    }
+}
+
+private struct AnimatedUIImageView: UIViewRepresentable {
+    let image: UIImage
+    let contentMode: UIView.ContentMode
+
+    func makeUIView(context: Context) -> UIImageView {
+        let view = NoIntrinsicImageView()
+        view.contentMode = contentMode
+        view.clipsToBounds = true
+        view.backgroundColor = .clear
+        view.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        view.setContentHuggingPriority(.defaultLow, for: .vertical)
+        view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        view.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        return view
+    }
+
+    func updateUIView(_ uiView: UIImageView, context: Context) {
+        uiView.contentMode = contentMode
+        uiView.image = image
+        if image.images?.isEmpty == false {
+            uiView.startAnimating()
+        } else {
+            uiView.stopAnimating()
+        }
+    }
+
+    private final class NoIntrinsicImageView: UIImageView {
+        // Do not let the original pixel size participate in SwiftUI layout.
+        // Custom emoji grids provide their own frames; using UIImageView's
+        // natural image size makes animated emoji previews expand massively.
+        override var intrinsicContentSize: CGSize {
+            CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
+        }
+    }
+}
+
 /// Cached image view — URLCache-backed image loading with placeholder.
 /// `AsyncImage` のキャッシュ不足を解消し、ディスク永続キャッシュを実現する。
 ///

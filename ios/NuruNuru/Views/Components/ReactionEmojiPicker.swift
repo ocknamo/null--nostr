@@ -100,12 +100,8 @@ struct ReactionEmojiPicker: View {
                                 Button {
                                     onSelect(.custom(shortcode: emoji.shortcode, url: emoji.url))
                                 } label: {
-                                    AsyncImage(url: URL(string: emoji.url)) { phase in
-                                        if case .success(let img) = phase {
-                                            img.resizable().scaledToFit()
-                                        } else {
-                                            Color.clear
-                                        }
+                                    AnimatedRemoteImage(url: URL(string: emoji.url)) {
+                                        Color.clear
                                     }
                                     .aspectRatio(1, contentMode: .fit)
                                     .padding(4)

@@ -41,6 +41,8 @@ targets:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
         NSFaceIDUsageDescription: 秘密鍵の保護に生体認証を使用します
+        NSSpeechRecognitionUsageDescription: 投稿や引用投稿で音声入力を行うために音声認識を使用します
+        NSMicrophoneUsageDescription: 投稿や引用投稿で音声入力を行うためにマイクを使用します
         NSLocationWhenInUseUsageDescription: 最寄りのNostrリレーを自動検出するために位置情報を使用します
         LSRequiresIPhoneOS: true
         UISupportedInterfaceOrientations:

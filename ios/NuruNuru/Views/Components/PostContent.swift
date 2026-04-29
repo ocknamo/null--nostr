@@ -590,7 +590,7 @@ private struct EmojiRichText: View {
                         .lineSpacing(2)
                 case .emojiImage(let url):
                     if let imageUrl = URL(string: url) {
-                        CachedAsyncImage(url: imageUrl) {
+                        AnimatedRemoteImage(url: imageUrl) {
                             Color.clear
                                 .frame(width: 20, height: 20)
                         }

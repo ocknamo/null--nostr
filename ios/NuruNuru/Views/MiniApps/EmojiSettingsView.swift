@@ -301,12 +301,8 @@ struct EmojiSettingsView: View {
                                     .frame(width: cellSize, height: cellSize)
 
                                 if let url = URL(string: emoji.url) {
-                                    AsyncImage(url: url) { phase in
-                                        if case .success(let img) = phase {
-                                            img.resizable().scaledToFit()
-                                        } else {
-                                            Color.clear
-                                        }
+                                    AnimatedRemoteImage(url: url) {
+                                        Color.clear
                                     }
                                     .frame(width: cellSize - 12, height: cellSize - 12)
                                 }
@@ -408,12 +404,8 @@ private struct EmojiSetBrowserSection: View {
                                     if busy {
                                         ProgressView().tint(NuruColors.lineGreen)
                                     } else if let url = URL(string: emoji.url) {
-                                        AsyncImage(url: url) { phase in
-                                            if case .success(let img) = phase {
-                                                img.resizable().scaledToFit()
-                                            } else {
-                                                Color.clear
-                                            }
+                                        AnimatedRemoteImage(url: url) {
+                                            Color.clear
                                         }
                                         .frame(width: 30, height: 30)
                                     }

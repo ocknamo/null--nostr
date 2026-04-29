@@ -182,17 +182,12 @@ private struct EmojiCell: View {
         Button(action: onTap) {
             VStack(spacing: 4) {
                 if let url = URL(string: emoji.url) {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .success(let img):
-                            img.resizable().scaledToFit()
-                                .frame(width: 36, height: 36)
-                        default:
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(theme.bgSecondary)
-                                .frame(width: 36, height: 36)
-                        }
+                    AnimatedRemoteImage(url: url) {
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(theme.bgSecondary)
+                            .frame(width: 36, height: 36)
                     }
+                    .frame(width: 36, height: 36)
                 } else {
                     RoundedRectangle(cornerRadius: 4)
                         .fill(theme.bgSecondary)

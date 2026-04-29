@@ -1,6 +1,7 @@
 import SwiftUI
 import PhotosUI
 import Speech
+import AVFoundation
 
 /// Compose a new post — 140-char limit, CW toggle, image attachment,
 /// relay selection, NIP-70 protection, custom emoji insertion, and STT.
@@ -51,6 +52,7 @@ struct PostSheet: View {
     @State private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest? = nil
     @State private var recognitionTask:   SFSpeechRecognitionTask? = nil
     @State private var audioEngine:       AVAudioEngine? = nil
+    @State private var sttBaseText:       String        = ""
 
     private var remaining: Int { UI.postMaxLength - text.count }
     private var canPost:   Bool {
@@ -601,12 +603,8 @@ struct PostSheet: View {
                 ForEach(selectedCustomEmojis) { emoji in
                     HStack(spacing: 4) {
                         if let url = URL(string: emoji.url) {
-                            AsyncImage(url: url) { phase in
-                                if case .success(let img) = phase {
-                                    img.resizable().scaledToFit()
-                                } else {
-                                    Color.clear
-                                }
+                            AnimatedRemoteImage(url: url) {
+                                Color.clear
                             }
                             .frame(width: 18, height: 18)
                         }
@@ -651,24 +649,39 @@ struct PostSheet: View {
     // MARK: - STT (Speech-to-Text)
 
     private func startSTT() {
-        SFSpeechRecognizer.requestAuthorization { status in
-            DispatchQueue.main.async {
-                guard status == .authorized else {
+        guard !isSTTActive else { return }
+        errorMessage = nil
+
+        SFSpeechRecognizer.requestAuthorization { speechStatus in
+            guard speechStatus == .authorized else {
+                DispatchQueue.main.async {
                     errorMessage = "音声認識の許可が必要です"
-                    return
                 }
-                beginRecording()
+                return
+            }
+
+            AVAudioApplication.requestRecordPermission { granted in
+                DispatchQueue.main.async {
+                    guard granted else {
+                        errorMessage = "マイクの許可が必要です"
+                        return
+                    }
+                    beginRecording()
+                }
             }
         }
     }
 
     private func beginRecording() {
+        stopSTT(resetBaseText: false)
+
         let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "ja-JP"))
         guard let recognizer, recognizer.isAvailable else {
             errorMessage = "音声認識が利用できません"
             return
         }
         speechRecognizer = recognizer
+        sttBaseText = text
 
         let engine = AVAudioEngine()
         let request = SFSpeechAudioBufferRecognitionRequest()
@@ -676,7 +689,7 @@ struct PostSheet: View {
 
         do {
             let audioSession = AVAudioSession.sharedInstance()
-            try audioSession.setCategory(.record, mode: .measurement)
+            try audioSession.setCategory(.record, mode: .measurement, options: [.duckOthers])
             try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
 
             let inputNode = engine.inputNode
@@ -685,16 +698,14 @@ struct PostSheet: View {
                 request.append(buffer)
             }
 
-            engine.prepare()
-            try engine.start()
-
             recognitionTask = recognizer.recognitionTask(with: request) { result, error in
                 if let result {
                     let transcribed = result.bestTranscription.formattedString
                     DispatchQueue.main.async {
-                        // Only update if within character limit
-                        if transcribed.count <= UI.postMaxLength {
-                            self.text = transcribed
+                        let separator = self.sttBaseText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : " "
+                        let combined = self.sttBaseText + separator + transcribed
+                        if combined.count <= UI.postMaxLength {
+                            self.text = combined
                         }
                     }
                 }
@@ -703,15 +714,24 @@ struct PostSheet: View {
                 }
             }
 
+            engine.prepare()
+            try engine.start()
+
             self.audioEngine = engine
             self.recognitionRequest = request
             isSTTActive = true
         } catch {
-            errorMessage = "録音を開始できませんでした"
+            inputNodeRemoveTapSafely(engine: engine)
+            recognitionTask?.cancel()
+            recognitionTask = nil
+            recognitionRequest = nil
+            audioEngine = nil
+            isSTTActive = false
+            errorMessage = "録音を開始できませんでした: \(error.localizedDescription)"
         }
     }
 
-    private func stopSTT() {
+    private func stopSTT(resetBaseText: Bool = true) {
         audioEngine?.stop()
         audioEngine?.inputNode.removeTap(onBus: 0)
         recognitionRequest?.endAudio()
@@ -721,6 +741,13 @@ struct PostSheet: View {
         recognitionRequest = nil
         recognitionTask = nil
         isSTTActive = false
+        if resetBaseText { sttBaseText = "" }
+
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    private func inputNodeRemoveTapSafely(engine: AVAudioEngine) {
+        engine.inputNode.removeTap(onBus: 0)
     }
 
     // MARK: - Posting
