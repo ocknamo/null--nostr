@@ -106,10 +106,8 @@ async fn welcome_1059_recipient_is_key_package_event_owner() {
         "Welcome 1059 recipient_pubkey must be the KeyPackage event owner pubkey"
     );
 
-    let gift_wrap: nostr::Event = serde_json::from_str(
-        &add_result.welcome_event_data.gift_wrapped_event_json,
-    )
-    .unwrap();
+    let gift_wrap: nostr::Event =
+        serde_json::from_str(&add_result.welcome_event_data.gift_wrapped_event_json).unwrap();
     assert_eq!(
         u16::from(gift_wrap.kind),
         1059,

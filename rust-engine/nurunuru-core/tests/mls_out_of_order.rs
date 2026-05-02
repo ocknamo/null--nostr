@@ -167,7 +167,8 @@ async fn marmot_out_of_order_kind445_message_retries_after_missing_commit_and_du
         .mls_create_recovery_commit(&group.group_id_hex)
         .await
         .unwrap();
-    let bob_self_update_event: nostr::Event = serde_json::from_str(&bob_self_update.content).unwrap();
+    let bob_self_update_event: nostr::Event =
+        serde_json::from_str(&bob_self_update.content).unwrap();
     assert_eq!(u16::from(bob_self_update_event.kind), 445);
 
     // Snapshot Alice's pre-self-update local state. This models an app process that

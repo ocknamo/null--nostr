@@ -132,7 +132,9 @@ async fn pending_commit_blocks_next_commit_until_cleared_or_merged() {
     );
 
     assert_pending_commit_error(
-        alice.mls_add_member(&clear_group_id, &charlie_kp_json).await,
+        alice
+            .mls_add_member(&clear_group_id, &charlie_kp_json)
+            .await,
         "second add_member before clear/merge",
     );
 

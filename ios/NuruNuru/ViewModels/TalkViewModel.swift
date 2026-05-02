@@ -188,12 +188,12 @@ import Foundation
 
     func openGroup(_ groupIdHex: String) async {
         guard !openingGroupInFlight else {
-            AppLogger.log("MLS", "TalkVM.openGroup skipped (already opening) requested=(groupIdHex)")
+            AppLogger.log("MLS", "TalkVM.openGroup skipped (already opening) requested=\(groupIdHex)")
             return
         }
         openingGroupInFlight = true
 
-        AppLogger.log("MLS", "TalkVM.openGroup start: group=(groupIdHex)")
+        AppLogger.log("MLS", "TalkVM.openGroup start: group=\(groupIdHex)")
         await repository.drainMlsRetryQueue(trigger: "talkOpenGroup", maxItems: 3)
         // 以前は stuckGroupIds で開封を拒否していたが、
         // 回復可能性を残すため開封自体は許可する。
@@ -279,7 +279,7 @@ import Foundation
                 for entry in allMessagesByGroup {
                     let s = score(entry)
                     let marker = entry.group.groupIdHex == groupIdHex ? "current" : "sibling"
-                    AppLogger.log("MLS", "TalkVM.openGroup: DM sibling stats role=(marker) group=(entry.group.groupIdHex) fetchOk=(s.fetchOk) history=(s.historyCount) partnerMessages=(s.partnerCount) myMessages=(s.myCount) latestPartnerTs=(s.latestPartnerTs) latestAnyTs=(s.latestAnyTs) lastMessageTime=(s.groupTs) retryable=unavailable")
+                    AppLogger.log("MLS", "TalkVM.openGroup: DM sibling stats role=\(marker) group=\(entry.group.groupIdHex) fetchOk=\(s.fetchOk) history=\(s.historyCount) partnerMessages=\(s.partnerCount) myMessages=\(s.myCount) latestPartnerTs=\(s.latestPartnerTs) latestAnyTs=\(s.latestAnyTs) lastMessageTime=\(s.groupTs) retryable=unavailable")
                 }
 
                 if let best = allMessagesByGroup.max(by: { lhs, rhs in
@@ -295,7 +295,7 @@ import Foundation
                     if best.group.groupIdHex != groupIdHex, bestScore.partnerCount > 0 {
                         finalGroup = best.group
                         pollingGroupId = best.group.groupIdHex
-                        AppLogger.log("MLS", "TalkVM.openGroup: remapped active DM to sibling current=(groupIdHex) selected=(best.group.groupIdHex) partnerMessages=(bestScore.partnerCount) myMessages=(bestScore.myCount) partnerTs=(bestScore.latestPartnerTs) anyTs=(bestScore.latestAnyTs)")
+                        AppLogger.log("MLS", "TalkVM.openGroup: remapped active DM to sibling current=\(groupIdHex) selected=\(best.group.groupIdHex) partnerMessages=\(bestScore.partnerCount) myMessages=\(bestScore.myCount) partnerTs=\(bestScore.latestPartnerTs) anyTs=\(bestScore.latestAnyTs)")
                     } else {
                         let keepReason = bestScore.partnerCount > 0 ? "current_has_partner_messages" : "no_decryptable_partner_sibling"
                         AppLogger.log("MLS", "TalkVM.openGroup: kept active DM group=\(groupIdHex) partnerMessages=\(bestScore.partnerCount) myMessages=\(bestScore.myCount) partnerTs=\(bestScore.latestPartnerTs) anyTs=\(bestScore.latestAnyTs) reason=\(keepReason)")
@@ -311,19 +311,19 @@ import Foundation
                         if lhs.timestamp == rhs.timestamp { return lhs.id < rhs.id }
                         return lhs.timestamp < rhs.timestamp
                     }
-                    AppLogger.log("MLS", "TalkVM.openGroup: merged sibling DM histories groups=(allMessagesByGroup.count) merged=(msgs.count) sendGroup=(pollingGroupId)")
+                    AppLogger.log("MLS", "TalkVM.openGroup: merged sibling DM histories groups=\(allMessagesByGroup.count) merged=\(msgs.count) sendGroup=\(pollingGroupId)")
                 }
             }
 
             activeGroup = finalGroup
             messages = msgs
             error = nil
-            AppLogger.log("MLS", "TalkVM.openGroup success: messages=(msgs.count) active=(finalGroup.groupIdHex)")
+            AppLogger.log("MLS", "TalkVM.openGroup success: messages=\(msgs.count) active=\(finalGroup.groupIdHex)")
             messagesLoading = false
             openingGroupInFlight = false
             startPolling(groupIdHex: pollingGroupId)
         } catch {
-            AppLogger.log("MLS", "TalkVM.openGroup error: (error)")
+            AppLogger.log("MLS", "TalkVM.openGroup error: \(error)")
             messagesLoading = false
             openingGroupInFlight = false
 

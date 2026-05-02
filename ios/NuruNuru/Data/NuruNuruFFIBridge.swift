@@ -108,13 +108,15 @@ public struct FfiKeyPackageEventData {
     public let tags:       [[String]]
     public let legacyTags: [[String]]
     public let dTag:       String
+    public let hashRef:    [UInt8]
 
-    public init(kind: UInt32 = 30443, content: String, tags: [[String]], legacyTags: [[String]] = [], dTag: String = "") {
+    public init(kind: UInt32 = 30443, content: String, tags: [[String]], legacyTags: [[String]] = [], dTag: String = "", hashRef: [UInt8] = []) {
         self.kind = kind
         self.content = content
         self.tags = tags
         self.legacyTags = legacyTags
         self.dTag = dTag
+        self.hashRef = hashRef
     }
 }
 
@@ -136,6 +138,7 @@ protocol MlsFFIBridge: AnyObject, Sendable {
     func mlsCreateKeyPackage() throws -> FfiKeyPackageEventData
     func mlsValidateKeyPackageEvent(eventJSON: String) throws
     func mlsDeleteConsumedKeyPackageFromEventJSON(eventJSON: String) throws
+    func mlsDeleteConsumedKeyPackageByHashRef(hashRef: [UInt8]) throws
     /// Returns Nostr group id hex values that can be passed to `mlsCreateRecoveryCommit`.
     func mlsGroupsNeedingSelfUpdate(thresholdSecs: UInt64) throws -> [String]
 
@@ -174,6 +177,7 @@ final class MlsFFIStub: MlsFFIBridge, @unchecked Sendable {
 
     func mlsValidateKeyPackageEvent(eventJSON: String) throws {}
     func mlsDeleteConsumedKeyPackageFromEventJSON(eventJSON: String) throws {}
+    func mlsDeleteConsumedKeyPackageByHashRef(hashRef: [UInt8]) throws {}
     func mlsGroupsNeedingSelfUpdate(thresholdSecs: UInt64) throws -> [String] { [] }
 
     func mlsCreateGroup(name: String, adminPubkeys: [String], relays: [String]) throws -> FfiMlsGroupInfo {

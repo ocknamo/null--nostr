@@ -18,7 +18,7 @@ val localProps = Properties().also {
 
 android {
     namespace = "io.nurunuru.app"
-    compileSdk = 34
+    compileSdk = 35
 
     signingConfigs {
         create("release") {
@@ -32,9 +32,9 @@ android {
     defaultConfig {
         applicationId = "io.nurunuru.app"
         minSdk = 26
-        targetSdk = 34
-        versionCode = 16
-        versionName = "1.4.3"
+        targetSdk = 35
+        versionCode = 17
+        versionName = "1.4.4"
     }
 
     buildTypes {

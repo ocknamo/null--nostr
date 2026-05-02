@@ -294,7 +294,7 @@ class AppPreferences(context: Context) {
         if (normalized.isEmpty()) return
         val current = mlsConsumedKeyPackageEventIds.toMutableSet()
         current.add(normalized)
-        mlsConsumedKeyPackageEventIds = current.takeLast(200).toSet()
+        mlsConsumedKeyPackageEventIds = current.toList().takeLast(200).toSet()
     }
 
     var notificationEnabledKinds: Set<Int>
@@ -349,5 +349,8 @@ class AppPreferences(context: Context) {
         private const val KEY_PLAIN_MIGRATED = "plain_migrated_v1"
         private const val KEY_NOTIFICATION_KINDS = "notification_enabled_kinds"
         private const val KEY_MLS_SELF_UPDATE_SUCCESS_PREFIX = "mls_self_update_success_at_"
+        private const val KEY_MLS_PUBLISHED_KEY_PACKAGE_EVENT_ID = "mls_published_key_package_event_id"
+        private const val KEY_MLS_PUBLISHED_KEY_PACKAGE_AT = "mls_published_key_package_at"
+        private const val KEY_MLS_CONSUMED_KEY_PACKAGE_EVENT_IDS = "mls_consumed_key_package_event_ids"
     }
 }

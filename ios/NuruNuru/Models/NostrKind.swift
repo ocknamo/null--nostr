@@ -56,7 +56,8 @@ enum NostrKind {
     static let mlsKeyPackage            = 30443     // Marmot MIP-00 canonical (addressable)
     static let mlsKeyPackageLegacy      = 443       // Legacy regular event (migration fallback)
     static let mlsWelcome               = 1059      // NIP-59 gift-wrapped Welcome (Marmot MIP-02)
-    static let mlsWelcomeInner          = 444       // Inner rumor kind (unwrapped by Rust)
+    static let mlsWelcomeInner          = 444       // Inner rumor kind (unwrapped by Rust / MDK 0.7.x)
+    static let mlsWelcomeInnerMarmot    = 10444     // Marmot/WhiteNoise alias seen in the ecosystem
     static let mlsGroupMessage          = 445       // Unchanged
     static let mlsKeyPackageRelays      = 10051
 }

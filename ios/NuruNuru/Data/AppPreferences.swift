@@ -60,8 +60,9 @@ final class AppPreferences {
         static let mlsJoinedAtByGroupId = "nurunuru_mls_joined_at_by_group_id"
         static let mlsSelfUpdateCompletedAtByGroupId = "nurunuru_mls_self_update_completed_at_by_group_id"
         static let mlsKeyPackageEventJsonById = "nurunuru_mls_keypackage_event_json_by_id"
+        static let mlsKeyPackageHashRefById = "nurunuru_mls_keypackage_hash_ref_by_id"
         static let mlsConsumedKeyPackageEventIds = "nurunuru_mls_consumed_keypackage_event_ids"
-        static let mlsRejectedWelcomeRetryAfterById = "nurunuru_mls_rejected_welcome_retry_after_by_id"
+        static let mlsRejectedWelcomeRetryAfterById = "nurunuru_mls_rejected_welcome_retry_after_by_id_v2"
     }
 
     var publicKeyHex: String? {
@@ -294,6 +295,21 @@ final class AppPreferences {
         }
     }
 
+    /// Locally published KeyPackage hash_ref bytes keyed by signed event id (hex).
+    /// This lets MIP-02 cleanup delete the exact local init-key material after Welcome accept.
+    var mlsKeyPackageHashRefById: [String: [UInt8]] {
+        get {
+            guard let data = defaults.data(forKey: Keys.mlsKeyPackageHashRefById),
+                  let map = try? JSONDecoder().decode([String: [UInt8]].self, from: data) else { return [:] }
+            return map
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) {
+                defaults.set(data, forKey: Keys.mlsKeyPackageHashRefById)
+            }
+        }
+    }
+
     /// KeyPackage event ids already consumed by MLS Welcome processing.
     /// Relay deletion is best-effort, so this local set is the source of truth
     /// for avoiding KeyPackage reuse after app relaunch.
@@ -360,6 +376,7 @@ final class AppPreferences {
          Keys.mlsJoinedAtByGroupId,
          Keys.mlsSelfUpdateCompletedAtByGroupId,
          Keys.mlsKeyPackageEventJsonById,
+         Keys.mlsKeyPackageHashRefById,
          Keys.mlsConsumedKeyPackageEventIds,
          Keys.mlsRejectedWelcomeRetryAfterById].forEach { defaults.removeObject(forKey: $0) }
     }

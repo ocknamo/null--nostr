@@ -510,6 +510,24 @@ fileprivate struct FfiConverterString: FfiConverter {
     }
 }
 
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterData: FfiConverterRustBuffer {
+    typealias SwiftType = Data
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
+        let len: Int32 = try readInt(&buf)
+        return Data(try readBytes(&buf, count: Int(len)))
+    }
+
+    public static func write(_ value: Data, into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        writeBytes(&buf, value)
+    }
+}
+
 
 
 
@@ -724,6 +742,11 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     func mlsCreateRecoveryCommit(groupIdHex: String) throws  -> FfiEncryptedMessageData
+    
+    /**
+     * Delete consumed KeyPackage private/init-key material using the exact hash_ref returned at creation.
+     */
+    func mlsDeleteConsumedKeyPackageByHashRef(hashRef: Data) throws 
     
     /**
      * Delete consumed KeyPackage private/init-key material from local MLS storage (MIP-02).
@@ -1449,6 +1472,16 @@ open func mlsCreateRecoveryCommit(groupIdHex: String)throws  -> FfiEncryptedMess
         FfiConverterString.lower(groupIdHex),$0
     )
 })
+}
+    
+    /**
+     * Delete consumed KeyPackage private/init-key material using the exact hash_ref returned at creation.
+     */
+open func mlsDeleteConsumedKeyPackageByHashRef(hashRef: Data)throws   {try rustCallWithError(FfiConverterTypeNuruNuruFfiError_lift) {
+    uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_delete_consumed_key_package_by_hash_ref(self.uniffiClonePointer(),
+        FfiConverterData.lower(hashRef),$0
+    )
+}
 }
     
     /**
@@ -2295,6 +2328,10 @@ public struct FfiKeyPackageEventData {
      * Canonical d-tag identifier for keypackage slot replacement.
      */
     public var dTag: String
+    /**
+     * Serialized MDK KeyPackage hash_ref for exact local init-key cleanup after Welcome accept.
+     */
+    public var hashRef: Data
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -2310,12 +2347,16 @@ public struct FfiKeyPackageEventData {
          */legacyTags: [[String]], 
         /**
          * Canonical d-tag identifier for keypackage slot replacement.
-         */dTag: String) {
+         */dTag: String, 
+        /**
+         * Serialized MDK KeyPackage hash_ref for exact local init-key cleanup after Welcome accept.
+         */hashRef: Data) {
         self.kind = kind
         self.content = content
         self.tags = tags
         self.legacyTags = legacyTags
         self.dTag = dTag
+        self.hashRef = hashRef
     }
 }
 
@@ -2341,6 +2382,9 @@ extension FfiKeyPackageEventData: Equatable, Hashable {
         if lhs.dTag != rhs.dTag {
             return false
         }
+        if lhs.hashRef != rhs.hashRef {
+            return false
+        }
         return true
     }
 
@@ -2350,6 +2394,7 @@ extension FfiKeyPackageEventData: Equatable, Hashable {
         hasher.combine(tags)
         hasher.combine(legacyTags)
         hasher.combine(dTag)
+        hasher.combine(hashRef)
     }
 }
 
@@ -2366,7 +2411,8 @@ public struct FfiConverterTypeFfiKeyPackageEventData: FfiConverterRustBuffer {
                 content: FfiConverterString.read(from: &buf), 
                 tags: FfiConverterSequenceSequenceString.read(from: &buf), 
                 legacyTags: FfiConverterSequenceSequenceString.read(from: &buf), 
-                dTag: FfiConverterString.read(from: &buf)
+                dTag: FfiConverterString.read(from: &buf), 
+                hashRef: FfiConverterData.read(from: &buf)
         )
     }
 
@@ -2376,6 +2422,7 @@ public struct FfiConverterTypeFfiKeyPackageEventData: FfiConverterRustBuffer {
         FfiConverterSequenceSequenceString.write(value.tags, into: &buf)
         FfiConverterSequenceSequenceString.write(value.legacyTags, into: &buf)
         FfiConverterString.write(value.dTag, into: &buf)
+        FfiConverterData.write(value.hashRef, into: &buf)
     }
 }
 
@@ -3364,6 +3411,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_create_recovery_commit() != 3656) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_delete_consumed_key_package_by_hash_ref() != 13887) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_delete_consumed_key_package_from_event_json() != 53947) {

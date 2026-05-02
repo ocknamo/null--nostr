@@ -136,7 +136,10 @@ async fn process_welcome_accepts_and_joins_group_before_returning() {
         .unwrap();
 
     let gift_wrapped_welcome = &add_result.welcome_event_data.gift_wrapped_event_json;
-    assert!(!gift_wrapped_welcome.is_empty(), "gift-wrapped Welcome must be returned");
+    assert!(
+        !gift_wrapped_welcome.is_empty(),
+        "gift-wrapped Welcome must be returned"
+    );
 
     let joined = bob.mls_process_welcome(gift_wrapped_welcome).await.unwrap();
 
@@ -196,7 +199,9 @@ async fn process_welcome_accepts_and_joins_group_before_returning() {
                 "if duplicate Welcome processing fails, it must fail in process/accept_welcome; got: {message}"
             );
         }
-        Err(other) => panic!("duplicate Welcome must either be idempotent Ok or an MLS error, got {other:?}"),
+        Err(other) => {
+            panic!("duplicate Welcome must either be idempotent Ok or an MLS error, got {other:?}")
+        }
     }
 
     let bob_groups_after_duplicate = bob.mls_list_groups().await.unwrap();

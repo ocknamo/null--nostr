@@ -56,11 +56,11 @@ fn get_db_path() -> Result<String, NuruNuruFfiError> {
     let guard = GLOBAL_DB_PATH
         .read()
         .map_err(|e| NuruNuruFfiError::RuntimeError(format!("db path lock poisoned: {e}")))?;
-    guard
-        .clone()
-        .ok_or_else(|| NuruNuruFfiError::RuntimeError(
+    guard.clone().ok_or_else(|| {
+        NuruNuruFfiError::RuntimeError(
             "init_engine() must be called before creating a NuruNuruClient".to_string(),
-        ))
+        )
+    })
 }
 
 // ─── Client ────────────────────────────────────────────────────────────────
@@ -123,7 +123,11 @@ impl NuruNuruClient {
             Ok::<_, NuruNuruFfiError>((engine, sk))
         })?;
 
-        Ok(Arc::new(Self { runtime: rt, engine, secret_key: Some(secret_key) }))
+        Ok(Arc::new(Self {
+            runtime: rt,
+            engine,
+            secret_key: Some(secret_key),
+        }))
     }
 
     /// Create a read-only client for users who sign externally (NIP-07 / Amber / NIP-46).
@@ -175,7 +179,11 @@ impl NuruNuruClient {
             Ok::<_, NuruNuruFfiError>(engine)
         })?;
 
-        Ok(Arc::new(Self { runtime: rt, engine, secret_key: None }))
+        Ok(Arc::new(Self {
+            runtime: rt,
+            engine,
+            secret_key: None,
+        }))
     }
 
     // ─── Relay lifecycle ───────────────────────────────────────────────────
@@ -227,8 +235,7 @@ impl NuruNuruClient {
         let pk = nostr::PublicKey::from_hex(&pubkey_hex)
             .map_err(|e| NuruNuruFfiError::KeyError(e.to_string()))?;
         let unsigned = nostr::EventBuilder::text_note(content).build(pk);
-        serde_json::to_string(&unsigned)
-            .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
+        serde_json::to_string(&unsigned).map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
     }
 
     /// Create an **unsigned** reaction (kind 7) JSON for external signing.
@@ -253,8 +260,7 @@ impl NuruNuruClient {
             relay_hint: None,
         };
         let unsigned = nostr::EventBuilder::reaction(target, &emoji).build(creator);
-        serde_json::to_string(&unsigned)
-            .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
+        serde_json::to_string(&unsigned).map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
     }
 
     /// Create an **unsigned** repost (kind 6) JSON for external signing.
@@ -268,8 +274,7 @@ impl NuruNuruClient {
         let creator = nostr::PublicKey::from_hex(&creator_pubkey_hex)
             .map_err(|e| NuruNuruFfiError::KeyError(e.to_string()))?;
         let unsigned = nostr::EventBuilder::repost(&event, None).build(creator);
-        serde_json::to_string(&unsigned)
-            .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
+        serde_json::to_string(&unsigned).map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
     }
 
     /// Create an **unsigned** text note with tags JSON for external signing.
@@ -287,8 +292,7 @@ impl NuruNuruClient {
             builder = builder.tag(tag);
         }
         let unsigned = builder.build(creator);
-        serde_json::to_string(&unsigned)
-            .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
+        serde_json::to_string(&unsigned).map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
     }
 
     /// Create an **unsigned** event of any kind for external signing.
@@ -308,8 +312,7 @@ impl NuruNuruClient {
             builder = builder.tag(tag);
         }
         let unsigned = builder.build(creator);
-        serde_json::to_string(&unsigned)
-            .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
+        serde_json::to_string(&unsigned).map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
     }
 
     /// Publish an already-signed Nostr event JSON to all connected relays.
@@ -336,10 +339,7 @@ impl NuruNuruClient {
     /// Internally calls `engine.fetch_timeline(authors=None)`, which issues a
     /// REQ to all connected relays and waits up to 15 s for results.
     /// Call `connect()` first so the relays are ready.
-    pub fn fetch_global_timeline(
-        &self,
-        limit: u32,
-    ) -> Result<Vec<String>, NuruNuruFfiError> {
+    pub fn fetch_global_timeline(&self, limit: u32) -> Result<Vec<String>, NuruNuruFfiError> {
         self.fetch_timeline_inner(None, limit)
     }
 
@@ -416,11 +416,10 @@ impl NuruNuruClient {
 
         let mut events = self
             .runtime
-            .block_on(self.engine.fetch_events_from_relays(
-                filter,
-                relay_urls,
-                timeout_secs as u64,
-            ))
+            .block_on(
+                self.engine
+                    .fetch_events_from_relays(filter, relay_urls, timeout_secs as u64),
+            )
             .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))?;
 
         events.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -488,10 +487,7 @@ impl NuruNuruClient {
     /// Query the local nostrdb cache for the global timeline (no author filter).
     ///
     /// Returns serialised JSON strings of kind-1 events, newest-first, up to `limit`.
-    pub fn query_local_global(
-        &self,
-        limit: u32,
-    ) -> Result<Vec<String>, NuruNuruFfiError> {
+    pub fn query_local_global(&self, limit: u32) -> Result<Vec<String>, NuruNuruFfiError> {
         let since_24h = nostr::Timestamp::from(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -561,16 +557,16 @@ impl NuruNuruClient {
             .block_on(self.engine.fetch_profiles(&pks))
             .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))?;
 
-        Ok(profiles_map.into_values().map(core_profile_to_ffi).collect())
+        Ok(profiles_map
+            .into_values()
+            .map(core_profile_to_ffi)
+            .collect())
     }
 
     // ─── Social graph ──────────────────────────────────────────────────────
 
     /// Fetch the follow list for a user. Returns pubkey hex strings.
-    pub fn fetch_follow_list(
-        &self,
-        pubkey_hex: String,
-    ) -> Result<Vec<String>, NuruNuruFfiError> {
+    pub fn fetch_follow_list(&self, pubkey_hex: String) -> Result<Vec<String>, NuruNuruFfiError> {
         let pk = nostr::PublicKey::from_hex(&pubkey_hex)
             .map_err(|e| NuruNuruFfiError::KeyError(e.to_string()))?;
         self.runtime
@@ -604,11 +600,7 @@ impl NuruNuruClient {
     /// conversations.  This method is kept for backwards compatibility during
     /// the NIP-17 → NIP-EE migration period.
     #[deprecated(note = "Use mls_create_message for new conversations (NIP-EE)")]
-    pub fn send_dm(
-        &self,
-        recipient_hex: String,
-        content: String,
-    ) -> Result<(), NuruNuruFfiError> {
+    pub fn send_dm(&self, recipient_hex: String, content: String) -> Result<(), NuruNuruFfiError> {
         let pk = nostr::PublicKey::from_hex(&recipient_hex)
             .map_err(|e| NuruNuruFfiError::KeyError(e.to_string()))?;
         self.runtime
@@ -633,6 +625,7 @@ impl NuruNuruClient {
             tags: data.tags,
             legacy_tags: data.legacy_tags,
             d_tag: data.d_tag,
+            hash_ref: data.hash_ref,
         })
     }
 
@@ -645,7 +638,10 @@ impl NuruNuruClient {
         key_package_event_json: String,
     ) -> Result<(), NuruNuruFfiError> {
         self.runtime
-            .block_on(self.engine.mls_validate_key_package_event(&key_package_event_json))
+            .block_on(
+                self.engine
+                    .mls_validate_key_package_event(&key_package_event_json),
+            )
             .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
     }
 
@@ -655,7 +651,23 @@ impl NuruNuruClient {
         key_package_event_json: String,
     ) -> Result<(), NuruNuruFfiError> {
         self.runtime
-            .block_on(self.engine.mls_delete_consumed_key_package_from_event_json(&key_package_event_json))
+            .block_on(
+                self.engine
+                    .mls_delete_consumed_key_package_from_event_json(&key_package_event_json),
+            )
+            .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
+    }
+
+    /// Delete consumed KeyPackage private/init-key material using the exact hash_ref returned at creation.
+    pub fn mls_delete_consumed_key_package_by_hash_ref(
+        &self,
+        hash_ref: Vec<u8>,
+    ) -> Result<(), NuruNuruFfiError> {
+        self.runtime
+            .block_on(
+                self.engine
+                    .mls_delete_consumed_key_package_by_hash_ref(&hash_ref),
+            )
             .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
     }
 
@@ -700,7 +712,10 @@ impl NuruNuruClient {
     ) -> Result<FfiAddMemberResult, NuruNuruFfiError> {
         let result = self
             .runtime
-            .block_on(self.engine.mls_add_member(&group_id_hex, &key_package_event_json))
+            .block_on(
+                self.engine
+                    .mls_add_member(&group_id_hex, &key_package_event_json),
+            )
             .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))?;
         Ok(FfiAddMemberResult {
             commit_event_data: core_encrypted_msg_to_ffi(result.commit_event_data),
@@ -738,18 +753,25 @@ impl NuruNuruClient {
     ) -> Result<FfiMlsProcessResult, NuruNuruFfiError> {
         let result = self
             .runtime
-            .block_on(self.engine.mls_process_message_result(&group_id_hex, &event_json))
+            .block_on(
+                self.engine
+                    .mls_process_message_result(&group_id_hex, &event_json),
+            )
             .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))?;
         Ok(match result {
-            nurunuru_core::types::MlsProcessResult::ApplicationMessage(msg) => FfiMlsProcessResult::Application {
-                message: FfiDecryptedMessage {
-                    sender_pubkey: msg.sender_pubkey,
-                    content: msg.content,
-                    timestamp: msg.timestamp,
-                    group_id_hex: msg.group_id_hex,
+            nurunuru_core::types::MlsProcessResult::ApplicationMessage(msg) => {
+                FfiMlsProcessResult::Application {
+                    message: FfiDecryptedMessage {
+                        sender_pubkey: msg.sender_pubkey,
+                        content: msg.content,
+                        timestamp: msg.timestamp,
+                        group_id_hex: msg.group_id_hex,
+                    },
                 }
-            },
-            nurunuru_core::types::MlsProcessResult::StateUpdate { kind } => FfiMlsProcessResult::StateUpdate { kind },
+            }
+            nurunuru_core::types::MlsProcessResult::StateUpdate { kind } => {
+                FfiMlsProcessResult::StateUpdate { kind }
+            }
         })
     }
 
@@ -866,10 +888,7 @@ impl NuruNuruClient {
     /// same group will fail with "Can't execute operation because a pending commit exists".
     ///
     /// group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
-    pub fn mls_merge_pending_commit(
-        &self,
-        group_id_hex: String,
-    ) -> Result<(), NuruNuruFfiError> {
+    pub fn mls_merge_pending_commit(&self, group_id_hex: String) -> Result<(), NuruNuruFfiError> {
         self.runtime
             .block_on(self.engine.mls_merge_pending_commit(&group_id_hex))
             .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
@@ -892,10 +911,7 @@ impl NuruNuruClient {
     /// Clear (rollback) pending MLS commit for recovery from stuck state.
     ///
     /// group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
-    pub fn mls_clear_pending_commit(
-        &self,
-        group_id_hex: String,
-    ) -> Result<(), NuruNuruFfiError> {
+    pub fn mls_clear_pending_commit(&self, group_id_hex: String) -> Result<(), NuruNuruFfiError> {
         self.runtime
             .block_on(self.engine.mls_clear_pending_commit(&group_id_hex))
             .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
@@ -913,10 +929,7 @@ impl NuruNuruClient {
     }
 
     /// Get the recommended feed. Returns scored event metadata.
-    pub fn get_recommended_feed(
-        &self,
-        limit: u32,
-    ) -> Result<Vec<FfiScoredPost>, NuruNuruFfiError> {
+    pub fn get_recommended_feed(&self, limit: u32) -> Result<Vec<FfiScoredPost>, NuruNuruFfiError> {
         let scored = self
             .runtime
             .block_on(self.engine.get_recommended_feed(limit as usize))
@@ -1022,10 +1035,7 @@ impl NuruNuruClient {
     /// `event_json` must be the full serialised Nostr event JSON received from
     /// a relay (including `id`, `pubkey`, `sig`).
     /// Returns the repost event ID hex.
-    pub fn repost(
-        &self,
-        event_json: String,
-    ) -> Result<String, NuruNuruFfiError> {
+    pub fn repost(&self, event_json: String) -> Result<String, NuruNuruFfiError> {
         let event: nostr::Event = serde_json::from_str(&event_json)
             .map_err(|e| NuruNuruFfiError::EngineError(format!("Invalid event JSON: {e}")))?;
         let eid = self
@@ -1122,9 +1132,11 @@ impl NuruNuruClient {
         recipient_pubkey_hex: String,
         plaintext: String,
     ) -> Result<String, NuruNuruFfiError> {
-        let sk = self.secret_key.as_ref()
-            .ok_or_else(|| NuruNuruFfiError::EngineError(
-                "nip04_encrypt requires an internal signer client".to_string()))?;
+        let sk = self.secret_key.as_ref().ok_or_else(|| {
+            NuruNuruFfiError::EngineError(
+                "nip04_encrypt requires an internal signer client".to_string(),
+            )
+        })?;
         let pk = nostr::PublicKey::from_hex(&recipient_pubkey_hex)
             .map_err(|e| NuruNuruFfiError::KeyError(e.to_string()))?;
         nostr::nips::nip04::encrypt(sk, &pk, &plaintext)
@@ -1139,9 +1151,11 @@ impl NuruNuruClient {
         sender_pubkey_hex: String,
         ciphertext: String,
     ) -> Result<String, NuruNuruFfiError> {
-        let sk = self.secret_key.as_ref()
-            .ok_or_else(|| NuruNuruFfiError::EngineError(
-                "nip04_decrypt requires an internal signer client".to_string()))?;
+        let sk = self.secret_key.as_ref().ok_or_else(|| {
+            NuruNuruFfiError::EngineError(
+                "nip04_decrypt requires an internal signer client".to_string(),
+            )
+        })?;
         let pk = nostr::PublicKey::from_hex(&sender_pubkey_hex)
             .map_err(|e| NuruNuruFfiError::KeyError(e.to_string()))?;
         nostr::nips::nip04::decrypt(sk, &pk, &ciphertext)
@@ -1156,9 +1170,11 @@ impl NuruNuruClient {
         recipient_pubkey_hex: String,
         plaintext: String,
     ) -> Result<String, NuruNuruFfiError> {
-        let sk = self.secret_key.as_ref()
-            .ok_or_else(|| NuruNuruFfiError::EngineError(
-                "nip44_encrypt requires an internal signer client".to_string()))?;
+        let sk = self.secret_key.as_ref().ok_or_else(|| {
+            NuruNuruFfiError::EngineError(
+                "nip44_encrypt requires an internal signer client".to_string(),
+            )
+        })?;
         let pk = nostr::PublicKey::from_hex(&recipient_pubkey_hex)
             .map_err(|e| NuruNuruFfiError::KeyError(e.to_string()))?;
         nostr::nips::nip44::encrypt(sk, &pk, &plaintext, nostr::nips::nip44::Version::default())
@@ -1173,9 +1189,11 @@ impl NuruNuruClient {
         sender_pubkey_hex: String,
         ciphertext: String,
     ) -> Result<String, NuruNuruFfiError> {
-        let sk = self.secret_key.as_ref()
-            .ok_or_else(|| NuruNuruFfiError::EngineError(
-                "nip44_decrypt requires an internal signer client".to_string()))?;
+        let sk = self.secret_key.as_ref().ok_or_else(|| {
+            NuruNuruFfiError::EngineError(
+                "nip44_decrypt requires an internal signer client".to_string(),
+            )
+        })?;
         let pk = nostr::PublicKey::from_hex(&sender_pubkey_hex)
             .map_err(|e| NuruNuruFfiError::KeyError(e.to_string()))?;
         nostr::nips::nip44::decrypt(sk, &pk, &ciphertext)
@@ -1219,20 +1237,13 @@ impl NuruNuruClient {
     /// strings. Returns an empty vec when no new events have arrived.
     ///
     /// Safe to call on a background thread; will return immediately.
-    pub fn poll_live_events(
-        &self,
-        sub_id: String,
-        max_count: u32,
-    ) -> Vec<String> {
+    pub fn poll_live_events(&self, sub_id: String, max_count: u32) -> Vec<String> {
         self.runtime
             .block_on(self.engine.poll_subscription(&sub_id, max_count as usize))
     }
 
     /// Cancel a live subscription and release all associated resources.
-    pub fn stop_live_subscription(
-        &self,
-        sub_id: String,
-    ) -> Result<(), NuruNuruFfiError> {
+    pub fn stop_live_subscription(&self, sub_id: String) -> Result<(), NuruNuruFfiError> {
         self.runtime
             .block_on(self.engine.unsubscribe_stream(&sub_id))
             .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
@@ -1259,9 +1270,7 @@ impl NuruNuruClient {
 
 /// Convert `Vec<Vec<String>>` tag lists from the FFI boundary into
 /// `Vec<nostr::Tag>`.  Invalid tag arrays are silently skipped.
-fn parse_ffi_tags(
-    raw: Vec<Vec<String>>,
-) -> Result<Vec<nostr::Tag>, NuruNuruFfiError> {
+fn parse_ffi_tags(raw: Vec<Vec<String>>) -> Result<Vec<nostr::Tag>, NuruNuruFfiError> {
     let mut out = Vec::with_capacity(raw.len());
     for parts in raw {
         if parts.is_empty() {
@@ -1296,11 +1305,10 @@ impl NuruNuruClient {
 
         let events = self
             .runtime
-            .block_on(self.engine.fetch_timeline(
-                author_pks.as_deref(),
-                None,
-                limit as usize,
-            ))
+            .block_on(
+                self.engine
+                    .fetch_timeline(author_pks.as_deref(), None, limit as usize),
+            )
             .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))?;
 
         events
@@ -1387,6 +1395,8 @@ pub struct FfiKeyPackageEventData {
     pub legacy_tags: Vec<Vec<String>>,
     /// Canonical d-tag identifier for keypackage slot replacement.
     pub d_tag: String,
+    /// Serialized MDK KeyPackage hash_ref for exact local init-key cleanup after Welcome accept.
+    pub hash_ref: Vec<u8>,
 }
 
 #[derive(uniffi::Record)]

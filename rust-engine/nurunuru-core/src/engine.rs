@@ -25,9 +25,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
+use base64::Engine as _;
 use nostr::nips::nip09::EventDeletionRequest;
 use nostr::nips::nip25::ReactionTarget;
 use nostr::prelude::*;
+use nostr::{TagKind, UnsignedEvent};
 use nostr_ndb::NdbDatabase;
 use nostr_sdk::prelude::*;
 use tokio::sync::{Mutex, RwLock};
@@ -1145,6 +1147,12 @@ impl NuruNuruEngine {
             .delete_consumed_key_package_from_event_json(key_package_event_json)
     }
 
+    /// Delete consumed KeyPackage private/init-key material using the exact hash_ref returned at creation.
+    pub async fn mls_delete_consumed_key_package_by_hash_ref(&self, hash_ref: &[u8]) -> Result<()> {
+        self.require_mls()?
+            .delete_consumed_key_package_by_hash_ref(hash_ref)
+    }
+
     /// Return MLS group IDs (hex) that need self-update per MDK state tracking.
     pub async fn mls_groups_needing_self_update(&self, threshold_secs: u64) -> Result<Vec<String>> {
         self.require_mls()?
@@ -1248,11 +1256,138 @@ impl NuruNuruEngine {
             .process_message_result(group_id_hex, event_json)
     }
 
+    fn normalize_marmot_welcome_rumor(mut rumor: UnsignedEvent) -> Result<UnsignedEvent> {
+        if rumor.kind != nostr::Kind::MlsWelcome && rumor.kind.as_u16() != 10_444 {
+            return Ok(rumor);
+        }
+
+        // In the nostr crate MlsWelcome follows the historical NIP-104 value
+        // (444), but Marmot MIP-02/WhiteNoise may use kind 10444 for the inner
+        // Welcome rumor carried by gift-wrap. MDK 0.7.x validation currently
+        // checks against nostr::Kind::MlsWelcome, so normalize that protocol
+        // alias here before passing the rumor to MDK.
+        rumor.kind = nostr::Kind::MlsWelcome;
+
+        // MDK 0.7.x strictly validates the transport tags on kind:444 before
+        // decoding the MLS Welcome. Some WhiteNoise/Marmot relays contain older
+        // or variant rumors where these tags are missing, malformed, or include
+        // an empty `client` tag. Normalize the envelope tags only; the Welcome
+        // payload in `content` is not modified.
+        let mut tags: Vec<Tag> = Vec::new();
+        let mut has_valid_event_ref = false;
+
+        for tag in rumor.tags.to_vec() {
+            let slice = tag.as_slice();
+            match slice.first().map(|v| v.as_str()) {
+                Some("relays") => {
+                    // Replace relays with a known-valid relay below. Keeping a
+                    // malformed relay URL causes MDK validation to reject the
+                    // otherwise decryptable Welcome.
+                }
+                Some("client") => {
+                    // MDK accepts client only when non-empty. Drop empty/invalid
+                    // client tags instead of failing interop.
+                    if slice.get(1).is_some_and(|v| !v.is_empty()) {
+                        tags.push(tag);
+                    }
+                }
+                Some("e") => {
+                    if slice.get(1).is_some_and(|v| !v.is_empty()) {
+                        has_valid_event_ref = true;
+                        tags.push(tag);
+                    }
+                }
+                Some("encoding") => {
+                    // Always canonicalize to exactly encoding=base64 below.
+                }
+                _ => tags.push(tag),
+            }
+        }
+
+        tags.push(
+            Tag::parse(["relays", "wss://yabu.me"]).map_err(|e| {
+                NuruNuruError::MlsError(format!("normalize_welcome: relays tag: {e}"))
+            })?,
+        );
+        tags.push(Tag::parse(["encoding", "base64"]).map_err(|e| {
+            NuruNuruError::MlsError(format!("normalize_welcome: encoding tag: {e}"))
+        })?);
+
+        if !has_valid_event_ref {
+            let event_ref = if let Some(id) = rumor.id {
+                id.to_hex()
+            } else {
+                // We only need a non-empty event reference for MDK 0.7.x MIP-02
+                // structural validation. The real wrapper id is supplied by the
+                // surrounding 1059 event in the common path.
+                "0000000000000000000000000000000000000000000000000000000000000000".to_string()
+            };
+            tags.push(
+                Tag::parse(["e", event_ref.as_str()]).map_err(|e| {
+                    NuruNuruError::MlsError(format!("normalize_welcome: e tag: {e}"))
+                })?,
+            );
+        }
+
+        rumor.tags = nostr::Tags::from_list(tags);
+        rumor.ensure_id();
+        Ok(rumor)
+    }
+
+    fn welcome_debug_summary(wrapper_event_id: &nostr::EventId, rumor: &UnsignedEvent) -> String {
+        let tag_names: Vec<String> = rumor
+            .tags
+            .iter()
+            .map(|tag| tag.as_slice().first().cloned().unwrap_or_default())
+            .collect();
+        let tag_count = tag_names.len();
+        let has_relays = rumor.tags.iter().any(|tag| {
+            let slice = tag.as_slice();
+            slice.first().is_some_and(|v| v == "relays")
+                && slice.len() > 1
+                && slice
+                    .iter()
+                    .skip(1)
+                    .all(|url| nostr::RelayUrl::parse(url).is_ok())
+        });
+        let has_encoding = rumor.tags.iter().any(|tag| {
+            let slice = tag.as_slice();
+            slice.len() >= 2 && slice[0] == "encoding" && slice[1].eq_ignore_ascii_case("base64")
+        });
+        let has_e = rumor.tags.iter().any(|tag| {
+            let slice = tag.as_slice();
+            slice.first().is_some_and(|v| v == "e") && slice.get(1).is_some_and(|v| !v.is_empty())
+        });
+        let empty_client = rumor.tags.iter().any(|tag| {
+            let slice = tag.as_slice();
+            slice.first().is_some_and(|v| v == "client")
+                && !slice.get(1).is_some_and(|v| !v.is_empty())
+        });
+        let content_b64 = base64::engine::general_purpose::STANDARD
+            .decode(rumor.content.as_bytes())
+            .map(|bytes| format!("ok:{}", bytes.len()))
+            .unwrap_or_else(|_| "invalid".to_string());
+        format!(
+            "wrapper={} rumorId={} kind={} tags={} names=[{}] relays={} encoding={} e={} emptyClient={} contentLen={} contentB64={}",
+            wrapper_event_id.to_hex(),
+            rumor.id.map(|id| id.to_hex()).unwrap_or_else(|| "none".to_string()),
+            rumor.kind.as_u16(),
+            tag_count,
+            tag_names.join(","),
+            has_relays,
+            has_encoding,
+            has_e,
+            empty_client,
+            rumor.content.len(),
+            content_b64
+        )
+    }
+
     /// Process an incoming Welcome event and join the group.
     ///
     /// Accepts both:
     /// - Kind 1059 (NIP-59 gift-wrapped Welcome, Marmot MIP-02) — unwraps automatically
-    /// - Kind 444 (legacy NIP-EE rumor) — passed directly to MDK
+    /// - Kind 444 (legacy NIP-EE signed/unsigned Welcome) — normalizes to MDK's unsigned rumor shape
     pub async fn mls_process_welcome(&self, welcome_event_json: &str) -> Result<MlsGroupInfo> {
         // Try to parse as a signed Event first (gift-wrap or legacy)
         if let Ok(event) = serde_json::from_str::<nostr::Event>(welcome_event_json) {
@@ -1267,12 +1402,74 @@ impl NuruNuruEngine {
                     .map_err(|e| {
                         NuruNuruError::MlsError(format!("gift-wrap unwrap failed: {e}"))
                     })?;
-                let rumor_json = unwrapped.rumor.as_json();
-                return self.require_mls()?.process_welcome(&rumor_json);
+                let raw_kind = unwrapped.rumor.kind.as_u16();
+                if unwrapped.rumor.kind != nostr::Kind::MlsWelcome && raw_kind != 10_444 {
+                    return Err(NuruNuruError::MlsError(format!(
+                        "not_mls_welcome_rumor: kind={raw_kind}"
+                    )));
+                }
+                let rumor = Self::normalize_marmot_welcome_rumor(unwrapped.rumor)?;
+                tracing::info!(
+                    "[MLS] normalized welcome: {}",
+                    Self::welcome_debug_summary(&event.id, &rumor)
+                );
+                return self
+                    .require_mls()?
+                    .process_welcome_rumor(&event.id, &rumor)
+                    .map_err(|e| {
+                        NuruNuruError::MlsError(format!(
+                            "{}; {}",
+                            e,
+                            Self::welcome_debug_summary(&event.id, &rumor)
+                        ))
+                    });
+            }
+
+            if event.kind == nostr::Kind::MlsWelcome || event.kind.as_u16() == 10_444 {
+                let rumor = UnsignedEvent {
+                    id: Some(event.id),
+                    pubkey: event.pubkey,
+                    created_at: event.created_at,
+                    kind: event.kind,
+                    tags: event.tags,
+                    content: event.content,
+                };
+                let rumor = Self::normalize_marmot_welcome_rumor(rumor)?;
+                tracing::info!(
+                    "[MLS] normalized welcome: {}",
+                    Self::welcome_debug_summary(&event.id, &rumor)
+                );
+                return self
+                    .require_mls()?
+                    .process_welcome_rumor(&event.id, &rumor)
+                    .map_err(|e| {
+                        NuruNuruError::MlsError(format!(
+                            "{}; {}",
+                            e,
+                            Self::welcome_debug_summary(&event.id, &rumor)
+                        ))
+                    });
             }
         }
-        // Legacy: treat as raw rumor JSON
-        self.require_mls()?.process_welcome(welcome_event_json)
+
+        // Legacy/raw rumor JSON.
+        let rumor: UnsignedEvent = serde_json::from_str(welcome_event_json)
+            .map_err(|e| NuruNuruError::MlsError(format!("Invalid welcome JSON: {e}")))?;
+        let mut rumor = Self::normalize_marmot_welcome_rumor(rumor)?;
+        let wrapper_event_id = rumor.id();
+        tracing::info!(
+            "[MLS] normalized welcome: {}",
+            Self::welcome_debug_summary(&wrapper_event_id, &rumor)
+        );
+        self.require_mls()?
+            .process_welcome_rumor(&wrapper_event_id, &rumor)
+            .map_err(|e| {
+                NuruNuruError::MlsError(format!(
+                    "{}; {}",
+                    e,
+                    Self::welcome_debug_summary(&wrapper_event_id, &rumor)
+                ))
+            })
     }
 
     /// Retrieve decrypted message history for a group from MDK's local SQLite.

@@ -291,10 +291,7 @@ impl NuruNuruNapi {
     /// `event_id_hexes` — array of event ID hex strings.
     /// Returns a JSON object `{ [eventIdHex]: NapiEngagementData }`.
     #[napi]
-    pub async fn fetch_engagement_data(
-        &self,
-        event_id_hexes: Vec<String>,
-    ) -> Result<String> {
+    pub async fn fetch_engagement_data(&self, event_id_hexes: Vec<String>) -> Result<String> {
         let event_ids: Vec<EventId> = event_id_hexes
             .iter()
             .filter_map(|hex| EventId::from_hex(hex).ok())
@@ -331,7 +328,10 @@ impl NuruNuruNapi {
         let eid = EventId::from_hex(&event_id_hex).map_err(to_napi_err)?;
         let pk = PublicKey::from_hex(&author_pubkey_hex).map_err(to_napi_err)?;
         let engine = self.engine.clone();
-        let result = engine.react(eid, pk, &reaction).await.map_err(to_napi_err)?;
+        let result = engine
+            .react(eid, pk, &reaction)
+            .await
+            .map_err(to_napi_err)?;
         Ok(result.to_hex())
     }
 
@@ -389,11 +389,7 @@ impl NuruNuruNapi {
 
     /// Fetch DMs as JSON strings.
     #[napi]
-    pub async fn fetch_dms(
-        &self,
-        since_secs: Option<f64>,
-        limit: u32,
-    ) -> Result<Vec<String>> {
+    pub async fn fetch_dms(&self, since_secs: Option<f64>, limit: u32) -> Result<Vec<String>> {
         let since = since_secs.map(|s| Timestamp::from(s as u64));
         let engine = self.engine.clone();
         let events = engine
@@ -447,8 +443,7 @@ impl NuruNuruNapi {
     /// Returns event JSON strings.
     #[napi]
     pub async fn query_local(&self, filter_json: String) -> Result<Vec<String>> {
-        let filter: Filter =
-            Filter::from_json(&filter_json).map_err(to_napi_err)?;
+        let filter: Filter = Filter::from_json(&filter_json).map_err(to_napi_err)?;
         let engine = self.engine.clone();
         let events = engine.query_local(filter).await.map_err(to_napi_err)?;
         events
@@ -461,29 +456,17 @@ impl NuruNuruNapi {
 
     /// Mark a post as "not interested" for recommendation filtering.
     #[napi]
-    pub async fn mark_not_interested(
-        &self,
-        event_id: String,
-        author_pubkey: String,
-    ) -> Result<()> {
+    pub async fn mark_not_interested(&self, event_id: String, author_pubkey: String) -> Result<()> {
         let engine = self.engine.clone();
-        engine
-            .mark_not_interested(&event_id, &author_pubkey)
-            .await;
+        engine.mark_not_interested(&event_id, &author_pubkey).await;
         Ok(())
     }
 
     /// Record an engagement action (`like`, `repost`, `reply`) for personalization.
     #[napi]
-    pub async fn record_engagement(
-        &self,
-        action: String,
-        author_pubkey: String,
-    ) -> Result<()> {
+    pub async fn record_engagement(&self, action: String, author_pubkey: String) -> Result<()> {
         let engine = self.engine.clone();
-        engine
-            .record_engagement(&action, &author_pubkey)
-            .await;
+        engine.record_engagement(&action, &author_pubkey).await;
         Ok(())
     }
 
@@ -563,8 +546,7 @@ impl NuruNuruNapi {
     /// Called from `/api/stream` to bridge Rust relay subscriptions → SSE.
     #[napi]
     pub async fn subscribe_stream(&self, filter_json: String) -> Result<String> {
-        let filter: nostr::Filter =
-            nostr::Filter::from_json(&filter_json).map_err(to_napi_err)?;
+        let filter: nostr::Filter = nostr::Filter::from_json(&filter_json).map_err(to_napi_err)?;
         let engine = self.engine.clone();
         engine.subscribe_stream(filter).await.map_err(to_napi_err)
     }

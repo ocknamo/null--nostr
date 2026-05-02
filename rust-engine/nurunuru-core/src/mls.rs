@@ -219,6 +219,7 @@ impl MlsManager {
             tags: Self::tags_to_vecs(data.tags_30443),
             legacy_tags: Self::tags_to_vecs(data.tags_443),
             d_tag: data.d_tag,
+            hash_ref: data.hash_ref,
         })
     }
 
@@ -279,6 +280,19 @@ impl MlsManager {
                 NuruNuruError::MlsError(format!(
                     "delete_consumed_key_package: delete_key_package_from_storage: {e}"
                 ))
+            })?;
+        Ok(())
+    }
+
+    /// Delete consumed KeyPackage private/init-key material using the exact hash_ref returned
+    /// by MDK when the local KeyPackage was created. This is the safest MIP-02 lifecycle path:
+    /// the relay event may be canonical 30443, legacy 443, or republished/normalized, but the
+    /// local init-key storage entry is addressed by this hash_ref.
+    pub fn delete_consumed_key_package_by_hash_ref(&self, hash_ref: &[u8]) -> Result<()> {
+        self.mdk
+            .delete_key_package_from_storage_by_hash_ref(hash_ref)
+            .map_err(|e| {
+                NuruNuruError::MlsError(format!("delete_consumed_key_package_by_hash_ref: {e}"))
             })?;
         Ok(())
     }
@@ -772,12 +786,26 @@ impl MlsManager {
         let mut rumor: UnsignedEvent = serde_json::from_str(welcome_event_json)
             .map_err(|e| NuruNuruError::MlsError(format!("Invalid welcome JSON: {e}")))?;
 
-        // Use the rumor's computed ID as the wrapper_event_id (proxy for tracking).
+        // Legacy callers do not have the outer 1059 wrapper id. Use the rumor id
+        // only as a stable local tracking key in that path.
         let wrapper_event_id: nostr::EventId = rumor.id();
+        self.process_welcome_rumor(&wrapper_event_id, &rumor)
+    }
 
+    /// Process an already-unwrapped Welcome rumor and join the group.
+    ///
+    /// `wrapper_event_id` must be the outer kind:1059 event id when available.
+    /// MDK stores processed/failed Welcome state under this id, so using the
+    /// inner rumor id causes repeated failures and prevents interoperability with
+    /// Marmot/WhiteNoise gift-wrapped Welcomes.
+    pub fn process_welcome_rumor(
+        &self,
+        wrapper_event_id: &nostr::EventId,
+        rumor: &UnsignedEvent,
+    ) -> Result<MlsGroupInfo> {
         let welcome = self
             .mdk
-            .process_welcome(&wrapper_event_id, &rumor)
+            .process_welcome(wrapper_event_id, rumor)
             .map_err(|e| NuruNuruError::MlsError(format!("process_welcome: {e}")))?;
 
         // `process_welcome` in MDK only stores a pending welcome preview. The
@@ -835,14 +863,22 @@ impl MlsManager {
             // Enrich with relay and member info
             match self.mdk.get_relays(&group_id) {
                 Ok(relays) => info.relays = relays.iter().map(|r| r.to_string()).collect(),
-                Err(e) => tracing::warn!("[MLS] get_relays failed for {}: {}", info.group_id_hex, mls_error_label(&e)),
+                Err(e) => tracing::warn!(
+                    "[MLS] get_relays failed for {}: {}",
+                    info.group_id_hex,
+                    mls_error_label(&e)
+                ),
             }
             match self.mdk.get_members(&group_id) {
                 Ok(members) => {
                     info.member_pubkeys = members.iter().map(|pk| pk.to_hex()).collect();
                     info.is_dm = info.member_pubkeys.len() <= 2;
                 }
-                Err(e) => tracing::warn!("[MLS] get_members failed for {}: {}", info.group_id_hex, mls_error_label(&e)),
+                Err(e) => tracing::warn!(
+                    "[MLS] get_members failed for {}: {}",
+                    info.group_id_hex,
+                    mls_error_label(&e)
+                ),
             }
 
             infos.push(info);
@@ -865,14 +901,22 @@ impl MlsManager {
 
         match self.mdk.get_relays(&group_id) {
             Ok(relays) => info.relays = relays.iter().map(|r| r.to_string()).collect(),
-            Err(e) => tracing::warn!("[MLS] get_relays failed for {}: {}", group_id_hex, mls_error_label(&e)),
+            Err(e) => tracing::warn!(
+                "[MLS] get_relays failed for {}: {}",
+                group_id_hex,
+                mls_error_label(&e)
+            ),
         }
         match self.mdk.get_members(&group_id) {
             Ok(members) => {
                 info.member_pubkeys = members.iter().map(|pk| pk.to_hex()).collect();
                 info.is_dm = info.member_pubkeys.len() <= 2;
             }
-            Err(e) => tracing::warn!("[MLS] get_members failed for {}: {}", group_id_hex, mls_error_label(&e)),
+            Err(e) => tracing::warn!(
+                "[MLS] get_members failed for {}: {}",
+                group_id_hex,
+                mls_error_label(&e)
+            ),
         }
 
         Ok(info)

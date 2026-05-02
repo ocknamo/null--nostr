@@ -105,10 +105,8 @@ async fn reusing_same_key_package_for_add_member_is_currently_accepted_by_mdk() 
         first_add.welcome_event_data.recipient_pubkey, bob_pubkey,
         "Welcome recipient must remain the KeyPackage event owner"
     );
-    let first_gift_wrap: nostr::Event = serde_json::from_str(
-        &first_add.welcome_event_data.gift_wrapped_event_json,
-    )
-    .unwrap();
+    let first_gift_wrap: nostr::Event =
+        serde_json::from_str(&first_add.welcome_event_data.gift_wrapped_event_json).unwrap();
     assert!(
         has_p_tag(&first_gift_wrap, &bob_pubkey),
         "first Welcome gift wrap must target Bob"
@@ -145,13 +143,14 @@ async fn reusing_same_key_package_for_add_member_is_currently_accepted_by_mdk() 
         "second add_member should produce a commit event"
     );
     assert!(
-        !second_add.welcome_event_data.gift_wrapped_event_json.is_empty(),
+        !second_add
+            .welcome_event_data
+            .gift_wrapped_event_json
+            .is_empty(),
         "second add_member should produce a gift-wrapped Welcome"
     );
-    let second_gift_wrap: nostr::Event = serde_json::from_str(
-        &second_add.welcome_event_data.gift_wrapped_event_json,
-    )
-    .unwrap();
+    let second_gift_wrap: nostr::Event =
+        serde_json::from_str(&second_add.welcome_event_data.gift_wrapped_event_json).unwrap();
     assert!(
         has_p_tag(&second_gift_wrap, &bob_pubkey),
         "second Welcome gift wrap must still target Bob"

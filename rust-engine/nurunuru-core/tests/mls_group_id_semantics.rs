@@ -114,10 +114,7 @@ async fn ffi_group_id_hex_is_nostr_group_id_not_internal_mls_id() {
         "mls_list_groups() must expose the same Nostr group id as create_group()"
     );
 
-    let looked_up = alice
-        .mls_get_group_info(&group.group_id_hex)
-        .await
-        .unwrap();
+    let looked_up = alice.mls_get_group_info(&group.group_id_hex).await.unwrap();
     assert_eq!(
         looked_up.group_id_hex, group.group_id_hex,
         "mls_get_group_info() must not translate back to an internal MLS group id"
@@ -174,7 +171,9 @@ async fn ffi_group_id_hex_is_nostr_group_id_not_internal_mls_id() {
 
     let bob_listed = bob.mls_list_groups().await.unwrap();
     assert!(
-        bob_listed.iter().any(|g| g.group_id_hex == group.group_id_hex),
+        bob_listed
+            .iter()
+            .any(|g| g.group_id_hex == group.group_id_hex),
         "Bob's mls_list_groups() must expose the Nostr group id, not an internal MLS id"
     );
 
@@ -188,7 +187,9 @@ async fn ffi_group_id_hex_is_nostr_group_id_not_internal_mls_id() {
         "groups_needing_self_update() must not leak shorter internal MLS group IDs: {self_update_ids:?}"
     );
     assert!(
-        self_update_ids.iter().all(|id| id.chars().all(|c| c.is_ascii_hexdigit())),
+        self_update_ids
+            .iter()
+            .all(|id| id.chars().all(|c| c.is_ascii_hexdigit())),
         "groups_needing_self_update() IDs must be hex encoded Nostr group IDs: {self_update_ids:?}"
     );
     assert!(

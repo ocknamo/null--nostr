@@ -34,6 +34,10 @@ final class MlsFFILiveClient: MlsFFIBridge, @unchecked Sendable {
         try client.mlsDeleteConsumedKeyPackageFromEventJson(keyPackageEventJson: eventJSON)
     }
 
+    func mlsDeleteConsumedKeyPackageByHashRef(hashRef: [UInt8]) throws {
+        try client.mlsDeleteConsumedKeyPackageByHashRef(hashRef: Data(hashRef))
+    }
+
     func mlsGroupsNeedingSelfUpdate(thresholdSecs: UInt64) throws -> [String] {
         try client.mlsGroupsNeedingSelfUpdate(thresholdSecs: thresholdSecs)
     }
@@ -162,7 +166,7 @@ final class MlsFFILiveClient: MlsFFIBridge, @unchecked Sendable {
     }
 
     private func bridgeKeyPackage(_ d: NuruNuruFFILib.FfiKeyPackageEventData) -> FfiKeyPackageEventData {
-        FfiKeyPackageEventData(kind: d.kind, content: d.content, tags: d.tags, legacyTags: d.legacyTags, dTag: d.dTag)
+        FfiKeyPackageEventData(kind: d.kind, content: d.content, tags: d.tags, legacyTags: d.legacyTags, dTag: d.dTag, hashRef: Array(d.hashRef))
     }
 
     private func bridgeAddMemberResult(_ r: NuruNuruFFILib.FfiAddMemberResult) -> FfiAddMemberResult {

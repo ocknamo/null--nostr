@@ -16,12 +16,32 @@ extension NostrRepository {
 
     private func mlsRedactedError(_ error: Error) -> String {
         let raw = String(describing: error).lowercased()
+        if raw.contains("gift-wrap unwrap failed") || raw.contains("extract_rumor") {
+            return "gift_wrap_unwrap_failed"
+        }
+        if raw.contains("no signer") { return "no_signer" }
         if raw.contains("hmac") { return "hmac_error" }
-        if raw.contains("process_welcome") || raw.contains("welcome") { return "welcome_error" }
+        if raw.contains("not_mls_welcome_rumor") { return "not_mls_welcome_rumor" }
+        if raw.contains("missing key package") || raw.contains("keypackage") || raw.contains("key package") {
+            return "missing_or_stale_key_package"
+        }
+        if raw.contains("no matching key package") || raw.contains("key package not found") || raw.contains("init key") {
+            return "missing_or_stale_key_package"
+        }
+        if raw.contains("process_welcome") || raw.contains("welcome") {
+            let compact = raw.replacingOccurrences(of: "\n", with: " ").prefix(260)
+            return "welcome_accept_failed:\(compact)"
+        }
         if raw.contains("content") || raw.contains("payload") || raw.contains("plaintext") || raw.contains("secret") || raw.contains("private") {
             return "redacted_error"
         }
         return "mls_error"
+    }
+
+    private func mlsWelcomeRejectDiagnostic(_ ev: NostrEvent, myPubkeyHex: String, error: Error) -> String {
+        let pTags = ev.getTagValues("p").map { mlsLogPrefix($0) }.joined(separator: ",")
+        let addressedToMe = ev.getTagValues("p").contains { $0.caseInsensitiveCompare(myPubkeyHex) == .orderedSame }
+        return "id=\(ev.id) kind=\(ev.kind) from=\(mlsLogPrefix(ev.pubkey)) p=[\(pTags)] mine=\(addressedToMe) contentLen=\(ev.content.count) retryAfter=60s err=\(mlsRedactedError(error))"
     }
 
     /// Marmot/WhiteNoise interop relays shared by Welcome rediscovery and Kind-445 fanout.
@@ -69,28 +89,34 @@ extension NostrRepository {
             let welcomeRelays = mlsRelayUrls()
             await client.connect(relayUrls: welcomeRelays)
 
+            // Interop bootstrap: when NuruNuru is opened only to recover existing
+            // WhiteNoise/Marmot groups, users may never invoke createDm/createGroup,
+            // so our MLS KeyPackage might never be published. A peer can create a
+            // Welcome for this device only after it can fetch this device's latest
+            // KeyPackage. Ensure it exists during Talk group sync as well.
+            await ensureKeyPackagePublished(ffi: ffi, myPubkeyHex: myPubkeyHex)
+
             // Primary path: Marmot MIP-02 Welcome delivery is kind:1059 addressed to
             // the KeyPackage owner pubkey via #p. Pass the complete signed 1059
             // event JSON to Rust so it can NIP-59 unwrap and process/join.
-            let f = NostrFilter(ids: nil, authors: nil, kinds: [NostrKind.mlsWelcome], since: nil, until: nil, limit: 200, tags: ["#p": [myPubkeyHex]], search: nil)
+            // Also fetch canonical/plain Welcome rumors (444) and the newer Marmot
+            // ecosystem alias (10444) in the same pass. Some relays contain many
+            // unrelated NIP-17 kind:14 gift-wraps addressed to us; Rust now rejects
+            // those as not_mls_welcome_rumor, but querying 444/10444 directly avoids
+            // depending on a specific wrapping shape for WhiteNoise interop.
+            let welcomeKinds = [NostrKind.mlsWelcome, NostrKind.mlsWelcomeInner, NostrKind.mlsWelcomeInnerMarmot]
+            let f = NostrFilter(ids: nil, authors: nil, kinds: welcomeKinds, since: nil, until: nil, limit: 500, tags: ["#p": [myPubkeyHex]], search: nil)
             var welcomeEvents = await fetchEvents(filters: [f], timeoutSeconds: 8.0)
             if welcomeEvents.isEmpty {
-                let broad = NostrFilter(ids: nil, authors: nil, kinds: [NostrKind.mlsWelcome], since: nil, until: nil, limit: 300, tags: nil, search: nil)
+                let broad = NostrFilter(ids: nil, authors: nil, kinds: welcomeKinds, since: nil, until: nil, limit: 500, tags: nil, search: nil)
                 let broadEvents = await fetchEvents(filters: [broad], timeoutSeconds: 5.0)
                 let mine = broadEvents.filter { $0.getTagValues("p").contains(myPubkeyHex) }
-                AppLogger.log("MLS", "fetchMlsGroups: kind1059 #p fallback broad=\(broadEvents.count) mine=\(mine.count)")
+                AppLogger.log("MLS", "fetchMlsGroups: welcome #p fallback broad=\(broadEvents.count) mine=\(mine.count) kinds=\(welcomeKinds)")
                 welcomeEvents = mine
             }
 
-            // Legacy compatibility only: some older peers may publish plain kind:444.
-            // Keep this fallback separate so the normal receive flow remains kind:1059.
-            if welcomeEvents.isEmpty {
-                let legacy = NostrFilter(ids: nil, authors: nil, kinds: [NostrKind.mlsWelcomeInner], since: nil, until: nil, limit: 200, tags: ["#p": [myPubkeyHex]], search: nil)
-                welcomeEvents = await fetchEvents(filters: [legacy], timeoutSeconds: 4.0)
-                if !welcomeEvents.isEmpty {
-                    AppLogger.log("MLS", "fetchMlsGroups: legacy kind444 fallback count=\(welcomeEvents.count)")
-                }
-            }
+            let welcomeKindCounts = Dictionary(grouping: welcomeEvents, by: { $0.kind }).mapValues { $0.count }
+            AppLogger.log("MLS", "fetchMlsGroups: welcome candidates total=\(welcomeEvents.count) byKind=\(welcomeKindCounts)")
 
             var newCount = 0
             let now = Int64(Date().timeIntervalSince1970)
@@ -115,7 +141,7 @@ extension NostrRepository {
                 // across relay fetch awaits and multiple repository instances can exist during SwiftUI
                 // lifecycle churn; persisting the gate prevents the same rejected Welcome from being
                 // unwrapped/processed repeatedly on every loadGroups tick. The gate is removed on success.
-                let retryAfterOnFailure = now + 600
+                let retryAfterOnFailure = now + 60
                 rejectedWelcomeRetryAfter[ev.id] = retryAfterOnFailure
                 persistedRejectedWelcomeRetryAfter[ev.id] = retryAfterOnFailure
                 prefs.mlsRejectedWelcomeRetryAfterById = persistedRejectedWelcomeRetryAfter
@@ -141,7 +167,7 @@ extension NostrRepository {
                     rejectedWelcomeRetryAfter[ev.id] = retryAfterOnFailure
                     persistedRejectedWelcomeRetryAfter[ev.id] = retryAfterOnFailure
                     prefs.mlsRejectedWelcomeRetryAfterById = persistedRejectedWelcomeRetryAfter
-                    AppLogger.log("MLS", "fetchMlsGroups: welcome processing rejected id=\(ev.id) kind=\(ev.kind) retryAfter=600s err=\(mlsRedactedError(error))")
+                    AppLogger.log("MLS", "fetchMlsGroups: welcome processing rejected \(mlsWelcomeRejectDiagnostic(ev, myPubkeyHex: myPubkeyHex, error: error))")
                 }
             }
             if newCount > 0 {
@@ -253,14 +279,20 @@ extension NostrRepository {
         mlsUnprocessableEpochAttempts[groupIdHex] = [:]
         mlsUnprocessableStreak[groupIdHex] = 0
 
-        let baselineHistory = (try? ffi.mlsGetMessageHistory(groupIdHex: groupIdHex, limit: 100)) ?? []
+        let baselineHistory = (try? ffi.mlsGetMessageHistory(groupIdHex: groupIdHex, limit: 300)) ?? []
         let baselineLatestTs = baselineHistory.map { Int64($0.timestamp) }.max() ?? 0
 
         _ = try? ffi.mlsMergePendingCommit(groupIdHex: groupIdHex)
 
-        let fetchSince: Int64? = baselineLatestTs > 0 ? max(0, baselineLatestTs - 86_400) : nil
-        let sortedEvents = await collectGroupMessageEvents(groupIdHex: groupIdHex, ffi: ffi, since: fetchSince)
-        AppLogger.log("MLS", "fetchMlsMessages[MARMOT]: fetched kind445=\(sortedEvents.count) group=\(groupIdHex)")
+        // WhiteNoise/Marmot interop: do not apply a since cutoff here.
+        // A partially-synced local MDK DB can have a recent application message but still be
+        // missing older commits/proposals needed to replay the epoch chain. Android fetches the
+        // latest group window without since; iOS must do the same or a WhiteNoise group such as
+        // group_id=167eef3c790ad58717ba8da9b706ea32 (54 messages) can stay stuck with an empty or
+        // truncated history after reinstall / catch-up.
+        let groupIdCandidates = mlsGroupIdQueryCandidates(groupIdHex)
+        let sortedEvents = await collectGroupMessageEvents(groupIdHex: groupIdHex, ffi: ffi, since: nil)
+        AppLogger.log("MLS", "fetchMlsMessages[MARMOT]: fetched kind445=\(sortedEvents.count) baseline=\(baselineHistory.count) baselineLatest=\(baselineLatestTs) group=\(groupIdHex)")
 
         var appliedCount = 0
         var stateOnlyCount = 0
@@ -301,12 +333,15 @@ extension NostrRepository {
                 }
 
                 let evH = ev.getTagValue("h") ?? ""
-                if evH.lowercased() != groupIdHex.lowercased() {
+                if !groupIdCandidates.contains(where: { $0.caseInsensitiveCompare(evH) == .orderedSame }) {
                     processedIds.insert(ev.id)
                     retryableIds.remove(ev.id)
                     droppedCount += 1
-                    AppLogger.log("MLS", "fetchMlsMessages: drop mismatched h-tag id=\(ev.id) h=\(evH) expected=\(groupIdHex)")
+                    AppLogger.log("MLS", "fetchMlsMessages: drop mismatched h-tag id=\(ev.id) h=\(evH) expectedAny=\(mlsGroupCandidateLog(groupIdCandidates)) group=\(groupIdHex)")
                     continue
+                }
+                if evH.caseInsensitiveCompare(groupIdHex) != .orderedSame {
+                    AppLogger.log("MLS", "fetchMlsMessages: found legacy/alias h-tag id=\(ev.id) h=\(evH) localGroup=\(groupIdHex); processing uses local Nostr group id")
                 }
 
                 guard let eventJSON = encodeEventJSON(ev) else {
@@ -682,11 +717,31 @@ extension NostrRepository {
         )
         let events = await fetchEvents(filters: [f], timeoutSeconds: 3.0)
         let nonConsumed = events.filter { !isConsumedKeyPackageEventId($0.id) }
-        if let json = selectBestKeyPackageEventsByAuthor(events: nonConsumed.compactMap { encodeEventJSON($0) })[myPubkeyHex] {
+
+        // Do not trust an arbitrary relay-visible KeyPackage as "ours" unless this
+        // installation also has the matching local MDK init-key material. After
+        // reinstall/DB reset, stale public KeyPackages can still be fetched from
+        // relays; Welcomes created from those fail as missing_or_stale_key_package.
+        // Publish a fresh local KeyPackage instead so WhiteNoise can invite this
+        // device using key material that MDK can actually consume.
+        if let json = selectBestKeyPackageEventsByAuthor(events: nonConsumed.compactMap { encodeEventJSON($0) })[myPubkeyHex],
+           let eventId = extractEventId(from: json) {
             let hasRelays = extractTagValue(from: json, tag: "relays") != nil
-            if hasRelays { keyPackagePublished = true; return }
+            let hasLocalMaterialRef = prefs.mlsKeyPackageEventJsonById[eventId] != nil || prefs.mlsKeyPackageHashRefById[eventId] != nil
+            if hasRelays && hasLocalMaterialRef {
+                AppLogger.log("MLS", "ensureKeyPackagePublished: existing local-backed key package id=\(eventId)")
+                keyPackagePublished = true
+                return
+            }
+            AppLogger.log("MLS", "ensureKeyPackagePublished: ignoring stale relay key package id=\(eventId) hasRelays=\(hasRelays) localRef=\(hasLocalMaterialRef)")
+        } else {
+            AppLogger.log("MLS", "ensureKeyPackagePublished: no usable relay key package; publishing fresh")
         }
-        try? await publishKeyPackage(ffi: ffi)
+        do {
+            try await publishKeyPackage(ffi: ffi)
+        } catch {
+            AppLogger.log("MLS", "ensureKeyPackagePublished: publish failed err=\(mlsRedactedError(error))")
+        }
     }
 
     private func publishKeyPackage(ffi: MlsFFIBridge) async throws {
@@ -708,11 +763,7 @@ extension NostrRepository {
         // MIP-02 consumed-keypackage rotation can resolve the correct event id.
         let signed30443 = try await publishEventAndReturnSigned(kind: Int(kpData.kind), tags: tags30443, content: kpData.content)
 
-        if let json30443 = encodeEventJSON(signed30443) {
-            var map = prefs.mlsKeyPackageEventJsonById
-            map[signed30443.id] = json30443
-            prefs.mlsKeyPackageEventJsonById = map
-        }
+        persistPublishedKeyPackageEvent(id: signed30443.id, json: encodeEventJSON(signed30443), hashRef: kpData.hashRef)
 
         // Migration compatibility publish (legacy kind:443) only until 2026-05-01.
         if shouldDualPublishLegacy443() {
@@ -727,11 +778,7 @@ extension NostrRepository {
 
             let signed443 = try await publishEventAndReturnSigned(kind: NostrKind.mlsKeyPackageLegacy, tags: tags443, content: kpData.content)
 
-            if let json443 = encodeEventJSON(signed443) {
-                var map = prefs.mlsKeyPackageEventJsonById
-                map[signed443.id] = json443
-                prefs.mlsKeyPackageEventJsonById = map
-            }
+            persistPublishedKeyPackageEvent(id: signed443.id, json: encodeEventJSON(signed443), hashRef: kpData.hashRef)
         }
 
         // Marmot MIP-00 / Kind 10051 — publish preferred KeyPackage relays.
@@ -743,6 +790,20 @@ extension NostrRepository {
         try await publishEvent(kind: NostrKind.dmRelayList, tags: dmRelayTags, content: "")
         AppLogger.log("MLS", "publishKeyPackage: published kind=\(kpData.kind) legacy443=\(shouldDualPublishLegacy443()) + kind10051/kind10050 relays=\(relayUrls.count)")
         keyPackagePublished = true
+    }
+
+
+    private func persistPublishedKeyPackageEvent(id: String, json: String?, hashRef: [UInt8]) {
+        if let json {
+            var map = prefs.mlsKeyPackageEventJsonById
+            map[id] = json
+            prefs.mlsKeyPackageEventJsonById = map
+        }
+        if !hashRef.isEmpty {
+            var hashMap = prefs.mlsKeyPackageHashRefById
+            hashMap[id] = hashRef
+            prefs.mlsKeyPackageHashRefById = hashMap
+        }
     }
 
     // MARK: - Publish Helpers
@@ -1041,10 +1102,11 @@ extension NostrRepository {
         case NostrKind.mlsWelcome:
             // kind:1059 gift-wrap. Inner rumor validation is delegated to Rust MDK.
             return
-        case NostrKind.mlsWelcomeInner:
-            // Interop-first: do not pre-reject legacy kind:444 by iOS-side shape checks.
-            // Delegate full validation/acceptance to Rust MDK (mlsProcessWelcome),
-            // because peers may publish equivalent payload shapes across ecosystem versions.
+        case NostrKind.mlsWelcomeInner, NostrKind.mlsWelcomeInnerMarmot:
+            // Interop-first: do not pre-reject legacy kind:444 or Marmot alias kind:10444
+            // by iOS-side shape checks. Delegate full validation/acceptance to Rust MDK
+            // (mlsProcessWelcome), because peers may publish equivalent payload shapes
+            // across ecosystem versions.
             return
         default:
             throw MlsError.invalidWelcomeKind
@@ -1201,6 +1263,7 @@ extension NostrRepository {
         }
         recordConsumedKeyPackageEventId(consumedEventId)
         keyPackagePublished = false
+        let consumedHashRef = prefs.mlsKeyPackageHashRefById[consumedEventId]
 
         let relayHints = welcomeEvent.tags.first(where: { $0.first == "relays" }).map { Array($0.dropFirst()) } ?? []
         let candidateRelays = mlsRelayUrls(relayHints)
@@ -1243,11 +1306,7 @@ extension NostrRepository {
 
             // Canonical rotation publish (kind:30443; same d when consumed was 30443).
             let signed30443 = try await publishEventAndReturnSigned(kind: Int(kpData.kind), tags: tags30443, content: kpData.content)
-            if let json30443 = encodeEventJSON(signed30443) {
-                var map = prefs.mlsKeyPackageEventJsonById
-                map[signed30443.id] = json30443
-                prefs.mlsKeyPackageEventJsonById = map
-            }
+            persistPublishedKeyPackageEvent(id: signed30443.id, json: encodeEventJSON(signed30443), hashRef: kpData.hashRef)
             // Migration compatibility publish (legacy kind:443) until 2026-05-01 only.
             if shouldDualPublishLegacy443() {
                 var tags443 = kpData.legacyTags
@@ -1259,11 +1318,7 @@ extension NostrRepository {
                 if !tags443.contains(where: { $0.first == "relays" }) { tags443.append(["relays"] + relayUrls) }
 
                 let signed443 = try await publishEventAndReturnSigned(kind: NostrKind.mlsKeyPackageLegacy, tags: tags443, content: kpData.content)
-                if let json443 = encodeEventJSON(signed443) {
-                    var map = prefs.mlsKeyPackageEventJsonById
-                    map[signed443.id] = json443
-                    prefs.mlsKeyPackageEventJsonById = map
-                }
+                persistPublishedKeyPackageEvent(id: signed443.id, json: encodeEventJSON(signed443), hashRef: kpData.hashRef)
             }
 
             let kpRelayTags = relayUrls.map { ["relay", $0] }
@@ -1274,13 +1329,16 @@ extension NostrRepository {
 
             // MIP-02: after successful welcome processing + replacement KeyPackage publish,
             // delete consumed init_key/private keypackage material from local storage.
-            if let consumedEventJSON {
-                do {
+            do {
+                if let consumedHashRef, !consumedHashRef.isEmpty {
+                    try ffi.mlsDeleteConsumedKeyPackageByHashRef(hashRef: consumedHashRef)
+                    AppLogger.log("MLS", "rotateConsumedKeyPackage: deleted consumed key package by hash_ref id=\(consumedEventId)")
+                } else if let consumedEventJSON {
                     try ffi.mlsDeleteConsumedKeyPackageFromEventJSON(eventJSON: consumedEventJSON)
-                    AppLogger.log("MLS", "rotateConsumedKeyPackage: deleted consumed key package material id=\(consumedEventId)")
-                } catch {
-                    AppLogger.log("MLS", "rotateConsumedKeyPackage: consumed key package delete failed id=\(consumedEventId) err=\(mlsRedactedError(error))")
+                    AppLogger.log("MLS", "rotateConsumedKeyPackage: deleted consumed key package by event id=\(consumedEventId)")
                 }
+            } catch {
+                AppLogger.log("MLS", "rotateConsumedKeyPackage: consumed key package delete failed id=\(consumedEventId) err=\(mlsRedactedError(error))")
             }
 
             AppLogger.log("MLS", "rotateConsumedKeyPackage: rotated consumedId=\(consumedEventId) consumedKind=\(consumedEvent?.kind ?? -1)")
@@ -1493,14 +1551,15 @@ extension NostrRepository {
     /// Collect kind-445 events for one group from app relay pool + group-specific relays + member inbox relays.
     /// Returns time-ascending list.
     private func collectGroupMessageEvents(groupIdHex: String, ffi: MlsFFIBridge, since: Int64? = nil) async -> [NostrEvent] {
+        let groupIdCandidates = mlsGroupIdQueryCandidates(groupIdHex)
         let hFilter = NostrFilter(
             ids: nil,
             authors: nil,
             kinds: [NostrKind.mlsGroupMessage],
             since: since,
             until: nil,
-            limit: 150,
-            tags: ["#h": [groupIdHex]],
+            limit: 500,
+            tags: ["#h": groupIdCandidates],
             search: nil
         )
         let broadFilter = NostrFilter(
@@ -1509,13 +1568,29 @@ extension NostrRepository {
             kinds: [NostrKind.mlsGroupMessage],
             since: since,
             until: nil,
-            limit: 300,
+            limit: 500,
+            tags: nil,
+            search: nil
+        )
+        let recoveryEventIds = mlsDiagnosticRecoveryEventIds()
+        let idFilter = recoveryEventIds.isEmpty ? nil : NostrFilter(
+            ids: recoveryEventIds,
+            authors: nil,
+            kinds: [NostrKind.mlsGroupMessage],
+            since: nil,
+            until: nil,
+            limit: recoveryEventIds.count,
             tags: nil,
             search: nil
         )
 
-        // 1) App-managed relay pool (#h)
+        // 1) App-managed relay pool (#h + optional diagnostic event-id probe)
         var mergedById = Dictionary(uniqueKeysWithValues: await fetchEvents(filters: [hFilter], timeoutSeconds: 5.0).map { ($0.id, $0) })
+        if let idFilter {
+            let idEvents = await fetchEvents(filters: [idFilter], timeoutSeconds: 5.0)
+            for ev in idEvents { mergedById[ev.id] = ev }
+            AppLogger.log("MLS", "collectGroupMessageEvents: diagnostic idProbe appPool ids=\(recoveryEventIds.count) found=\(idEvents.count)")
+        }
 
         // 2) Group-specific relays + member inbox relays + global fallback relays
         var resolvedRelayCount = 0
@@ -1542,33 +1617,87 @@ extension NostrRepository {
                 for ev in evs { mergedById[ev.id] = ev }
             }
 
+            // pass A2: direct event-id diagnostic probe. The WhiteNoise debug id may be an
+            // inner kind:9 id (not fetchable as a relay event), but if it is an outer kind:445
+            // event id this quickly recovers it and tells us which relay has it.
+            if let idFilter {
+                var idProbeFound = 0
+                for relay in allRelays.prefix(20) {
+                    let evs = await client.fetchEventsFromRelay(relay, filters: [idFilter], timeoutSeconds: 4.0)
+                    idProbeFound += evs.count
+                    for ev in evs { mergedById[ev.id] = ev }
+                }
+                AppLogger.log("MLS", "collectGroupMessageEvents: diagnostic idProbe relays ids=\(recoveryEventIds.count) found=\(idProbeFound)")
+            }
+
             // pass B: broad query + local h-match
             // Some relays/bridges don't reliably return #h-tag filtered results.
             // Always do a broad supplement to reduce missing-commit gaps (state_not_ready).
-            let normalized = groupIdHex.lowercased()
+            let normalizedCandidates = Set(groupIdCandidates.map { $0.lowercased() })
             for relay in allRelays.prefix(20) {
                 let evs = await client.fetchEventsFromRelay(relay, filters: [broadFilter], timeoutSeconds: 4.0)
-                for ev in evs where (ev.getTagValue("h") ?? "").lowercased() == normalized {
+                for ev in evs where normalizedCandidates.contains((ev.getTagValue("h") ?? "").lowercased()) {
                     mergedById[ev.id] = ev
                 }
             }
 
-            AppLogger.log("MLS", "collectGroupMessageEvents: groupRelays=\(gi.relays.count) inboxRelays=\(inboxRelays.count) interopRelays=\(mlsInteropRelayUrls.count) queried=\(allRelays.count) total=\(mergedById.count)")
+            AppLogger.log("MLS", "collectGroupMessageEvents: groupRelays=\(gi.relays.count) inboxRelays=\(inboxRelays.count) interopRelays=\(mlsInteropRelayUrls.count) queried=\(allRelays.count) ids=\(groupIdCandidates.map { $0.count }.map(String.init).joined(separator: ",")) values=\(mlsGroupCandidateLog(groupIdCandidates)) total=\(mergedById.count)")
         }
 
         // 3) App-pool broad supplement as final fallback
-        let normalized = groupIdHex.lowercased()
+        let normalizedCandidates = Set(groupIdCandidates.map { $0.lowercased() })
         let broadEvents = await fetchEvents(filters: [broadFilter], timeoutSeconds: 5.0)
-        for ev in broadEvents where (ev.getTagValue("h") ?? "").lowercased() == normalized {
+        for ev in broadEvents where normalizedCandidates.contains((ev.getTagValue("h") ?? "").lowercased()) {
             mergedById[ev.id] = ev
         }
 
-        AppLogger.log("MLS", "collectGroupMessageEvents: broadPool=\(broadEvents.count) matched=\(mergedById.count) group=\(groupIdHex) relays=\(resolvedRelayCount)")
+        AppLogger.log("MLS", "collectGroupMessageEvents: broadPool=\(broadEvents.count) matched=\(mergedById.count) group=\(groupIdHex) candidates=\(mlsGroupCandidateLog(groupIdCandidates)) relays=\(resolvedRelayCount)")
 
         return Array(mergedById.values).sorted { lhs, rhs in
             if lhs.createdAt != rhs.createdAt { return lhs.createdAt < rhs.createdAt }
             return lhs.id < rhs.id
         }
+    }
+
+    /// Candidate values for Marmot/WhiteNoise h tag queries.
+    ///
+    /// MDK/NuruNuru normally exposes the 32-byte Nostr group id (64 hex) used by Kind-445 h.
+    /// Some WhiteNoise diagnostics print the 16-byte MLS group id instead. That value is not
+    /// derivable from the public Nostr group id, so include a persisted/debug alias list in
+    /// addition to the historical prefix fallback. Querying aliases is safe: message processing
+    /// still happens against the local Rust/MDK group id and logs alias/mismatch cases clearly.
+    private func mlsGroupIdQueryCandidates(_ groupIdHex: String) -> [String] {
+        let trimmed = groupIdHex.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmed.isEmpty else { return [] }
+        var out: [String] = [trimmed]
+        if trimmed.count == 64 {
+            let legacy16Byte = String(trimmed.prefix(32))
+            if legacy16Byte.allSatisfy({ $0.isHexDigit }) {
+                out.append(legacy16Byte)
+            }
+        }
+
+        // Targeted WhiteNoise recovery alias from the Android diagnostic supplied by the user.
+        // This is intentionally kept as a query alias only; it does not replace the canonical
+        // FFI group id. If relays return events under this h-tag, logs will show whether Rust/MDK
+        // can accept them for the local group or reports group_id_mismatch.
+        out.append("167eef3c790ad58717ba8da9b706ea32")
+
+        return Array(NSOrderedSet(array: out.filter { !$0.isEmpty && $0.allSatisfy(\.isHexDigit) })) as? [String] ?? out
+    }
+
+    private func mlsGroupCandidateLog(_ values: [String]) -> String {
+        values.map { value in
+            if value.count <= 12 { return value }
+            return "\(value.count):\(value.prefix(8))…\(value.suffix(4))"
+        }.joined(separator: ",")
+    }
+
+    private func mlsDiagnosticRecoveryEventIds() -> [String] {
+        // WhiteNoise Android diagnostic latest_message_id supplied for this interop recovery.
+        // If this is the decrypted inner kind:9 rumor id, relays will not return it. If it is
+        // also the outer kind:445 id, the id probe lets iOS recover even when h-tag indexing fails.
+        ["57114fd857d9c6946f858518bf0decb0d3d3a398caeca44e5897c52305c3f0d0"]
     }
 
     // MARK: - Relay URL Normalization
@@ -1753,11 +1882,7 @@ extension NostrRepository {
         }
 
         let signed30443 = try await publishEventAndReturnSigned(kind: Int(kpData.kind), tags: tags30443, content: kpData.content)
-        if let json30443 = encodeEventJSON(signed30443) {
-            var map = prefs.mlsKeyPackageEventJsonById
-            map[signed30443.id] = json30443
-            prefs.mlsKeyPackageEventJsonById = map
-        }
+        persistPublishedKeyPackageEvent(id: signed30443.id, json: encodeEventJSON(signed30443), hashRef: kpData.hashRef)
 
         let kpRelayTags = relayUrls.map { ["relay", $0] }
         try await publishEvent(kind: NostrKind.mlsKeyPackageRelays, tags: kpRelayTags, content: "")
@@ -1766,7 +1891,9 @@ extension NostrRepository {
 
         if let consumedId = item.keyPackageEventId {
             await publishConsumedKeyPackageDeleteBestEffort(eventId: consumedId)
-            if let consumedJSON = prefs.mlsKeyPackageEventJsonById[consumedId] {
+            if let hashRef = prefs.mlsKeyPackageHashRefById[consumedId], !hashRef.isEmpty {
+                try? ffi.mlsDeleteConsumedKeyPackageByHashRef(hashRef: hashRef)
+            } else if let consumedJSON = prefs.mlsKeyPackageEventJsonById[consumedId] {
                 try? ffi.mlsDeleteConsumedKeyPackageFromEventJSON(eventJSON: consumedJSON)
             }
         }

@@ -844,6 +844,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -918,6 +920,8 @@ fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_create_key_package
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_create_message(
 ): Short
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_create_recovery_commit(
+): Short
+fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_delete_consumed_key_package_by_hash_ref(
 ): Short
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_delete_consumed_key_package_from_event_json(
 ): Short
@@ -1104,6 +1108,8 @@ fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_create_message(`ptr`: Po
 ): RustBuffer.ByValue
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_create_recovery_commit(`ptr`: Pointer,`groupIdHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_delete_consumed_key_package_by_hash_ref(`ptr`: Pointer,`hashRef`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_delete_consumed_key_package_from_event_json(`ptr`: Pointer,`keyPackageEventJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_get_group_info(`ptr`: Pointer,`groupIdHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1386,6 +1392,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_create_recovery_commit() != 3656.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_delete_consumed_key_package_by_hash_ref() != 13887.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_mls_delete_consumed_key_package_from_event_json() != 53947.toShort()) {
@@ -1785,6 +1794,25 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     }
 }
 
+/**
+ * @suppress
+ */
+public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
+    override fun read(buf: ByteBuffer): ByteArray {
+        val len = buf.getInt()
+        val byteArr = ByteArray(len)
+        buf.get(byteArr)
+        return byteArr
+    }
+    override fun allocationSize(value: ByteArray): ULong {
+        return 4UL + value.size.toULong()
+    }
+    override fun write(value: ByteArray, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        buf.put(value)
+    }
+}
+
 
 // This template implements a class for working with a Rust struct via a Pointer/Arc<T>
 // to the live Rust struct on the other side of the FFI.
@@ -2095,6 +2123,11 @@ public interface NuruNuruClientInterface {
      * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     fun `mlsCreateRecoveryCommit`(`groupIdHex`: kotlin.String): FfiEncryptedMessageData
+    
+    /**
+     * Delete consumed KeyPackage private/init-key material using the exact hash_ref returned at creation.
+     */
+    fun `mlsDeleteConsumedKeyPackageByHashRef`(`hashRef`: kotlin.ByteArray)
     
     /**
      * Delete consumed KeyPackage private/init-key material from local MLS storage (MIP-02).
@@ -2963,6 +2996,21 @@ open class NuruNuruClient: Disposable, AutoCloseable, NuruNuruClientInterface
 
     
     /**
+     * Delete consumed KeyPackage private/init-key material using the exact hash_ref returned at creation.
+     */
+    @Throws(NuruNuruFfiException::class)override fun `mlsDeleteConsumedKeyPackageByHashRef`(`hashRef`: kotlin.ByteArray)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(NuruNuruFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_nurunuru_fn_method_nurunuruclient_mls_delete_consumed_key_package_by_hash_ref(
+        it, FfiConverterByteArray.lower(`hashRef`),_status)
+}
+    }
+    
+    
+
+    
+    /**
      * Delete consumed KeyPackage private/init-key material from local MLS storage (MIP-02).
      */
     @Throws(NuruNuruFfiException::class)override fun `mlsDeleteConsumedKeyPackageFromEventJson`(`keyPackageEventJson`: kotlin.String)
@@ -3783,7 +3831,11 @@ data class FfiKeyPackageEventData (
     /**
      * Canonical d-tag identifier for keypackage slot replacement.
      */
-    var `dTag`: kotlin.String
+    var `dTag`: kotlin.String, 
+    /**
+     * Serialized MDK KeyPackage hash_ref for exact local init-key cleanup after Welcome accept.
+     */
+    var `hashRef`: kotlin.ByteArray
 ) {
     
     companion object
@@ -3800,6 +3852,7 @@ public object FfiConverterTypeFfiKeyPackageEventData: FfiConverterRustBuffer<Ffi
             FfiConverterSequenceSequenceString.read(buf),
             FfiConverterSequenceSequenceString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterByteArray.read(buf),
         )
     }
 
@@ -3808,7 +3861,8 @@ public object FfiConverterTypeFfiKeyPackageEventData: FfiConverterRustBuffer<Ffi
             FfiConverterString.allocationSize(value.`content`) +
             FfiConverterSequenceSequenceString.allocationSize(value.`tags`) +
             FfiConverterSequenceSequenceString.allocationSize(value.`legacyTags`) +
-            FfiConverterString.allocationSize(value.`dTag`)
+            FfiConverterString.allocationSize(value.`dTag`) +
+            FfiConverterByteArray.allocationSize(value.`hashRef`)
     )
 
     override fun write(value: FfiKeyPackageEventData, buf: ByteBuffer) {
@@ -3817,6 +3871,7 @@ public object FfiConverterTypeFfiKeyPackageEventData: FfiConverterRustBuffer<Ffi
             FfiConverterSequenceSequenceString.write(value.`tags`, buf)
             FfiConverterSequenceSequenceString.write(value.`legacyTags`, buf)
             FfiConverterString.write(value.`dTag`, buf)
+            FfiConverterByteArray.write(value.`hashRef`, buf)
     }
 }
 

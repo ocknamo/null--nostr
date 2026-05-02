@@ -149,6 +149,10 @@ pub struct KeyPackageEventData {
     pub legacy_tags: Vec<Vec<String>>,
     /// Canonical `d` tag value (32-byte hex string) used for 30443 replacement lifecycle.
     pub d_tag: String,
+    /// Serialized MDK KeyPackage hash_ref. Use this for local init-key cleanup after the
+    /// matching Welcome is accepted; deleting by parsing a relay event can target the wrong
+    /// material if the event was normalized/republished across 30443/443 interop paths.
+    pub hash_ref: Vec<u8>,
 }
 
 /// Result from adding a member to an MLS group.
