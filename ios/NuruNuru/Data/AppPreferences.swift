@@ -63,6 +63,8 @@ final class AppPreferences {
         static let mlsKeyPackageHashRefById = "nurunuru_mls_keypackage_hash_ref_by_id"
         static let mlsConsumedKeyPackageEventIds = "nurunuru_mls_consumed_keypackage_event_ids"
         static let mlsRejectedWelcomeRetryAfterById = "nurunuru_mls_rejected_welcome_retry_after_by_id_v2"
+        static let mlsKeyPackageRelays = "nurunuru_mls_key_package_relays"
+        static let mlsInboxRelays = "nurunuru_mls_inbox_relays"
     }
 
     var publicKeyHex: String? {
@@ -83,6 +85,19 @@ final class AppPreferences {
     var mainRelay: String {
         get { defaults.string(forKey: Keys.mainRelay) ?? defaultRelays[0] }
         set { defaults.set(newValue, forKey: Keys.mainRelay) }
+    }
+
+    /// Marmot/WhiteNoise MLS KeyPackage discovery relays (kind:10051 + key package publish targets).
+    /// Users may change these independently from general NIP-65 relays.
+    var mlsKeyPackageRelays: [String] {
+        get { defaults.stringArray(forKey: Keys.mlsKeyPackageRelays) ?? [] }
+        set { defaults.set(newValue, forKey: Keys.mlsKeyPackageRelays) }
+    }
+
+    /// NIP-17/MLS inbox relays (kind:10050) where peers should send Welcomes/DM gift-wraps.
+    var mlsInboxRelays: [String] {
+        get { defaults.stringArray(forKey: Keys.mlsInboxRelays) ?? [] }
+        set { defaults.set(newValue, forKey: Keys.mlsInboxRelays) }
     }
 
     var biometricEnabled: Bool {
@@ -378,7 +393,9 @@ final class AppPreferences {
          Keys.mlsKeyPackageEventJsonById,
          Keys.mlsKeyPackageHashRefById,
          Keys.mlsConsumedKeyPackageEventIds,
-         Keys.mlsRejectedWelcomeRetryAfterById].forEach { defaults.removeObject(forKey: $0) }
+         Keys.mlsRejectedWelcomeRetryAfterById,
+         Keys.mlsKeyPackageRelays,
+         Keys.mlsInboxRelays].forEach { defaults.removeObject(forKey: $0) }
     }
 }
 

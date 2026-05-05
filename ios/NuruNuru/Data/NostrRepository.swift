@@ -8,7 +8,11 @@ import Foundation
 actor NostrRepository {
 
     // Process-wide shared MLS-FFI client to avoid repeatedly reopening the same DB.
+    // IMPORTANT: MLS state is account-bound. Never reuse an FFI/MDK client across
+    // Nostr pubkeys; otherwise a freshly generated account can see/decrypt prior
+    // account MLS groups from the same process/database.
     nonisolated(unsafe) private static var sharedMlsClient: MlsFFIBridge?
+    nonisolated(unsafe) private static var sharedMlsAccountPubkey: String?
     nonisolated(unsafe) private static let sharedFfiLock = NSLock()
 
     // MARK: - Dependencies
@@ -63,6 +67,33 @@ actor NostrRepository {
     var mlsUnprocessableEpochAttempts: [String: [String: Int]] = [:]
     /// Per-group retryable unprocessable count from latest fetch pass (e.g. state_not_ready).
     var mlsRetryableStateCount: [String: Int] = [:]
+    /// Successfully decrypted application messages keyed by Kind-445 event id.
+    /// Keeps peer messages visible even if MDK history persistence lags or a later poll skips
+    /// an already-applied event for idempotency.
+    var mlsApplicationMessageCache: [String: [String: FfiDecryptedMessage]] = [:]
+    /// Kind-445 event ids that were successfully applied (application or state-only).
+    /// Unlike the older processedIds bug, application messages are also cached above and
+    /// merged into UI results, so skipping them later cannot make peer messages disappear.
+    var mlsAppliedEventIds: [String: Set<String>] = [:]
+    /// Retry cooldown for state_not_ready/unprocessable events. Without this, foreground
+    /// polling replays the same impossible events across 10+ relays forever.
+    var mlsRetryableEventCooldownUntil: [String: [String: Int64]] = [:]
+    /// True after an initial full catch-up has run for a group in this process.
+    /// Normal polling then uses an incremental safety window instead of full replay.
+    var mlsDidFullCatchUp: Set<String> = []
+    /// Short-lived gossip relay-list caches (author pubkey -> relay urls).
+    var mlsKeyPackageRelayCache: [String: (relays: [String], cachedAt: Date)] = [:]
+    var mlsInboxRelayCache: [String: (relays: [String], cachedAt: Date)] = [:]
+    /// Per-relay hit/ACK score used to prefer relays that actually carry Marmot traffic.
+    var mlsRelayHitScores: [String: Int] = [:]
+    /// Groups for which this install published a post-Welcome self-update commit in this process.
+    /// Until WhiteNoise confirms/interops reliably with post-Welcome self-update, do not create
+    /// application messages from the advanced local epoch; sending must stay on peer-visible state.
+    var mlsSelfUpdatePublishedThisSession: Set<String> = []
+    /// Groups that repeatedly failed MLS receive repair and should no longer accept sends.
+    var mlsBrokenGroupIds: Set<String> = []
+    /// Per-group failed repair count used to transition to broken/read-only state.
+    var mlsRepairFailureCount: [String: Int] = [:]
     /// True if the user's MLS KeyPackage (Kind 30443) has been published this session.
     var keyPackagePublished:  Bool = false
 
@@ -76,8 +107,15 @@ actor NostrRepository {
     ) {
         self.keyManager = keyManager
         self.prefs = prefs
-        self.signer = InternalSigner(keyManager: keyManager)
-        self.client = NostrClient()
+        let signer = InternalSigner(keyManager: keyManager)
+        self.signer = signer
+        self.client = NostrClient(authEventSigner: { relayUrl, challenge in
+            try signer.signEvent(
+                kind: 22242,
+                tags: [["relay", relayUrl], ["challenge", challenge]],
+                content: ""
+            )
+        })
         self.mlsClient = mlsClient
     }
 
@@ -88,15 +126,36 @@ actor NostrRepository {
     @discardableResult
     func ensureMlsClient() -> MlsFFIBridge? {
 #if NURUNURU_FFI_AVAILABLE
-        if let mlsClient { return mlsClient }
+        let requestedPubkey = prefs.publicKeyHex?.lowercased()
+        if let mlsClient,
+           let requestedPubkey,
+           Self.sharedMlsAccountPubkey?.lowercased() == requestedPubkey {
+            return mlsClient
+        }
+        if let mlsClient {
+            try? mlsClient.disconnect()
+            self.mlsClient = nil
+        }
 
         Self.sharedFfiLock.lock()
-        if let shared = Self.sharedMlsClient {
+        if let shared = Self.sharedMlsClient,
+           let requestedPubkey,
+           Self.sharedMlsAccountPubkey?.lowercased() == requestedPubkey {
             Self.sharedFfiLock.unlock()
             self.mlsClient = shared
             return shared
         }
-        Self.sharedFfiLock.unlock()
+        if Self.sharedMlsClient != nil,
+           let requestedPubkey,
+           Self.sharedMlsAccountPubkey?.lowercased() != requestedPubkey {
+            let old = Self.sharedMlsClient
+            Self.sharedMlsClient = nil
+            Self.sharedMlsAccountPubkey = nil
+            Self.sharedFfiLock.unlock()
+            try? old?.disconnect()
+        } else {
+            Self.sharedFfiLock.unlock()
+        }
 
         // Default ON. Explicit disable flag only.
         if UserDefaults.standard.bool(forKey: "disable_rust_ffi") {
@@ -126,8 +185,9 @@ actor NostrRepository {
                 self.mlsClient = ffi
                 Self.sharedFfiLock.lock()
                 Self.sharedMlsClient = ffi
+                Self.sharedMlsAccountPubkey = pubkey.lowercased()
                 Self.sharedFfiLock.unlock()
-                AppLogger.log("FFI", "ensureMlsClient: initialized read-only FFI + connected")
+                AppLogger.log("FFI", "ensureMlsClient: initialized read-only FFI account=\(String(pubkey.prefix(8)))… + connected")
                 return ffi
             } else {
                 guard let keyHex = keyManager.getKeyHexTemporary() else {
@@ -136,11 +196,13 @@ actor NostrRepository {
                 }
                 let ffi = try MlsFFILiveClient(secretKeyHex: keyHex, dbPath: dbPath)
                 ffi.connect()
+                let accountPubkey = keyManager.getStoredPublicKeyHex() ?? requestedPubkey ?? ""
                 self.mlsClient = ffi
                 Self.sharedFfiLock.lock()
                 Self.sharedMlsClient = ffi
+                Self.sharedMlsAccountPubkey = accountPubkey.lowercased()
                 Self.sharedFfiLock.unlock()
-                AppLogger.log("FFI", "ensureMlsClient: initialized full FFI + connected")
+                AppLogger.log("FFI", "ensureMlsClient: initialized full FFI account=\(String(accountPubkey.prefix(8)))… + connected")
                 return ffi
             }
         } catch {

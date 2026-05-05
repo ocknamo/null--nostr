@@ -20,6 +20,7 @@ import Foundation
     var stuckGroupIds: Set<String>      = []
     private var autoRecoveredDmGroupIds: Set<String> = []
     private var dmRecoveryInFlight: Bool = false
+    private var repairInFlightGroupIds: Set<String> = []
 
     // MARK: - Private
 
@@ -100,7 +101,8 @@ import Foundation
         defer { loadGroupsInFlight = false }
 
         AppLogger.log("MLS", "TalkVM.loadGroups start")
-        await repository.drainMlsRetryQueue(trigger: "talkLoadGroups", maxItems: 3)
+        // Foreground Talk load must not be blocked by retry drains. Retry work is
+        // handled by polling/background paths with tiny batches.
         isLoading = true
         error     = nil
         do {
@@ -125,43 +127,20 @@ import Foundation
 
     // MARK: - Group Dedup (DM)
 
-    /// 同一相手との DM グループが複数ある場合、一覧上は1件に折りたたむ。
+    /// 同一相手との DM グループが複数ある場合でも、ここでは折りたたまない。
     ///
-    /// 注意: ここでは Rust/MDK history を async に読めないため、lastMessageTime だけで
-    /// 「送信すべき group」を確定しない。実際の active/send group は openGroup() で
-    /// sibling DM の復号済み履歴を見て partner-message aware に再選択する。
+    /// WhiteNoise interop では「最新に見える self-only/orphan DM」を一覧に残してしまうと、
+    /// そこへ送信しても Android 側には表示されない。以前の collapse はまさにこの状態を
+    /// 作っていた。DM の正規化は openGroup() で MDK history を読んで行うため、一覧では
+    /// 全候補を残して安全側に倒す。
     private func collapseDuplicateDmGroups(_ input: [MlsGroup]) -> [MlsGroup] {
-        var keepByPartner: [String: MlsGroup] = [:]
-        var duplicateCounts: [String: Int] = [:]
-        var nonDm: [MlsGroup] = []
-
-        for g in input {
-            guard g.isDm else {
-                nonDm.append(g)
-                continue
-            }
-            guard let partner = g.memberPubkeys.first(where: { $0 != myPubkeyHex }) else {
-                nonDm.append(g)
-                continue
-            }
-
-            duplicateCounts[partner, default: 0] += 1
-            if let old = keepByPartner[partner] {
-                if g.lastMessageTime > old.lastMessageTime {
-                    keepByPartner[partner] = g
-                }
-            } else {
-                keepByPartner[partner] = g
-            }
+        let grouped = Dictionary(grouping: input.filter { $0.isDm }) { g in
+            g.memberPubkeys.first(where: { $0 != myPubkeyHex }) ?? g.groupIdHex
         }
-
-        for (partner, count) in duplicateCounts where count > 1 {
-            let selected = keepByPartner[partner]?.groupIdHex ?? ""
-            AppLogger.log("MLS", "TalkVM.collapseDuplicateDmGroups: partner=\(String(partner.prefix(8)))… duplicates=\(count) displayGroup=\(selected) selection=provisional")
+        for (partner, entries) in grouped where entries.count > 1 {
+            AppLogger.log("MLS", "TalkVM.collapseDuplicateDmGroups: partner=\(String(partner.prefix(8)))… duplicates=\(entries.count) display=all_no_collapse")
         }
-
-        let dmCollapsed = Array(keepByPartner.values)
-        return (dmCollapsed + nonDm).sorted { $0.lastMessageTime > $1.lastMessageTime }
+        return input.sorted { $0.lastMessageTime > $1.lastMessageTime }
     }
 
     /// activeGroup が統合で消えた場合、同一相手の最新DMへマップし直す。
@@ -194,7 +173,8 @@ import Foundation
         openingGroupInFlight = true
 
         AppLogger.log("MLS", "TalkVM.openGroup start: group=\(groupIdHex)")
-        await repository.drainMlsRetryQueue(trigger: "talkOpenGroup", maxItems: 3)
+        // Do not drain retry queue before opening: it serializes on NostrRepository and
+        // makes Talk appear frozen. Open local history first, then catch up.
         // 以前は stuckGroupIds で開封を拒否していたが、
         // 回復可能性を残すため開封自体は許可する。
         guard let group = groups.first(where: { $0.groupIdHex == groupIdHex }) else {
@@ -204,55 +184,80 @@ import Foundation
         }
 
         // First phase must be quick: open the tapped/collapsed group so the Talk screen
-        // can start. The heavier duplicate-DM sibling scan is bounded below and never
-        // scans all historical duplicate groups sequentially.
+        // can start. Sending is allowed while catch-up continues in the background.
         messagesLoading = true
         activeGroup = group
+        openingGroupInFlight = false
+        startPolling(groupIdHex: groupIdHex)
         var finalGroup = group
         var pollingGroupId = groupIdHex
 
         do {
-            var msgs = try await withTimeout(seconds: 10.0) {
-                try await self.repository.fetchMlsMessages(groupIdHex: groupIdHex)
+            let localMsgs = await repository.getLocalMlsMessages(groupIdHex: groupIdHex)
+            if !localMsgs.isEmpty {
+                messages = localMsgs
+                messagesLoading = false
+                AppLogger.log("MLS", "TalkVM.openGroup local-first messages=\(localMsgs.count) group=\(groupIdHex)")
             }
 
+            // Do not block opening on relay/MLS catch-up. The user-visible chat must
+            // be local-first and send-capable immediately; catch-up runs in polling.
+            var msgs = localMsgs
+
             // DM重複移行期 / WhiteNoise interop:
-            // 同一相手との DM が複数ある場合、collapse された表示用 group と
-            // WhiteNoise が実際に kind445 を送っている Nostr group id がズレることがある。
-            // ただし全 sibling を逐次 fetch すると openGroup が終わらずトーク開始不能になるため、
-            // lastMessageTime 上位だけを短い timeout 付きで調査する。
+            // 同一相手との DM が複数ある場合、表示上の最新 group（自分だけが送った
+            // 新規 orphan group）と、WhiteNoise Android が実際に参加している group が
+            // ずれることがある。ここがずれると iOS では送信済みに見えても Android には
+            // 出ない。開封時は常に local MDK history を見て「相手のメッセージが復号
+            // できている group」を送信先として選ぶ。異なる group の履歴は混ぜない。
             if group.isDm {
-                let fetchedAll = (try? await repository.fetchMlsGroups(myPubkeyHex: myPubkeyHex)) ?? []
                 let partner = group.memberPubkeys.first(where: { $0 != myPubkeyHex })
-                let siblingGroupsAll = fetchedAll.filter { candidate in
-                    guard candidate.isDm, candidate.groupIdHex != groupIdHex else { return false }
-                    guard let partner else { return false }
+                let siblingGroupsAll = groups.filter { candidate in
+                    guard candidate.isDm else { return false }
+                    guard let partner else { return candidate.groupIdHex == groupIdHex }
                     return candidate.memberPubkeys.contains(partner)
                 }.sorted { lhs, rhs in
                     if lhs.lastMessageTime != rhs.lastMessageTime { return lhs.lastMessageTime > rhs.lastMessageTime }
                     return lhs.groupIdHex < rhs.groupIdHex
                 }
-                let maxSiblingScan = 6
+
+                let maxSiblingScan = 8
                 let siblingGroups = Array(siblingGroupsAll.prefix(maxSiblingScan))
                 let partnerShort = partner.map { String($0.prefix(8)) + "…" } ?? ""
-                let siblingIds = siblingGroups.map { $0.groupIdHex }.joined(separator: ",")
-                AppLogger.log("MLS", "TalkVM.openGroup: DM sibling candidates current=\(groupIdHex) partner=\(partnerShort) total=\(siblingGroupsAll.count) scanned=\(siblingGroups.count) siblings=\(siblingIds)")
+                AppLogger.log("MLS", "TalkVM.openGroup: DM canonical scan requested=\(groupIdHex) partner=\(partnerShort) total=\(siblingGroupsAll.count) scanned=\(siblingGroups.count)")
 
-                var allMessagesByGroup: [(group: MlsGroup, messages: [MlsMessage], fetchOk: Bool)] = [(group, msgs, true)]
-                for sibling in siblingGroups {
+                var allMessagesByGroup: [(group: MlsGroup, messages: [MlsMessage], fetchOk: Bool)] = []
+                var seenGroupIds = Set<String>()
+                for candidate in ([group] + siblingGroups) where seenGroupIds.insert(candidate.groupIdHex).inserted {
                     do {
-                        let alt = try await withTimeout(seconds: 4.0) {
-                            try await self.repository.fetchMlsMessages(groupIdHex: sibling.groupIdHex)
+                        var local = candidate.groupIdHex == groupIdHex ? msgs : await self.repository.getLocalMlsMessages(groupIdHex: candidate.groupIdHex)
+                        // If a DM has no peer message locally, do a real relay/MDK repair pass
+                        // before deciding it is an orphan. WhiteNoise often has already sent
+                        // the first message (e.g. group_id shown in Android logs) while iOS has
+                        // not replayed that kind:445 yet. Choosing based on local-empty history
+                        // sends replies to the wrong group. Keep this at 30s: prior
+                        // successful WhiteNoise interop logs showed decrypt completing
+                        // just after the old 10s timeout, and short timeouts caused UI
+                        // failure exactly when MDK history became available.
+                        if local.filter({ $0.senderPubkey != myPubkeyHex }).isEmpty {
+                            do {
+                                local = try await withTimeout(seconds: 30.0) {
+                                    try await self.repository.fetchMlsMessages(groupIdHex: candidate.groupIdHex, repairFull: true)
+                                }
+                                AppLogger.log("MLS", "TalkVM.openGroup: DM canonical repair group=\(candidate.groupIdHex) messages=\(local.count) peer=\(local.filter { $0.senderPubkey != self.myPubkeyHex }.count)")
+                            } catch {
+                                AppLogger.log("MLS", "TalkVM.openGroup: DM canonical repair failed group=\(candidate.groupIdHex) err=\(self.normalizeMlsError(error, fallback: "repair_failed"))")
+                            }
                         }
-                        allMessagesByGroup.append((sibling, alt, true))
+                        allMessagesByGroup.append((candidate, local, true))
                     } catch {
-                        allMessagesByGroup.append((sibling, [], false))
+                        allMessagesByGroup.append((candidate, [], false))
                         let fetchError = normalizeMlsError(error, fallback: "fetch_failed")
-                        AppLogger.log("MLS", "TalkVM.openGroup: DM sibling fetch failed group=\(sibling.groupIdHex) err=\(fetchError)")
+                        AppLogger.log("MLS", "TalkVM.openGroup: DM canonical fetch failed group=\(candidate.groupIdHex) err=\(fetchError)")
                     }
                 }
 
-                struct DmSiblingScore {
+                struct DmCanonicalScore {
                     let historyCount: Int
                     let partnerCount: Int
                     let myCount: Int
@@ -262,10 +267,10 @@ import Foundation
                     let fetchOk: Bool
                 }
 
-                func score(_ entry: (group: MlsGroup, messages: [MlsMessage], fetchOk: Bool)) -> DmSiblingScore {
+                func score(_ entry: (group: MlsGroup, messages: [MlsMessage], fetchOk: Bool)) -> DmCanonicalScore {
                     let partnerMsgs = entry.messages.filter { $0.senderPubkey != myPubkeyHex }
                     let myMsgs = entry.messages.filter { $0.senderPubkey == myPubkeyHex }
-                    return DmSiblingScore(
+                    return DmCanonicalScore(
                         historyCount: entry.messages.count,
                         partnerCount: partnerMsgs.count,
                         myCount: myMsgs.count,
@@ -278,13 +283,16 @@ import Foundation
 
                 for entry in allMessagesByGroup {
                     let s = score(entry)
-                    let marker = entry.group.groupIdHex == groupIdHex ? "current" : "sibling"
-                    AppLogger.log("MLS", "TalkVM.openGroup: DM sibling stats role=\(marker) group=\(entry.group.groupIdHex) fetchOk=\(s.fetchOk) history=\(s.historyCount) partnerMessages=\(s.partnerCount) myMessages=\(s.myCount) latestPartnerTs=\(s.latestPartnerTs) latestAnyTs=\(s.latestAnyTs) lastMessageTime=\(s.groupTs) retryable=unavailable")
+                    let marker = entry.group.groupIdHex == groupIdHex ? "requested" : "sibling"
+                    AppLogger.log("MLS", "TalkVM.openGroup: DM canonical stats role=\(marker) group=\(entry.group.groupIdHex) fetchOk=\(s.fetchOk) history=\(s.historyCount) partnerMessages=\(s.partnerCount) myMessages=\(s.myCount) latestPartnerTs=\(s.latestPartnerTs) latestAnyTs=\(s.latestAnyTs) lastMessageTime=\(s.groupTs)")
                 }
 
                 if let best = allMessagesByGroup.max(by: { lhs, rhs in
                     let l = score(lhs)
                     let r = score(rhs)
+                    // WhiteNoise interop priority: any group with peer/partner messages wins
+                    // over a newer self-only duplicate group, because only the former proves
+                    // both clients share the MLS state and group id.
                     if (l.partnerCount > 0) != (r.partnerCount > 0) { return l.partnerCount == 0 && r.partnerCount > 0 }
                     if l.latestPartnerTs != r.latestPartnerTs { return l.latestPartnerTs < r.latestPartnerTs }
                     if l.historyCount != r.historyCount { return l.historyCount < r.historyCount }
@@ -292,44 +300,32 @@ import Foundation
                     return l.groupTs < r.groupTs
                 }) {
                     let bestScore = score(best)
-                    if best.group.groupIdHex != groupIdHex, bestScore.partnerCount > 0 {
+                    if best.group.groupIdHex != groupIdHex {
                         finalGroup = best.group
                         pollingGroupId = best.group.groupIdHex
-                        AppLogger.log("MLS", "TalkVM.openGroup: remapped active DM to sibling current=\(groupIdHex) selected=\(best.group.groupIdHex) partnerMessages=\(bestScore.partnerCount) myMessages=\(bestScore.myCount) partnerTs=\(bestScore.latestPartnerTs) anyTs=\(bestScore.latestAnyTs)")
+                        AppLogger.log("MLS", "TalkVM.openGroup: canonical DM remap requested=\(groupIdHex) selected=\(best.group.groupIdHex) partnerMessages=\(bestScore.partnerCount) myMessages=\(bestScore.myCount) partnerTs=\(bestScore.latestPartnerTs) anyTs=\(bestScore.latestAnyTs)")
                     } else {
-                        let keepReason = bestScore.partnerCount > 0 ? "current_has_partner_messages" : "no_decryptable_partner_sibling"
-                        AppLogger.log("MLS", "TalkVM.openGroup: kept active DM group=\(groupIdHex) partnerMessages=\(bestScore.partnerCount) myMessages=\(bestScore.myCount) partnerTs=\(bestScore.latestPartnerTs) anyTs=\(bestScore.latestAnyTs) reason=\(keepReason)")
+                        AppLogger.log("MLS", "TalkVM.openGroup: canonical DM keep group=\(groupIdHex) partnerMessages=\(bestScore.partnerCount) myMessages=\(bestScore.myCount) partnerTs=\(bestScore.latestPartnerTs) anyTs=\(bestScore.latestAnyTs)")
                     }
-                }
-
-                var merged: [MlsMessage] = []
-                for entry in allMessagesByGroup { merged.append(contentsOf: entry.messages) }
-                if allMessagesByGroup.count > 1 {
-                    var byId: [String: MlsMessage] = [:]
-                    for m in merged { byId[m.id] = m }
-                    msgs = Array(byId.values).sorted { lhs, rhs in
-                        if lhs.timestamp == rhs.timestamp { return lhs.id < rhs.id }
-                        return lhs.timestamp < rhs.timestamp
-                    }
-                    AppLogger.log("MLS", "TalkVM.openGroup: merged sibling DM histories groups=\(allMessagesByGroup.count) merged=\(msgs.count) sendGroup=\(pollingGroupId)")
+                    msgs = best.messages
                 }
             }
 
             activeGroup = finalGroup
-            messages = msgs
+            messages = dedupeMessages(msgs)
+            // Do not surface a timeout/error banner for slow sync. Empty local history is
+            // still a valid opened chat; polling will update when MLS catches up.
             error = nil
-            AppLogger.log("MLS", "TalkVM.openGroup success: messages=\(msgs.count) active=\(finalGroup.groupIdHex)")
+            AppLogger.log("MLS", "TalkVM.openGroup local-ready: messages=\(msgs.count) active=\(finalGroup.groupIdHex)")
             messagesLoading = false
-            openingGroupInFlight = false
             startPolling(groupIdHex: pollingGroupId)
         } catch {
             AppLogger.log("MLS", "TalkVM.openGroup error: \(error)")
             messagesLoading = false
-            openingGroupInFlight = false
 
-            // Keep the selected group open even if initial fetch times out, so Talk can start.
+            // Keep the selected group open even if local read fails, so Talk can start.
             activeGroup = group
-            messages = []
+            if messages.isEmpty { messages = [] }
             startPolling(groupIdHex: groupIdHex)
 
             // Same recovery UX as sendMessage(): if this DM is stuck, recreate to a fresh group.
@@ -338,10 +334,9 @@ import Foundation
                group.isDm {
                 // 非fatal化: 旧グループを閉じずに表示継続し、次ポーリングでの回復を待つ。
                 self.error = "同期中です。しばらく待って再読込してください"
-            } else if let te = error as? TalkTimeoutError, te == .timedOut {
-                self.error = "読み込みに時間がかかっています。バックグラウンドで同期を続けます"
             } else {
-                setNormalizedError(error, fallback: "メッセージの読み込みに失敗しました", context: "openGroup")
+                // Opening is local-first. Slow relay sync is intentionally silent.
+                AppLogger.log("MLS", "TalkVM.openGroup local-first nonfatal error hidden from UI: \(error)")
             }
         }
     }
@@ -384,21 +379,43 @@ import Foundation
 
     // MARK: - Live Polling (10s interval)
 
-    /// アクティブグループのメッセージを 10 秒ごとにポーリング。
+    /// アクティブグループのメッセージを 3 秒ごとにポーリング。
     /// Android: LaunchedEffect + collect flow に対応。
     private func startPolling(groupIdHex: String) {
         pollingTask?.cancel()
         pollingTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 10_000_000_000) // 10s
+                try? await Task.sleep(nanoseconds: 3_000_000_000) // 3s
                 guard !Task.isCancelled, let self else { break }
                 guard self.activeGroup?.groupIdHex == groupIdHex else { break }
-                await self.repository.drainMlsRetryQueue(trigger: "talkPolling", maxItems: 2)
-                if let msgs = try? await self.repository.fetchMlsMessages(groupIdHex: groupIdHex),
-                   self.shouldReplaceMessages(current: self.messages, incoming: msgs) {
-                    self.messages = msgs
+                // Polling should be a light message catch-up only. Retry drains/self-update
+                // are not user-visible and must not make Talk feel stuck.
+                if let msgs = try? await self.repository.fetchMlsMessages(groupIdHex: groupIdHex) {
+                    let normalized = self.dedupeMessages(msgs)
+                    if self.shouldReplaceMessages(current: self.messages, incoming: normalized) {
+                        self.messages = normalized
+                    }
                 }
             }
+        }
+    }
+
+
+    func repairCurrentGroup() async {
+        guard let group = activeGroup else { return }
+        repairInFlightGroupIds.insert(group.groupIdHex)
+        let repaired = await repository.repairMlsGroupHistory(groupIdHex: group.groupIdHex)
+        repairInFlightGroupIds.remove(group.groupIdHex)
+        if shouldReplaceMessages(current: messages, incoming: repaired) {
+            messages = repaired
+        }
+        let peerCount = repaired.filter { $0.senderPubkey != myPubkeyHex }.count
+        if repaired.count > 0 && peerCount == 0 {
+            stuckGroupIds.insert(group.groupIdHex)
+            error = "このトークの暗号状態が相手とずれています。旧トークへの送信を止め、新しいトークを作成してください。"
+        } else {
+            stuckGroupIds.remove(group.groupIdHex)
+            error = nil
         }
     }
 
@@ -442,15 +459,51 @@ import Foundation
     }
 
     func sendMessage(_ text: String) async {
-        guard !openingGroupInFlight, !messagesLoading else {
-            AppLogger.log("MLS", "TalkVM.sendMessage: blocked while opening group opening=\(openingGroupInFlight) messagesLoading=\(messagesLoading)")
-            self.error = "トークを同期中です。読み込み完了後に送信してください"
-            return
+        // Sending must remain possible during catch-up/sync. sendMlsMessage itself
+        // validates whether the local MLS state can create an application message.
+        if openingGroupInFlight || messagesLoading {
+            AppLogger.log("MLS", "TalkVM.sendMessage: continuing during sync opening=\(openingGroupInFlight) messagesLoading=\(messagesLoading)")
         }
-        guard let group = activeGroup, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard var group = activeGroup, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             AppLogger.log("MLS", "TalkVM.sendMessage: skipped (no active group or empty text)")
             return
         }
+        // Last-chance canonicalization: if the currently opened DM has no peer message
+        // but sibling DM candidates exist, re-run openGroup's relay-backed selection before
+        // creating a new kind:445. This prevents replies from going to iOS-only duplicate DMs.
+        if group.isDm,
+           messages.filter({ $0.senderPubkey != myPubkeyHex }).isEmpty,
+           siblingDmGroupIds(for: group, from: groups).count > 1 {
+            AppLogger.log("MLS", "TalkVM.sendMessage: preflight canonicalize DM group=\(group.groupIdHex)")
+            await openGroup(group.groupIdHex)
+            if let refreshed = activeGroup { group = refreshed }
+        }
+        if stuckGroupIds.contains(group.groupIdHex) {
+            self.error = "このトークは暗号状態がずれているため送信できません。新しいトークを作成してください。"
+            AppLogger.log("MLS", "TalkVM.sendMessage blocked stuck group=\(group.groupIdHex)")
+            return
+        }
+
+        // Critical Marmot interop rule: displaying a peer message does not prove our
+        // local send epoch is current. Before creating an outbound kind:9 application
+        // message, replay commits/messages for THIS active group so MDK creates the
+        // message from the same epoch WhiteNoise Android expects. This is deliberately
+        // slow; sending from stale state was the root cause of "iOS shows sent, Android
+        // does not display" while peer messages were visible.
+        do {
+            let caughtUp = try await withTimeout(seconds: 30.0) {
+                try await self.repository.fetchMlsMessages(groupIdHex: group.groupIdHex, repairFull: true)
+            }
+            if shouldReplaceMessages(current: messages, incoming: caughtUp) {
+                messages = dedupeMessages(caughtUp)
+            }
+            AppLogger.log("MLS", "TalkVM.sendMessage preflight catchup ok group=\(group.groupIdHex) messages=\(caughtUp.count) peer=\(caughtUp.filter { $0.senderPubkey != self.myPubkeyHex }.count)")
+        } catch {
+            AppLogger.log("MLS", "TalkVM.sendMessage preflight catchup failed group=\(group.groupIdHex) err=\(normalizeMlsError(error, fallback: "catchup_failed"))")
+            self.error = "同期中です。少し待ってから再送してください"
+            return
+        }
+
         AppLogger.log("MLS", "TalkVM.sendMessage start: group=\(group.groupIdHex), len=\(text.count)")
         sendingMessage = true
 
@@ -469,12 +522,25 @@ import Foundation
             let msg = try await withTimeout(seconds: 30.0) {
                 try await self.repository.sendMlsMessage(groupIdHex: group.groupIdHex, content: trimmed, myPubkeyHex: self.myPubkeyHex)
             }
-            if let idx = messages.firstIndex(where: { $0.id == tempId }) {
-                messages[idx] = msg
-            } else {
-                messages.append(msg)
+            // Replace the optimistic bubble and defensively collapse any duplicate bubble.
+            // Use the currently active group id (after canonical DM remap) as the UI group id.
+            let uiMsg = MlsMessage(
+                id: msg.id,
+                senderPubkey: msg.senderPubkey,
+                content: msg.content,
+                timestamp: msg.timestamp,
+                groupIdHex: group.groupIdHex,
+                senderProfile: msg.senderProfile
+            )
+            messages.removeAll { existing in
+                existing.id == tempId ||
+                (existing.senderPubkey == uiMsg.senderPubkey &&
+                 existing.content == uiMsg.content &&
+                 abs(existing.timestamp - uiMsg.timestamp) <= 1)
             }
-            AppLogger.log("MLS", "TalkVM.sendMessage success")
+            messages.append(uiMsg)
+            messages = dedupeMessages(messages)
+            AppLogger.log("MLS", "TalkVM.sendMessage success group=\(group.groupIdHex)")
         } catch {
             // Stop false-positive UX: failed/timed-out send must not remain as sent bubble.
             messages.removeAll { $0.id == tempId }
@@ -483,7 +549,14 @@ import Foundation
             if let mlsErr = error as? MlsError,
                case .groupStateStuck = mlsErr,
                group.isDm {
-                await recoverStuckDmIfNeeded(group)
+                // Never auto-create a replacement DM. Logs showed this creates a new
+                // MLS group that WhiteNoise Android is not watching, so subsequent iOS
+                // messages look sent locally but never appear remotely. Keep the shared
+                // group and let explicit repair/catch-up resolve state gaps.
+                let repaired = await repository.repairMlsGroupHistory(groupIdHex: group.groupIdHex)
+                if shouldReplaceMessages(current: messages, incoming: repaired) { messages = repaired }
+                self.error = "同期状態を修復しました。もう一度送信してください"
+                AppLogger.log("MLS", "TalkVM.sendMessage groupStateStuck repaired_no_autocreate group=\(group.groupIdHex) messages=\(repaired.count)")
             } else if let te = error as? TalkTimeoutError, te == .timedOut {
                 self.error = "送信がタイムアウトしました。通信状態を確認して再試行してください"
             } else {
@@ -617,6 +690,8 @@ import Foundation
 
     /// Count 増減だけでなく、同件数でも内容・順序・IDが変わったら置き換える。
     private func shouldReplaceMessages(current: [MlsMessage], incoming: [MlsMessage]) -> Bool {
+        let normalizedIncoming = dedupeMessages(incoming)
+        if normalizedIncoming.count != incoming.count { return true }
         guard current.count == incoming.count else { return true }
         for (lhs, rhs) in zip(current, incoming) {
             if lhs.id != rhs.id { return true }
@@ -625,5 +700,19 @@ import Foundation
             if lhs.content != rhs.content { return true }
         }
         return false
+    }
+
+    private func dedupeMessages(_ input: [MlsMessage]) -> [MlsMessage] {
+        var byKey: [String: MlsMessage] = [:]
+        for m in input {
+            // Same sender/content within the same second is the same UI message. This avoids
+            // showing both the optimistic/sent bubble and the locally replayed MLS history copy.
+            let key = "\(m.groupIdHex)|\(m.senderPubkey)|\(m.timestamp)|\(m.content.trimmingCharacters(in: .whitespacesAndNewlines))"
+            byKey[key] = m
+        }
+        return Array(byKey.values).sorted { lhs, rhs in
+            if lhs.timestamp != rhs.timestamp { return lhs.timestamp < rhs.timestamp }
+            return lhs.id < rhs.id
+        }
     }
 }

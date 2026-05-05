@@ -82,6 +82,17 @@ private struct GroupListView: View {
             .animation(.easeInOut(duration: 0.25), value: selectedPage)
         }
         .background(theme.bgPrimary)
+        // If WhiteNoise sends a Welcome after the first Talk load, the list can be
+        // empty until the next manual refresh. Keep polling while the empty Talk
+        // list is visible so newly invited MLS groups appear automatically.
+        .task {
+            while !Task.isCancelled {
+                if viewModel.groups.isEmpty && !viewModel.isLoading {
+                    await viewModel.loadGroups()
+                }
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+            }
+        }
         // New DM sheet
         .sheet(isPresented: $showNewChat) {
             NewChatSheet(onStartChat: { pubkey in

@@ -547,36 +547,26 @@ impl MlsManager {
         let group_id = self.resolve_group_id(group_id_hex)?;
         let pubkey = self.user_pubkey()?;
 
-        // Build the inner rumor as a Nostr chat event (kind:9) per MIP-03
-        // application-message recommendation.
+        // Build the inner rumor as a Nostr chat event (kind:9) per Marmot MIP-03.
+        // MDK's own examples use Kind::Custom(9), and its processing path stores
+        // kind/content generically after decrypting the MLS application message.
         //
         // NOTE: reactions/other kinds are supported when callers provide prebuilt
         // MLS messages via lower layers; this high-level helper is chat-text focused.
         let rumor: UnsignedEvent =
             EventBuilder::new(nostr::Kind::from(9u16), content).build(pubkey);
 
-        let event = match self.mdk.create_message(&group_id, rumor.clone(), None) {
-            Ok(ev) => ev,
-            Err(e) => {
-                let es = e.to_string();
-                // Recovery path: clear stuck pending commit/proposal and retry once.
-                if es.contains("pending proposal exists") || es.contains("pending commit exists") {
-                    tracing::warn!("[MLS] create_message pending state detected for {group_id_hex}, clearing pending commit and retrying");
-                    self.mdk.clear_pending_commit(&group_id).map_err(|ce| {
-                        NuruNuruError::MlsError(format!(
-                            "create_message clear_pending_commit: {ce}"
-                        ))
-                    })?;
-                    self.mdk
-                        .create_message(&group_id, rumor, None)
-                        .map_err(|re| {
-                            NuruNuruError::MlsError(format!("create_message retry: {re}"))
-                        })?
-                } else {
-                    return Err(NuruNuruError::MlsError(format!("create_message: {e}")));
-                }
-            }
-        };
+        let event = self
+            .mdk
+            .create_message(&group_id, rumor, None)
+            .map_err(|e| {
+                // Never clear pending commits/proposals while creating an application
+                // message. Marmot Commit ordering is stateful; silently clearing pending
+                // local state can make iOS encrypt a kind:9 message from an epoch that
+                // WhiteNoise Android does not have. Surface the error so the app can
+                // catch up/repair the same group instead of sending a ghost message.
+                NuruNuruError::MlsError(format!("create_message: {e}"))
+            })?;
 
         Ok(EncryptedMessageData {
             content: event.as_json(),

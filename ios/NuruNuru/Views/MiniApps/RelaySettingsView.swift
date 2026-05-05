@@ -35,6 +35,10 @@ struct RelaySettingsView: View {
     @State private var newRelayWrite     = true
     /// Per-relay connection states (polled periodically)
     @State private var relayStates:      [String: NostrClient.ConnectionState] = [:]
+    @State private var mlsKeyPackageRelays: [String] = []
+    @State private var mlsInboxRelays:      [String] = []
+    @State private var manualKeyPackageRelayUrl = ""
+    @State private var manualInboxRelayUrl      = ""
 
     @StateObject private var locationHelper = LocationHelper()
 
@@ -387,6 +391,9 @@ struct RelaySettingsView: View {
                     // Load NIP-65 relay list button
                     loadNip65Button
 
+                    // MLS / Marmot / WhiteNoise relay lists
+                    mlsRelaySettings
+
                     // Per-relay read/write toggles
                     if !currentRelays.isEmpty {
                         relayDetailSettings
@@ -452,6 +459,116 @@ struct RelaySettingsView: View {
         }
         .buttonStyle(.plain)
         .disabled(loadingNip65)
+    }
+
+
+    private var mlsRelaySettings: some View {
+        VStack(alignment: .leading, spacing: NuruSpacing.space3) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("MLS / WhiteNoise リレー")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(theme.textPrimary)
+                Text("KeyPackage relays は招待用KeyPackage(30443/443/10051)を置く場所、Marmot Inbox relays はWelcome/MLS受信用(10050)です。トーク画面はMarmot MLS専用で、NIP-17メッセージは表示しません。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.textSecondary)
+            }
+            .padding(NuruSpacing.space3)
+            .background(RoundedRectangle(cornerRadius: NuruSpacing.radiusLg).fill(theme.bgTertiary))
+
+            relayListEditor(
+                title: "Key Package Relays (kind:10051)",
+                relays: $mlsKeyPackageRelays,
+                manualUrl: $manualKeyPackageRelayUrl,
+                defaultRelays: [
+                    "wss://relay.damus.io",
+                    "wss://relay.primal.net",
+                    "wss://nos.lol",
+                    "wss://relay.nostr.wirednet.jp",
+                    "wss://yabu.me",
+                    "wss://r.kojira.io"
+                ],
+                onSave: { prefs.mlsKeyPackageRelays = mlsKeyPackageRelays }
+            )
+
+            relayListEditor(
+                title: "Marmot Inbox Relays (kind:10050)",
+                relays: $mlsInboxRelays,
+                manualUrl: $manualInboxRelayUrl,
+                defaultRelays: ["wss://yabu.me", "wss://r.kojira.io"],
+                onSave: { prefs.mlsInboxRelays = mlsInboxRelays }
+            )
+        }
+    }
+
+    private func relayListEditor(
+        title: String,
+        relays: Binding<[String]>,
+        manualUrl: Binding<String>,
+        defaultRelays: [String],
+        onSave: @escaping () -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: NuruSpacing.space2) {
+            HStack {
+                Text(title)
+                    .font(.system(size: 10))
+                    .foregroundStyle(theme.textTertiary)
+                Spacer()
+                Button("標準") {
+                    relays.wrappedValue = defaultRelays
+                    onSave()
+                }
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(NuruColors.lineGreen)
+            }
+
+            ForEach(relays.wrappedValue, id: \.self) { relay in
+                HStack {
+                    Circle()
+                        .fill(relayDotColor(relay))
+                        .frame(width: 8, height: 8)
+                    Text(relay.replacingOccurrences(of: "wss://", with: ""))
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.textPrimary)
+                        .lineLimit(1)
+                    Spacer()
+                    Button {
+                        relays.wrappedValue.removeAll { $0 == relay }
+                        onSave()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundStyle(theme.textTertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, NuruSpacing.space3)
+                .padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: NuruSpacing.radiusLg).fill(theme.bgTertiary))
+            }
+
+            HStack {
+                TextField("wss://relay.example.com", text: manualUrl)
+                    .font(.system(size: 12))
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .padding(NuruSpacing.space3)
+                    .background(RoundedRectangle(cornerRadius: NuruSpacing.radiusLg).stroke(theme.borderColor, lineWidth: 1))
+                Button("追加") {
+                    let url = manualUrl.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard url.hasPrefix("wss://") || url.hasPrefix("ws://") else { return }
+                    var list = [url] + relays.wrappedValue.filter { $0 != url }
+                    if list.count > 10 { list = Array(list.prefix(10)) }
+                    relays.wrappedValue = list
+                    manualUrl.wrappedValue = ""
+                    onSave()
+                }
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, NuruSpacing.space3)
+                .frame(height: 36)
+                .background(RoundedRectangle(cornerRadius: NuruSpacing.radiusLg).fill(NuruColors.lineGreen))
+            }
+        }
     }
 
     private var relayDetailSettings: some View {
@@ -682,6 +799,12 @@ struct RelaySettingsView: View {
         userGeohash = prefs.userGeohash
         mainRelayState = prefs.mainRelay
 
+        mlsKeyPackageRelays = prefs.mlsKeyPackageRelays.isEmpty ? [
+            "wss://relay.damus.io", "wss://relay.primal.net", "wss://nos.lol",
+            "wss://relay.nostr.wirednet.jp", "wss://yabu.me", "wss://r.kojira.io"
+        ] : prefs.mlsKeyPackageRelays
+        mlsInboxRelays = prefs.mlsInboxRelays.isEmpty ? ["wss://yabu.me", "wss://r.kojira.io"] : prefs.mlsInboxRelays
+
         // Load NIP-65 relays
         let stored = prefs.nip65Relays
         if stored.isEmpty {
@@ -730,6 +853,8 @@ struct RelaySettingsView: View {
                 prefs.mainRelay = writeUrls[0]
                 mainRelayState = writeUrls[0]
             }
+            prefs.mlsKeyPackageRelays = mlsKeyPackageRelays
+            prefs.mlsInboxRelays = mlsInboxRelays
 
             saveSuccess = true
             try? await Task.sleep(nanoseconds: 2_000_000_000)

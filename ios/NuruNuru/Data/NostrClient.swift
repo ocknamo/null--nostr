@@ -17,6 +17,8 @@ enum RelayMessage {
 /// Mirrors Android: multiple relay connections managed in parallel.
 actor NostrClient {
 
+    typealias AuthEventSigner = @Sendable (_ relayUrl: String, _ challenge: String) async throws -> NostrEvent
+
     // MARK: - Types
 
     enum ClientError: Error {
@@ -51,6 +53,11 @@ actor NostrClient {
     // MARK: - Properties
 
     private var connections: [String: SingleRelayClient] = [:]
+    private let authEventSigner: AuthEventSigner?
+
+    init(authEventSigner: AuthEventSigner? = nil) {
+        self.authEventSigner = authEventSigner
+    }
 
     fileprivate static let noisyRelays: Set<String> = ["relay.nostr.band", "relay.nostr.wirednet.jp"]
     /// Relays that are reachable only opportunistically. They are not auto-reconnected
@@ -67,7 +74,17 @@ actor NostrClient {
     /// Already-connected relays are skipped; failed/disconnected ones are reconnected.
     /// Connections are established in parallel for faster startup.
     func connect(relayUrls: [String]) async {
-        let relayUrls = relayUrls.filter { !Self.excludedRelays.contains($0) }
+        let relayUrls = relayUrls.filter { url in
+            guard !Self.excludedRelays.contains(url),
+                  let comp = URLComponents(string: url),
+                  let scheme = comp.scheme?.lowercased(),
+                  (scheme == "wss" || scheme == "ws"),
+                  comp.host?.isEmpty == false else {
+                AppLogger.log("Relay", "Skipping invalid relay URL: \(url)")
+                return false
+            }
+            return true
+        }
         AppLogger.log("Relay", "Connecting to \(relayUrls.count) relays: \(relayUrls.joined(separator: ", "))")
 
         // Prepare connections map first (actor-isolated)
@@ -152,14 +169,22 @@ actor NostrClient {
         guard !connections.isEmpty else { return [] }
 
         var allEvents: [NostrEvent] = []
-        await withTaskGroup(of: [NostrEvent].self) { group in
+        await withTaskGroup(of: (isTimeout: Bool, events: [NostrEvent]).self) { group in
             for conn in connections.values {
                 group.addTask {
-                    await conn.fetchEvents(filters: filters, timeoutSeconds: timeoutSeconds)
+                    (false, await conn.fetchEvents(filters: filters, timeoutSeconds: timeoutSeconds))
                 }
             }
-            for await events in group {
-                allEvents += events
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64((timeoutSeconds + 0.5) * 1_000_000_000))
+                return (true, [])
+            }
+            while let result = await group.next() {
+                if result.isTimeout {
+                    group.cancelAll()
+                    break
+                }
+                allEvents += result.events
             }
         }
 
@@ -199,7 +224,14 @@ actor NostrClient {
 
             return await conn.fetchEvents(filters: filters, timeoutSeconds: timeoutSeconds)
         }
-        guard let url = URL(string: relayUrl) else { return [] }
+        guard let comp = URLComponents(string: relayUrl),
+              let scheme = comp.scheme?.lowercased(),
+              (scheme == "wss" || scheme == "ws"),
+              comp.host?.isEmpty == false,
+              let url = URL(string: relayUrl) else {
+            AppLogger.log("Relay", "fetchEventsFromRelay invalid relay URL: \(relayUrl)")
+            return []
+        }
         let conn = SingleRelayClient(relayURL: url)
         connections[relayUrl] = conn
         await conn.connect()
@@ -317,6 +349,17 @@ actor NostrClient {
     /// Used by MLS Kind-445 / Welcome events generated and signed by Rust MDK.
     /// If no relay subset is provided, falls back to publishing to all connected relays.
     func publishRawEventJSON(_ rawEventJSON: String, to relays: [String]) async throws {
+        try await publishRawEventJSON(rawEventJSON, to: relays, waitForAllRelays: false)
+    }
+
+    /// Publish a fully signed raw event JSON to a subset of relays.
+    ///
+    /// MLS chat sends are latency-sensitive. Waiting for every relay OK is dangerous on iOS
+    /// because an idle WebSocket may stay in `.connected` locally while the relay/network has
+    /// already stopped returning OK; each stale relay then costs the full publish-ack timeout.
+    /// The default therefore returns as soon as the first relay accepts the event and continues
+    /// fan-out in the background, matching `publish(event:)` for normal notes.
+    func publishRawEventJSON(_ rawEventJSON: String, to relays: [String], waitForAllRelays: Bool) async throws {
         guard let data = rawEventJSON.data(using: .utf8) else {
             throw ClientError.invalidMessage
         }
@@ -327,46 +370,91 @@ actor NostrClient {
             throw ClientError.invalidMessage
         }
 
-        let targetRelays = relays.isEmpty ? Array(connections.keys) : relays
+        let targetRelays = (relays.isEmpty ? Array(connections.keys) : relays).filter { !Self.excludedRelays.contains($0) }
         guard !targetRelays.isEmpty else { throw ClientError.notConnected }
 
-        let connectedTargets: [(String, SingleRelayClient)] = targetRelays.compactMap { relay in
-            guard let conn = connections[relay] else { return nil }
-            return (relay, conn)
+        // Publish targets must match the requested relay list, not only the existing
+        // connection pool. The Talk hot path intentionally pre-connects only a small
+        // subset for speed; if we publish only to that subset, WhiteNoise may never see
+        // iOS messages because its inbox/key-package relay (for example 0xchat/auth)
+        // was listed in targetRelays but not connected yet.
+        var connectedTargets: [(String, SingleRelayClient)] = []
+        var ngRelays: [String] = []
+        for relay in targetRelays {
+            if let conn = connections[relay] {
+                connectedTargets.append((relay, conn))
+                continue
+            }
+            guard let comp = URLComponents(string: relay),
+                  let scheme = comp.scheme?.lowercased(),
+                  (scheme == "wss" || scheme == "ws"),
+                  comp.host?.isEmpty == false,
+                  let url = URL(string: relay) else {
+                ngRelays.append(relay)
+                AppLogger.log("Relay", "publishRawEventJSON invalid relay=\(relay) event=\(event.id)")
+                continue
+            }
+            let conn = SingleRelayClient(relayURL: url)
+            connections[relay] = conn
+            connectedTargets.append((relay, conn))
+        }
+        guard !connectedTargets.isEmpty else { throw ClientError.notConnected }
+
+        for relay in ngRelays {
+            AppLogger.log("Relay", "publishRawEventJSON unavailable relay=\(relay) event=\(event.id)")
         }
 
-        var ngRelays: [String] = targetRelays.filter { relay in connections[relay] == nil }
-        for relay in ngRelays {
-            AppLogger.log("Relay", "publishRawEventJSON missing connection relay=\(relay) event=\(event.id)")
+        if !waitForAllRelays {
+            var lastError: Error?
+            var failures = 0
+            let firstOkRelay = await withTaskGroup(of: (relay: String, error: Error?).self, returning: String?.self) { group in
+                for (relay, conn) in connectedTargets {
+                    group.addTask {
+                        do {
+                            try await self.publishRawEvent(event, relay: relay, conn: conn)
+                            return (relay, nil)
+                        } catch {
+                            return (relay, error)
+                        }
+                    }
+                }
+
+                while let r = await group.next() {
+                    if let error = r.error {
+                        failures += 1
+                        lastError = error
+                        continue
+                    }
+                    group.cancelAll()
+                    return r.relay
+                }
+                return nil
+            }
+
+            if let firstOkRelay {
+                AppLogger.log("Relay", "publishRawEventJSON first-ok event=\(event.id) relay=\(firstOkRelay) fanout=\(connectedTargets.count)/\(targetRelays.count)")
+                Task { await self.publishRawFanoutBestEffort(event: event, targets: connectedTargets, skipRelay: firstOkRelay) }
+                return
+            }
+
+            AppLogger.log("Relay", "publishRawEventJSON failed event=\(event.id) failures=\(failures)/\(connectedTargets.count) missing=\(ngRelays.count)")
+            throw lastError ?? ClientError.notConnected
         }
 
         let results = await withTaskGroup(of: (relay: String, ok: Bool, err: String?).self) { group in
             for (relay, conn) in connectedTargets {
                 group.addTask {
                     do {
-                        try await conn.publish(event: event)
+                        try await self.publishRawEvent(event, relay: relay, conn: conn)
                         return (relay, true, nil)
                     } catch {
-                        let errStr = String(describing: error)
-                        if errStr.contains("notConnected") {
-                            do {
-                                await conn.connect()
-                                try await conn.publish(event: event)
-                                AppLogger.log("Relay", "publishRawEventJSON retry ok relay=\(relay) event=\(event.id)")
-                                return (relay, true, nil)
-                            } catch {
-                                return (relay, false, String(describing: error))
-                            }
-                        }
-                        return (relay, false, errStr)
+                        return (relay, false, String(describing: error))
                     }
                 }
             }
 
             var collected: [(relay: String, ok: Bool, err: String?)] = []
-            for await r in group {
-                collected.append(r)
-            }
+            for await r in group { collected.append(r) }
             return collected
         }
 
@@ -384,8 +472,65 @@ actor NostrClient {
         }
 
         AppLogger.log("Relay", "publishRawEventJSON summary event=\(event.id) ok=\(okRelays.count)/\(targetRelays.count) okRelays=\(okRelays) ngRelays=\(ngRelays)")
-
         if okRelays.isEmpty { throw lastError ?? ClientError.notConnected }
+    }
+
+    private func publishRawEvent(_ event: NostrEvent, relay: String, conn: SingleRelayClient) async throws {
+        do {
+            var state = await conn.connectionState
+            if state != .connected {
+                await conn.connect()
+                state = await conn.connectionState
+            }
+            guard state == .connected else { throw ClientError.notConnected }
+            try await conn.publish(event: event)
+        } catch {
+            let errStr = String(describing: error)
+            if errStr.contains("auth-required") {
+                if try await authenticateRelayIfPossible(relay: relay, conn: conn) {
+                    try await conn.publish(event: event)
+                    AppLogger.log("Relay", "publishRawEventJSON auth retry ok relay=\(relay) event=\(event.id)")
+                    return
+                }
+            }
+            if errStr.contains("notConnected") {
+                await conn.connect()
+                do {
+                    try await conn.publish(event: event)
+                    AppLogger.log("Relay", "publishRawEventJSON retry ok relay=\(relay) event=\(event.id)")
+                    return
+                } catch {
+                    let retryErr = String(describing: error)
+                    if retryErr.contains("auth-required"), try await authenticateRelayIfPossible(relay: relay, conn: conn) {
+                        try await conn.publish(event: event)
+                        AppLogger.log("Relay", "publishRawEventJSON reconnect+auth retry ok relay=\(relay) event=\(event.id)")
+                        return
+                    }
+                    throw error
+                }
+            } else {
+                throw error
+            }
+        }
+    }
+
+    private func authenticateRelayIfPossible(relay: String, conn: SingleRelayClient) async throws -> Bool {
+        guard let authEventSigner else { return false }
+        guard let challenge = await conn.authChallenge(timeoutSeconds: 2.0) else {
+            AppLogger.log("Relay", "AUTH required but no challenge relay=\(relay)")
+            return false
+        }
+        let authEvent = try await authEventSigner(relay, challenge)
+        try await conn.publish(event: authEvent)
+        AppLogger.log("Relay", "AUTH ok relay=\(relay) challenge=\(challenge.prefix(8))…")
+        return true
+    }
+
+    private func publishRawFanoutBestEffort(event: NostrEvent, targets: [(String, SingleRelayClient)], skipRelay: String) async {
+        for (relay, conn) in targets where relay != skipRelay {
+            do { try await publishRawEvent(event, relay: relay, conn: conn) }
+            catch { AppLogger.log("Relay", "publishRawEventJSON background fail relay=\(relay) event=\(event.id) err=\(error)") }
+        }
     }
 
 }
@@ -416,6 +561,7 @@ private actor SingleRelayClient {
     private var urlSession:       URLSession?
     private var subscriptions:    [String: Subscription] = [:]
     private var publishWaiters: [PublishWaiterKey: [CheckedContinuation<(Bool, String), Never>]] = [:]
+    private var lastAuthChallenge: String?
     private(set) var connectionState: NostrClient.ConnectionState = .disconnected
 
     // Token bucket rate limiting
@@ -600,7 +746,7 @@ private actor SingleRelayClient {
         try await webSocketTask?.send(.string(text))
 
         // MIP-02 timing safety: caller can treat publish completion as relay-level acknowledgement.
-        let (ok, message) = await waitForPublishAck(eventId: event.id, timeoutSeconds: 8.0)
+        let (ok, message) = await waitForPublishAck(eventId: event.id, timeoutSeconds: 3.0)
         if !ok && message == "timeout:publish_ack" {
             throw NostrClient.ClientError.publishAckTimeout
         }
@@ -627,6 +773,16 @@ private actor SingleRelayClient {
         for w in waiters {
             w.resume(returning: (false, "timeout:publish_ack"))
         }
+    }
+
+    func authChallenge(timeoutSeconds: Double) async -> String? {
+        if let lastAuthChallenge { return lastAuthChallenge }
+        let steps = max(1, Int(timeoutSeconds / 0.2))
+        for _ in 0..<steps {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            if let lastAuthChallenge { return lastAuthChallenge }
+        }
+        return nil
     }
 
     private func sendREQ(id: String, filters: [NostrFilter]) async throws {
@@ -681,6 +837,10 @@ private actor SingleRelayClient {
                                 for w in waiters { w.resume(returning: (ok, message)) }
                             }
                         }
+                    case "AUTH":
+                        guard arr.count >= 2, let challenge = arr[1] as? String else { continue }
+                        lastAuthChallenge = challenge
+                        AppLogger.log("Relay", "AUTH challenge relay=\(relayURL.host ?? relayURL.absoluteString)")
                     case "NOTICE":
                         break
                     default:
