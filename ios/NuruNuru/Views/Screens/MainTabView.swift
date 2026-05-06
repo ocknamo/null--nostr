@@ -397,6 +397,7 @@ struct AppSettingsView: View {
     @State private var showLogoutConfirm = false
 
     private let privacyURL = URL(string: "https://tami1A84.github.io/null--nostr/privacy.html")!
+    private let termsURL = URL(string: "https://tami1A84.github.io/null--nostr/terms.html")!
 
     var body: some View {
         NavigationStack {
@@ -409,6 +410,15 @@ struct AppSettingsView: View {
                         trailing: "chevron.right"
                     ) {
                         UIApplication.shared.open(privacyURL)
+                    }
+
+                    settingsRow(
+                        icon: "doc.text",
+                        title: "利用規約",
+                        subtitle: "禁止事項、通報、ブロックについて確認",
+                        trailing: "chevron.right"
+                    ) {
+                        UIApplication.shared.open(termsURL)
                     }
 
                     settingsRow(

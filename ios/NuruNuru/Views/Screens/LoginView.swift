@@ -19,6 +19,8 @@ struct LoginView: View {
     @State private var showNsecLogin      = false
     @State private var showOtherMethods   = false
     @State private var showNostrConnect   = false
+    @State private var showTermsAgreement = false
+    @State private var pendingTermsAction: TermsStartAction?
     @State private var logoScale: CGFloat = 0.95
 
     private var isLoading: Bool {
@@ -48,6 +50,19 @@ struct LoginView: View {
         .sheet(isPresented: $showNostrConnect) {
             NostrConnectSheet(isPresented: $showNostrConnect)
                 .environment(viewModel)
+        }
+        .sheet(isPresented: $showTermsAgreement) {
+            TermsAgreementSheet(
+                onAgree: {
+                    viewModel.prefs.hasAcceptedTerms = true
+                    showTermsAgreement = false
+                    performPendingTermsAction()
+                },
+                onCancel: {
+                    showTermsAgreement = false
+                    pendingTermsAction = nil
+                }
+            )
         }
     }
 
@@ -120,7 +135,7 @@ struct LoginView: View {
 
     private var signUpButton: some View {
         Button {
-            showSignUp = true
+            requestTermsAgreement(for: .signUp)
         } label: {
             HStack(spacing: NuruSpacing.space3) {
                 Image(systemName: "person.badge.plus")
@@ -137,9 +152,7 @@ struct LoginView: View {
 
     private var loginToggleButton: some View {
         Button {
-            withAnimation(.easeInOut(duration: NuruSpacing.durationNormal)) {
-                showNsecLogin = true
-            }
+            requestTermsAgreement(for: .login)
         } label: {
             HStack(spacing: NuruSpacing.space3) {
                 Image(systemName: "arrow.right.circle")
@@ -153,6 +166,36 @@ struct LoginView: View {
             .frame(height: 56)
         }
         .buttonStyle(NuruSecondaryButtonStyle(theme: theme))
+    }
+
+
+    // MARK: - Terms Agreement
+
+    private enum TermsStartAction {
+        case signUp
+        case login
+    }
+
+    private func requestTermsAgreement(for action: TermsStartAction) {
+        pendingTermsAction = action
+        if viewModel.prefs.hasAcceptedTerms {
+            performPendingTermsAction()
+        } else {
+            showTermsAgreement = true
+        }
+    }
+
+    private func performPendingTermsAction() {
+        guard let action = pendingTermsAction else { return }
+        pendingTermsAction = nil
+        switch action {
+        case .signUp:
+            showSignUp = true
+        case .login:
+            withAnimation(.easeInOut(duration: NuruSpacing.durationNormal)) {
+                showNsecLogin = true
+            }
+        }
     }
 
     // MARK: - nsec Login Form
@@ -311,6 +354,130 @@ struct LoginView: View {
                 .foregroundStyle(theme.textTertiary.opacity(0.7))
         }
         .padding(.bottom, NuruSpacing.space4)
+    }
+}
+
+
+// MARK: - Terms Agreement Sheet
+
+private struct TermsAgreementSheet: View {
+    let onAgree: () -> Void
+    let onCancel: () -> Void
+
+    @Environment(\.nuruTheme) private var theme
+
+    private let termsURL = URL(string: "https://tami1A84.github.io/null--nostr/terms.html")!
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: NuruSpacing.space4) {
+                        Text("利用規約への同意")
+                            .font(NuruFont.titleLarge())
+                            .fontWeight(.bold)
+                            .foregroundStyle(theme.textPrimary)
+
+                        Text("ぬるぬるでは、ユーザー投稿コンテンツを安全に利用するため、以下の内容に同意してから開始してください。")
+                            .font(NuruFont.bodyMedium())
+                            .foregroundStyle(theme.textSecondary)
+
+                        TermsNoticeCard(
+                            icon: "exclamationmark.shield",
+                            title: "ゼロトレランス方針",
+                            bodyText: "不適切なコンテンツ、嫌がらせ、差別、脅迫、スパム、違法行為、迷惑ユーザーを一切許容しません。"
+                        )
+
+                        TermsNoticeCard(
+                            icon: "flag",
+                            title: "通報機能",
+                            bodyText: "不適切な投稿やプロフィール、迷惑行為を見つけた場合は、アプリ内の通報機能から報告できます。"
+                        )
+
+                        TermsNoticeCard(
+                            icon: "person.crop.circle.badge.xmark",
+                            title: "ブロック機能",
+                            bodyText: "迷惑なユーザーや表示したくないユーザーは、アプリ内のブロック機能でブロックできます。"
+                        )
+
+                        Button {
+                            UIApplication.shared.open(termsURL)
+                        } label: {
+                            HStack {
+                                Image(systemName: "doc.text")
+                                Text("利用規約の全文を開く")
+                                Spacer()
+                                Image(systemName: "arrow.up.right")
+                            }
+                            .font(NuruFont.bodyMedium())
+                            .foregroundStyle(NuruColors.lineGreen)
+                            .padding(NuruSpacing.space4)
+                            .background(theme.bgSecondary)
+                            .clipShape(RoundedRectangle(cornerRadius: NuruSpacing.radiusXl))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(NuruSpacing.space5)
+                }
+
+                VStack(spacing: NuruSpacing.space3) {
+                    Button(action: onAgree) {
+                        Text("利用規約に同意して開始")
+                            .font(NuruFont.buttonLarge())
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 56)
+                    }
+                    .buttonStyle(NuruPrimaryButtonStyle())
+
+                    Button("同意しない", action: onCancel)
+                        .font(NuruFont.bodyMedium())
+                        .foregroundStyle(theme.textTertiary)
+                }
+                .padding(NuruSpacing.space5)
+                .background(theme.bgPrimary)
+            }
+            .background(theme.bgPrimary)
+            .navigationTitle("利用規約")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("閉じる", action: onCancel)
+                        .foregroundStyle(theme.textSecondary)
+                }
+            }
+        }
+        .interactiveDismissDisabled()
+    }
+}
+
+private struct TermsNoticeCard: View {
+    let icon: String
+    let title: String
+    let bodyText: String
+
+    @Environment(\.nuruTheme) private var theme
+
+    var body: some View {
+        HStack(alignment: .top, spacing: NuruSpacing.space3) {
+            Image(systemName: icon)
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(NuruColors.lineGreen)
+                .frame(width: 28)
+
+            VStack(alignment: .leading, spacing: NuruSpacing.space1) {
+                Text(title)
+                    .font(NuruFont.bodyMedium())
+                    .fontWeight(.bold)
+                    .foregroundStyle(theme.textPrimary)
+                Text(bodyText)
+                    .font(NuruFont.bodySmall())
+                    .foregroundStyle(theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(NuruSpacing.space4)
+        .background(theme.bgSecondary)
+        .clipShape(RoundedRectangle(cornerRadius: NuruSpacing.radiusXl))
     }
 }
 

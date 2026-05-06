@@ -65,6 +65,12 @@ final class AppPreferences {
         static let mlsRejectedWelcomeRetryAfterById = "nurunuru_mls_rejected_welcome_retry_after_by_id_v2"
         static let mlsKeyPackageRelays = "nurunuru_mls_key_package_relays"
         static let mlsInboxRelays = "nurunuru_mls_inbox_relays"
+        static let hasAcceptedTerms = "nurunuru_has_accepted_terms"
+    }
+
+    var hasAcceptedTerms: Bool {
+        get { defaults.bool(forKey: Keys.hasAcceptedTerms) }
+        set { defaults.set(newValue, forKey: Keys.hasAcceptedTerms) }
     }
 
     var publicKeyHex: String? {
