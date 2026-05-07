@@ -1,11 +1,15 @@
 package io.nurunuru.app.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -17,8 +21,11 @@ import androidx.compose.ui.unit.sp
 import io.nurunuru.app.data.NostrClient
 import io.nurunuru.app.data.NostrRepository
 import io.nurunuru.app.data.addBookmark
+import io.nurunuru.app.data.deleteEvent
 import io.nurunuru.app.data.fetchEvent
 import io.nurunuru.app.data.fetchEvents
+import io.nurunuru.app.data.likePost
+import io.nurunuru.app.data.repostPost
 import io.nurunuru.app.data.models.NostrKind
 import io.nurunuru.app.data.models.ScoredPost
 import io.nurunuru.app.ui.components.*
@@ -41,6 +48,61 @@ fun PostDetailScreen(
     var post by remember { mutableStateOf<ScoredPost?>(null) }
     var replies by remember { mutableStateOf<List<ScoredPost>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
+    var showReplyModal by remember { mutableStateOf(false) }
+
+    fun updatePostState(eventIdToUpdate: String, transform: (ScoredPost) -> ScoredPost) {
+        post = post?.let { if (it.event.id == eventIdToUpdate) transform(it) else it }
+        replies = replies.map { if (it.event.id == eventIdToUpdate) transform(it) else it }
+    }
+
+    fun likeDetailPost(target: ScoredPost, emoji: String = "+", customTags: List<List<String>> = emptyList()) {
+        coroutineScope.launch {
+            try {
+                if (target.isLiked) {
+                    val likeEventId = target.myLikeEventId ?: return@launch
+                    if (repository.deleteEvent(likeEventId)) {
+                        updatePostState(target.event.id) {
+                            it.copy(isLiked = false, likeCount = maxOf(0, it.likeCount - 1), myLikeEventId = null)
+                        }
+                    }
+                    return@launch
+                }
+                val newEventId = repository.likePost(target.event.id, target.event.pubkey, emoji, customTags)
+                if (newEventId != null) {
+                    updatePostState(target.event.id) {
+                        it.copy(isLiked = true, likeCount = it.likeCount + 1, myLikeEventId = newEventId)
+                    }
+                }
+            } catch (_: Exception) { }
+        }
+    }
+
+    fun repostDetailPost(target: ScoredPost) {
+        coroutineScope.launch {
+            try {
+                if (target.isReposted) {
+                    val repostEventId = target.myRepostEventId ?: return@launch
+                    if (repository.deleteEvent(repostEventId)) {
+                        updatePostState(target.event.id) {
+                            it.copy(isReposted = false, repostCount = maxOf(0, it.repostCount - 1), myRepostEventId = null)
+                        }
+                    }
+                    return@launch
+                }
+                val eventJson = try {
+                    kotlinx.serialization.json.Json { encodeDefaults = true }.encodeToString(
+                        io.nurunuru.app.data.models.NostrEvent.serializer(), target.event
+                    )
+                } catch (_: Exception) { null }
+                val newEventId = repository.repostPost(target.event.id, eventJson)
+                if (newEventId != null) {
+                    updatePostState(target.event.id) {
+                        it.copy(isReposted = true, repostCount = it.repostCount + 1, myRepostEventId = newEventId)
+                    }
+                }
+            } catch (_: Exception) { }
+        }
+    }
 
     LaunchedEffect(eventId) {
         isLoading = true
@@ -62,68 +124,138 @@ fun PostDetailScreen(
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
-        topBar = {
-            TopAppBar(
-                windowInsets = WindowInsets.statusBars,
-                title = { Text("投稿", fontWeight = FontWeight.Bold, fontSize = 16.sp) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "戻る")
+        floatingActionButton = {
+            if (post != null) {
+                Surface(
+                    color = LineGreen,
+                    contentColor = Color.White,
+                    shape = RoundedCornerShape(28.dp),
+                    shadowElevation = 8.dp,
+                    modifier = Modifier
+                        .navigationBarsPadding()
+                        .padding(end = 4.dp, bottom = 8.dp)
+                        .height(56.dp)
+                        .clickable { showReplyModal = true }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 20.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(22.dp))
+                        Text("返信", fontWeight = FontWeight.Bold, fontSize = 16.sp)
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Black,
-                    titleContentColor = nuruColors.textPrimary,
-                    navigationIconContentColor = nuruColors.textPrimary
-                )
-            )
+                }
+            }
         },
         containerColor = Color.Black
     ) { padding ->
-        if (isLoading) {
-            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = LineGreen)
-            }
-        } else if (post == null) {
-            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                Text("投稿が見つかりませんでした", color = nuruColors.textSecondary)
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-                    .background(Color.Black)
-            ) {
-                item(key = "main_${post!!.event.id}") {
-                    PostItem(
-                        post = post!!,
-                        onLike = { _, _ -> },
-                        onRepost = {},
-                        onProfileClick = onProfileClick,
-                        repository = repository,
-                        onBookmark = { coroutineScope.launch { repository.addBookmark(myPubkey, post!!.event.id) } },
-                        myPubkey = myPubkey
-                    )
-                }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .background(Color.Black)
+        ) {
+            when {
+                isLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = LineGreen) }
+                post == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("投稿が見つかりませんでした", color = nuruColors.textSecondary) }
+                else -> {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(top = 104.dp, bottom = 112.dp)
+                    ) {
+                        item(key = "${post!!.event.id}") {
+                            PostItem(
+                                post = post!!,
+                                onLike = { emoji, tags -> likeDetailPost(post!!, emoji, tags) },
+                                onRepost = { repostDetailPost(post!!) },
+                                onProfileClick = onProfileClick,
+                                repository = repository,
+                                onBookmark = { coroutineScope.launch { repository.addBookmark(myPubkey, post!!.event.id) } },
+                                myPubkey = myPubkey
+                            )
+                        }
 
-                if (replies.isNotEmpty()) {
-                    item(key = "replies_header") {
-                        HorizontalDivider(color = nuruColors.border, thickness = 0.5.dp)
+                        if (replies.isNotEmpty()) {
+                            item(key = "replies_header") { HorizontalDivider(color = nuruColors.border, thickness = 0.5.dp) }
+                            items(replies, key = { it.event.id }) { reply ->
+                                PostItem(
+                                    post = reply,
+                                    onLike = { emoji, tags -> likeDetailPost(reply, emoji, tags) },
+                                    onRepost = { repostDetailPost(reply) },
+                                    onProfileClick = onProfileClick,
+                                    repository = repository,
+                                    onBookmark = { coroutineScope.launch { repository.addBookmark(myPubkey, reply.event.id) } },
+                                    myPubkey = myPubkey
+                                )
+                            }
+                        } else {
+                            item(key = "empty_replies") {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 64.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Forum,
+                                        contentDescription = null,
+                                        tint = nuruColors.textTertiary,
+                                        modifier = Modifier.size(58.dp)
+                                    )
+                                    Text("まだリプライはありません", color = nuruColors.textTertiary, fontSize = 15.sp)
+                                }
+                            }
+                        }
                     }
-                    items(replies, key = { it.event.id }) { reply ->
-                        PostItem(
-                            post = reply,
-                            onLike = { _, _ -> },
-                            onRepost = {},
-                            onProfileClick = onProfileClick,
-                            repository = repository,
-                            onBookmark = { coroutineScope.launch { repository.addBookmark(myPubkey, reply.event.id) } },
-                            myPubkey = myPubkey
-                        )
-                    }
+                }
+            }
+
+            Surface(
+                color = nuruColors.bgSecondary.copy(alpha = 0.95f),
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier
+                    .statusBarsPadding()
+                    .padding(start = 20.dp, top = 12.dp)
+                    .height(40.dp)
+                    .clickable(onClick = onBack)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = nuruColors.textPrimary, modifier = Modifier.size(18.dp))
+                    Text("閉じる", color = nuruColors.textPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 }
             }
         }
     }
+
+
+    if (showReplyModal && post != null) {
+        PostModal(
+            myPubkey = myPubkey,
+            pictureUrl = null,
+            displayName = "",
+            repository = repository,
+            replyToId = post!!.event.id,
+            onDismiss = { showReplyModal = false },
+            onSuccess = {
+                showReplyModal = false
+                coroutineScope.launch {
+                    val replyFilter = NostrClient.Filter(
+                        kinds = listOf(NostrKind.TEXT_NOTE),
+                        tags = mapOf("e" to listOf(eventId)),
+                        limit = 50
+                    )
+                    replies = repository.enrichPostsDirect(repository.fetchEvents(replyFilter, timeoutMs = 5_000))
+                        .filter { it.event.id != eventId }
+                        .sortedBy { it.event.createdAt }
+                }
+            }
+        )
+    }
+
 }

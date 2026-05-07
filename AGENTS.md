@@ -154,7 +154,7 @@ android/app/src/main/kotlin/io/nurunuru/app/
 | `ui/components/ReactionEmojiPicker.kt` | Reaction picker (NIP-25). Uses shared `EmojiPickerCache` + `fetchAndCacheEmojis` from `EmojiPicker.kt`. |
 | `ui/screens/SettingsScreen.kt` | Mini-app hub (エンタメ / ツール / その他 categories). |
 | `data/NostrRepository.kt` | All Nostr I/O. Notifications include Kind 6 (repost) and Kind 1 #p (reply/mention). `enrichPosts()` tracks `myLikeEventId`/`myRepostEventId` for toggle-undo. |
-| `ui/screens/MainScreen.kt` | Root navigation (ホーム / トーク / タイムライン / ミニアプリ). |
+| `ui/screens/MainScreen.kt` | Root navigation. Current sync target is 5 tabs: ホーム / トーク / ろくなな / タイムライン / ミニアプリ. |
 
 ### Web
 
@@ -206,7 +206,7 @@ android/app/src/main/kotlin/io/nurunuru/app/
 - SPM only for dependencies. Minimize third-party (prefer Apple frameworks)
 - Minimum deployment target: iOS 17.0
 - Tab bar: `.safeAreaInset(edge: .bottom, spacing: 0)` — do NOT use ZStack+ignoresSafeArea pattern
-- Bottom nav icons: house/message/newspaper/square.grid.2x2 (NOT person.crop.circle for home)
+- Bottom nav icons: house/message/67/newspaper/square.grid.2x2 (NOT person.crop.circle for home)
 - PostActions: 3 buttons only (repost, like, zap) — no reply button; like icon = hand.thumbsup (not heart)
 - Collapse text: "もっと見る" / "閉じる" (NOT "続きを読む") — matches Android exact copy
 - For pixel-perfect sync spec, see [ios/SYNC_PLAN.md](./ios/SYNC_PLAN.md)

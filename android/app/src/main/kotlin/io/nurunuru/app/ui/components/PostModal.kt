@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.AlternateEmail
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -47,6 +48,7 @@ import androidx.compose.material.icons.filled.Router
 import io.nurunuru.app.data.NostrRepository
 import io.nurunuru.app.data.models.NostrKind
 import io.nurunuru.app.data.*
+import io.nurunuru.app.data.models.UserProfile
 import io.nurunuru.app.ui.icons.NuruIcons
 import io.nurunuru.app.ui.theme.LineGreen
 import io.nurunuru.app.ui.theme.LocalNuruColors
@@ -56,6 +58,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private const val MAX_NOTE_LENGTH = 140
+
+
+private data class MentionCandidate(
+    val pubkey: String,
+    val displayName: String,
+    val picture: String? = null,
+    val token: String
+)
 
 @Composable
 fun PostModal(
@@ -77,6 +87,9 @@ fun PostModal(
     var uploadProgress by remember { mutableStateOf("") }
     var showEmojiPicker by remember { mutableStateOf(false) }
     var selectedCustomEmojis by remember { mutableStateOf<List<CustomEmoji>>(emptyList()) }
+    var followedMentionUsers by remember { mutableStateOf<List<MentionCandidate>>(emptyList()) }
+    var mentionSuggestions by remember { mutableStateOf<List<MentionCandidate>>(emptyList()) }
+    var mentionAliases by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     // var showRecorder by remember { mutableStateOf(false) }
     // var recordedVideo by remember { mutableStateOf<RecordedVideo?>(null) }
 
@@ -141,6 +154,40 @@ fun PostModal(
         append(raw.substring(lastIdx))
     }
 
+
+    fun currentMentionQuery(raw: String): String? {
+        val cursor = text.selection.start.coerceIn(0, raw.length)
+        val prefix = raw.take(cursor)
+        val match = Regex("(?:^|\\s)@([A-Za-z0-9_\\-.]{1,32})$").find(prefix) ?: return null
+        return match.groupValues[1]
+    }
+
+    fun updateMentionSuggestions(raw: String) {
+        val query = currentMentionQuery(raw)?.lowercase()
+        mentionSuggestions = if (query.isNullOrBlank()) {
+            emptyList()
+        } else {
+            followedMentionUsers.filter {
+                it.displayName.lowercase().contains(query) || it.token.lowercase().contains(query)
+            }.take(6)
+        }
+    }
+
+    fun insertMention(candidate: MentionCandidate) {
+        val raw = text.text
+        val cursor = text.selection.start.coerceIn(0, raw.length)
+        val prefix = raw.take(cursor)
+        val match = Regex("(?:^|\\s)@([A-Za-z0-9_\\-.]{1,32})$").find(prefix)
+        val start = match?.range?.first ?: cursor
+        val replacement = if (raw.getOrNull(start)?.isWhitespace() == true) " @${candidate.token} " else "@${candidate.token} "
+        val newText = raw.replaceRange(start, cursor, replacement)
+        if (newText.length <= MAX_NOTE_LENGTH) {
+            mentionAliases = mentionAliases + (candidate.token.lowercase() to candidate.pubkey)
+            text = TextFieldValue(buildHighlightedText(newText), TextRange((start + replacement.length).coerceAtMost(newText.length)))
+            mentionSuggestions = emptyList()
+        }
+    }
+
     val scope = rememberCoroutineScope()
 
     fun handlePost() {
@@ -195,6 +242,11 @@ fun PostModal(
                 selectedCustomEmojis.forEach { emoji ->
                     tags.add(listOf("emoji", emoji.shortcode, emoji.url))
                 }
+                Regex("@([A-Za-z0-9_\\-.]{1,32})").findAll(finalContent).forEach { match ->
+                    mentionAliases[match.groupValues[1].lowercase()]?.let { pubkey ->
+                        tags.add(listOf("p", pubkey))
+                    }
+                }
 
                 val hashtags = Regex("#([\\w\\u3040-\\u309F\\u30A0-\\u30FF\\u4E00-\\u9FFF\\uFF00-\\uFFEF]+)").findAll(finalContent).map { it.groupValues[1] }.distinct()
                 hashtags.forEach { tags.add(listOf("t", it.lowercase())) }
@@ -228,6 +280,20 @@ fun PostModal(
 
     LaunchedEffect(Unit) {
         focusRequester.requestFocus()
+        launch {
+            val follows = withContext(Dispatchers.IO) { repository.fetchFollowList(myPubkey).take(200) }
+            val profiles = if (follows.isNotEmpty()) withContext(Dispatchers.IO) { repository.fetchProfiles(follows) } else emptyMap()
+            followedMentionUsers = follows.map { pk ->
+                val profile: UserProfile? = profiles[pk]
+                val display = profile?.displayedName?.takeIf { it.isNotBlank() } ?: pk.take(12)
+                MentionCandidate(
+                    pubkey = pk,
+                    displayName = display,
+                    picture = profile?.picture,
+                    token = display.replace(Regex("\\s+"), "_").take(32).ifBlank { pk.take(12) }
+                )
+            }
+        }
         speechRecognizer.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) { isSTTActive = true }
             override fun onBeginningOfSpeech() {}
@@ -299,6 +365,7 @@ fun PostModal(
                                             selection = it.selection
                                         )
                                     }
+                                    updateMentionSuggestions(it.text)
                                 }
                             },
                             textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
@@ -310,7 +377,7 @@ fun PostModal(
                             decorationBox = { innerTextField ->
                                 if (text.text.isEmpty()) {
                                     Text(
-                                        text = if (replyToId != null) "返信を入力..." else "いまどうしてる？",
+                                        text = if (replyToId != null) "投稿を入力..." else "いまどうしてる？",
                                         style = MaterialTheme.typography.bodyLarge,
                                         color = nuruColors.textTertiary
                                     )
@@ -318,6 +385,17 @@ fun PostModal(
                                 innerTextField()
                             }
                         )
+
+                        if (mentionSuggestions.isNotEmpty()) {
+                            MentionSuggestionRow(
+                                suggestions = mentionSuggestions,
+                                onSelect = { insertMention(it) }
+                            )
+                        }
+
+                        if (text.text.isNotEmpty() && text.text.contains("#")) {
+                            HashtagPreview(text = text.text)
+                        }
 
                         if (selectedImages.isNotEmpty()) {
                             ImagePreviewList(
@@ -355,6 +433,16 @@ fun PostModal(
                                     }
                                 }
                             }
+                        }
+
+
+                        if (uploadProgress.isNotEmpty()) {
+                            Text(
+                                text = uploadProgress,
+                                color = nuruColors.textSecondary,
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(top = 8.dp)
+                            )
                         }
                     }
                 }
@@ -641,7 +729,7 @@ internal fun CWInput(
             cursorBrush = SolidColor(Color(0xFFFF9800)),
             decorationBox = { innerTextField ->
                 if (contentWarning.isEmpty()) {
-                    Text("警告の理由（ネタバレ等）", color = Color(0xFFFF9800).copy(alpha = 0.5f), style = MaterialTheme.typography.bodyMedium)
+                    Text("警告の理由（ネタバレ・センシティブ等）", color = Color(0xFFFF9800).copy(alpha = 0.5f), style = MaterialTheme.typography.bodyMedium)
                 }
                 innerTextField()
             }
@@ -709,6 +797,72 @@ private fun ImagePreviewList(
                     modifier = Modifier.align(Alignment.TopEnd).size(24.dp).padding(2.dp).background(Color.Black.copy(0.5f), CircleShape)
                 ) {
                     Icon(Icons.Default.Close, null, tint = Color.White, modifier = Modifier.size(14.dp))
+                }
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun MentionSuggestionRow(
+    suggestions: List<MentionCandidate>,
+    onSelect: (MentionCandidate) -> Unit
+) {
+    val nuruColors = LocalNuruColors.current
+    LazyRow(
+        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items(suggestions) { candidate ->
+            Surface(
+                color = nuruColors.bgSecondary,
+                shape = RoundedCornerShape(999.dp),
+                modifier = Modifier.clickable { onSelect(candidate) }
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    AsyncImage(
+                        model = candidate.picture,
+                        contentDescription = null,
+                        modifier = Modifier.size(22.dp).clip(CircleShape),
+                        contentScale = ContentScale.Crop
+                    )
+                    Icon(Icons.Default.AlternateEmail, null, tint = LineGreen, modifier = Modifier.size(14.dp))
+                    Text(candidate.displayName, color = nuruColors.textPrimary, fontSize = 12.sp, maxLines = 1)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HashtagPreview(text: String) {
+    val nuruColors = LocalNuruColors.current
+    val tags = remember(text) {
+        Regex("#([\\w\\u3040-\\u309F\\u30A0-\\u30FF\\u4E00-\\u9FFF\\uFF00-\\uFFEF]+)")
+            .findAll(text)
+            .map { it.groupValues[1] }
+            .distinct()
+            .take(8)
+            .toList()
+    }
+    if (tags.isNotEmpty()) {
+        LazyRow(
+            modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            items(tags) { tag ->
+                Surface(color = LineGreen.copy(alpha = 0.12f), shape = RoundedCornerShape(999.dp)) {
+                    Text(
+                        text = "#$tag",
+                        color = LineGreen,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
                 }
             }
         }

@@ -122,8 +122,15 @@ class MainActivity : ComponentActivity() {
         if (instanceRef?.get() == this) instanceRef = null
         // signerProxy?.stop()
         // signerProxy = null
-        // メモリ上の秘密鍵をゼロ化
-        authViewModel?.keyManager?.zeroize()
+        // Do not zeroize on configuration changes. Rotation/activity recreation keeps the
+        // user in AuthState.LoggedIn and immediately rebuilds NostrClient; clearing the
+        // in-memory key here makes Rust client initialization fail with
+        // "Key not available from SecureKeyManager" until the user relogs/re-authenticates.
+        // Real app/process shutdown can still clear process memory naturally; explicit wipe
+        // is handled by logout().
+        if (isFinishing) {
+            authViewModel?.keyManager?.zeroize()
+        }
         super.onDestroy()
     }
 

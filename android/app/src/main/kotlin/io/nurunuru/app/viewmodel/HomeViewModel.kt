@@ -341,12 +341,22 @@ class HomeViewModel(
 
     fun loadFollowProfiles(pubkeyHex: String? = null) {
         viewModelScope.launch {
-            val pubkeys = if (pubkeyHex != null) {
-                try { repository.fetchFollowList(pubkeyHex) } catch (e: Exception) { emptyList() }
+            val targetPubkey = pubkeyHex ?: (_uiState.value.viewingPubkey ?: myPubkeyHex)
+            val pubkeys = if (pubkeyHex != null || _uiState.value.followList.isEmpty()) {
+                try { repository.fetchFollowList(targetPubkey) } catch (e: Exception) { emptyList() }
             } else {
                 _uiState.value.followList
             }
-            if (pubkeys.isEmpty()) return@launch
+            _uiState.update {
+                it.copy(
+                    followList = pubkeys,
+                    followCount = if (targetPubkey == (it.viewingPubkey ?: myPubkeyHex)) pubkeys.size else it.followCount
+                )
+            }
+            if (pubkeys.isEmpty()) {
+                _uiState.update { it.copy(followProfiles = emptyMap()) }
+                return@launch
+            }
             try {
                 val profiles = repository.fetchProfiles(pubkeys)
                 _uiState.update { it.copy(followProfiles = profiles) }

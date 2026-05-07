@@ -401,7 +401,15 @@ class NostrCache(context: Context) {
         timelineCache.clear()
         val editor = prefs.edit()
         prefs.all.keys.filter { it.startsWith(prefix) }.forEach { editor.remove(it) }
+        editor.remove("mls_left_groups")
         editor.apply()
+    }
+
+    /** Clear all Talk/MLS cache state, including the non-prefixed left-group blocklist. */
+    fun clearMlsAll() {
+        clearByPrefix("mls_groups_")
+        clearByPrefix("mls_msgs_")
+        prefs.edit().remove("mls_left_groups").apply()
     }
 
     fun getEntriesCount(typeId: String): Int {

@@ -42,6 +42,7 @@ import io.nurunuru.app.data.models.NostrKind
 import io.nurunuru.app.data.models.NotificationItem
 import io.nurunuru.app.data.models.UserProfile
 import io.nurunuru.app.data.prefs.AppPreferences
+import io.nurunuru.app.data.prefs.NotificationSenderScope
 import io.nurunuru.app.data.*
 import io.nurunuru.app.ui.theme.LineGreen
 import io.nurunuru.app.ui.theme.LocalNuruColors
@@ -64,6 +65,7 @@ private val repostStyle        = NotifStyle(Icons.Default.Repeat, Color(0xFF26A6
 private val replyStyle         = NotifStyle(Icons.AutoMirrored.Filled.Reply, LineGreen, "返信")
 private val mentionStyle       = NotifStyle(Icons.Default.AlternateEmail, Color(0xFF42A5F5), "メンション")
 private val badgeStyle         = NotifStyle(Icons.Default.EmojiEvents, Color(0xFFFFD700), "バッジ")
+private val followStyle        = NotifStyle(Icons.Default.PersonAdd, LineGreen, "フォロー")
 private val birthdayStyle      = NotifStyle(Icons.Default.Cake, Color(0xFFAB47BC), "誕生日")
 
 private fun styleFor(type: String) = when (type) {
@@ -74,6 +76,7 @@ private fun styleFor(type: String) = when (type) {
     "reply"          -> replyStyle
     "mention"        -> mentionStyle
     "badge"          -> badgeStyle
+    "follow"         -> followStyle
     else             -> birthdayStyle
 }
 
@@ -102,6 +105,7 @@ fun NotificationModal(
     var showKindSettings by remember { mutableStateOf(false) }
     var enabledKinds by remember { mutableStateOf(prefs.notificationEnabledKinds) }
     var emojiReactionEnabled by remember { mutableStateOf(prefs.notificationEmojiReactionEnabled) }
+    var senderScope by remember { mutableStateOf(prefs.notificationSenderScope) }
 
     // プルリフレッシュ
     if (pullRefreshState.isRefreshing) {
@@ -145,76 +149,111 @@ fun NotificationModal(
         }
     }
 
-    // 通知kind設定ダイアログ
+    // 通知kind設定（iOS に合わせて全画面表示）
     if (showKindSettings) {
-        AlertDialog(
+        Dialog(
             onDismissRequest = { showKindSettings = false },
-            title = { Text("通知の種類", fontWeight = FontWeight.Bold) },
-            text = {
-                Column(verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)) {
-                    // リアクション (kind 7, content "+" or "-")
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = nuruColors.bgPrimary
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .statusBarsPadding()
+                        .navigationBarsPadding()
+                ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp)
+                            .padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("リアクション (👍)", fontSize = 15.sp)
-                        Switch(
-                            checked = NostrKind.REACTION in enabledKinds,
-                            onCheckedChange = { checked ->
+                        Text(
+                            "通知の種類",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp,
+                            modifier = Modifier.weight(1f),
+                            color = nuruColors.textPrimary
+                        )
+                        TextButton(onClick = { showKindSettings = false }) {
+                            Text("閉じる", color = LineGreen)
+                        }
+                    }
+                    HorizontalDivider(color = nuruColors.border, thickness = 0.5.dp)
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 16.dp),
+                        contentPadding = PaddingValues(top = 12.dp, bottom = 96.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        item {
+                            NotificationSwitchRow("リアクション (👍)", NostrKind.REACTION in enabledKinds) { checked ->
                                 val updated = if (checked) enabledKinds + NostrKind.REACTION else enabledKinds - NostrKind.REACTION
                                 enabledKinds = updated
                                 prefs.notificationEnabledKinds = updated
-                            },
-                            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = LineGreen)
-                        )
-                    }
-                    // 絵文字リアクション (kind 7, custom emoji)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween
-                    ) {
-                        Text("絵文字リアクション", fontSize = 15.sp)
-                        Switch(
-                            checked = emojiReactionEnabled,
-                            onCheckedChange = { checked ->
+                            }
+                        }
+                        item {
+                            NotificationSwitchRow("絵文字リアクション", emojiReactionEnabled) { checked ->
                                 emojiReactionEnabled = checked
                                 prefs.notificationEmojiReactionEnabled = checked
-                            },
-                            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = LineGreen)
-                        )
-                    }
-                    // Zap / リポスト / 返信 / バッジ
-                    listOf(
-                        Triple("Zap", NostrKind.ZAP_RECEIPT, zapStyle.color),
-                        Triple("リポスト", NostrKind.REPOST, repostStyle.color),
-                        Triple("返信・メンション", NostrKind.TEXT_NOTE, replyStyle.color),
-                        Triple("バッジ", NostrKind.BADGE_AWARD, badgeStyle.color)
-                    ).forEach { (label, kind, _) ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween
-                        ) {
-                            Text(label, fontSize = 15.sp)
-                            Switch(
-                                checked = kind in enabledKinds,
-                                onCheckedChange = { checked ->
+                            }
+                        }
+                        listOf(
+                            "Zap" to NostrKind.ZAP_RECEIPT,
+                            "リポスト" to NostrKind.REPOST,
+                            "返信・メンション" to NostrKind.TEXT_NOTE,
+                            "フォロー" to NostrKind.CONTACT_LIST,
+                            "バッジ" to NostrKind.BADGE_AWARD
+                        ).forEach { (label, kind) ->
+                            item {
+                                NotificationSwitchRow(label, kind in enabledKinds) { checked ->
                                     val updated = if (checked) enabledKinds + kind else enabledKinds - kind
                                     enabledKinds = updated
                                     prefs.notificationEnabledKinds = updated
-                                },
-                                colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = LineGreen)
-                            )
+                                }
+                            }
+                        }
+                        item {
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = nuruColors.border)
+                            Text("表示する送信者", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = nuruColors.textPrimary)
+                        }
+                        NotificationSenderScope.values().forEach { scopeOption ->
+                            item {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            senderScope = scopeOption
+                                            prefs.notificationSenderScope = scopeOption
+                                        }
+                                        .padding(vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    RadioButton(
+                                        selected = senderScope == scopeOption,
+                                        onClick = {
+                                            senderScope = scopeOption
+                                            prefs.notificationSenderScope = scopeOption
+                                        },
+                                        colors = RadioButtonDefaults.colors(selectedColor = LineGreen)
+                                    )
+                                    Column(modifier = Modifier.padding(start = 4.dp)) {
+                                        Text(scopeOption.label, fontSize = 15.sp, color = nuruColors.textPrimary)
+                                        Text(scopeOption.description, fontSize = 11.sp, color = nuruColors.textSecondary)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = { showKindSettings = false }) { Text("閉じる") }
             }
-        )
+        }
     }
 
     Dialog(
@@ -384,6 +423,29 @@ fun NotificationModal(
 // ───────────────────────────────────────────────────────────────────────────
 // 各通知行
 // ───────────────────────────────────────────────────────────────────────────
+@Composable
+private fun NotificationSwitchRow(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    val nuruColors = LocalNuruColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(label, fontSize = 15.sp, color = nuruColors.textPrimary)
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = LineGreen)
+        )
+    }
+}
+
 @Composable
 fun NotificationRow(
     notification: NotificationItem,

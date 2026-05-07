@@ -44,7 +44,7 @@ import kotlinx.coroutines.launch
 fun HomeScreen(
     viewModel: HomeViewModel,
     repository: io.nurunuru.app.data.NostrRepository,
-    onLogout: () -> Unit = {},
+    onSettingsTap: () -> Unit = {},
     onStartDM: (String) -> Unit = {},
     onNoteClick: ((String) -> Unit)? = null
 ) {
@@ -134,8 +134,8 @@ fun HomeScreen(
                         IconButton(onClick = { showBookmarkList = true }) {
                             Icon(NuruIcons.Bookmark(false), contentDescription = "ブックマーク", tint = TextSecondary)
                         }
-                        TextButton(onClick = onLogout) {
-                            Text("ログアウト", color = TextSecondary, fontSize = 14.sp)
+                        IconButton(onClick = onSettingsTap) {
+                            Icon(Icons.Default.Settings, contentDescription = "設定", tint = TextSecondary)
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -268,7 +268,7 @@ fun HomeScreen(
                             else viewModel.followUser(uiState.viewingPubkey!!)
                         },
                         onFollowListClick = {
-                            viewModel.loadFollowProfiles()
+                            viewModel.loadFollowProfiles(uiState.viewingPubkey ?: viewModel.myPubkeyHex)
                             showFollowList = true
                         },
                         clipboardManager = clipboardManager
@@ -314,7 +314,11 @@ fun HomeScreen(
         if (showQRCode) {
             QRModal(
                 pubkeyHex = viewModel.myPubkeyHex,
-                onDismiss = { showQRCode = false }
+                onDismiss = { showQRCode = false },
+                onScannedPubkey = { scanned ->
+                    showQRCode = false
+                    if (scanned != viewModel.myPubkeyHex) viewingPubkey = scanned
+                }
             )
         }
 
@@ -333,7 +337,8 @@ fun HomeScreen(
                 profiles = uiState.followProfiles,
                 onDismiss = { showFollowList = false },
                 onUnfollow = { viewModel.unfollowUser(it) },
-                onProfileClick = { viewingPubkey = it; showFollowList = false }
+                onProfileClick = { viewingPubkey = it; showFollowList = false },
+                showUnfollowButtons = uiState.isOwnProfile
             )
         }
 

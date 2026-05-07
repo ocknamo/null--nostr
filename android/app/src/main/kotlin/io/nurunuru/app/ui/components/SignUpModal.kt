@@ -4,7 +4,6 @@ import androidx.compose.animation.*
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.Manifest
-import android.content.Context
 import android.content.pm.PackageManager
 import android.widget.Toast
 import androidx.core.content.ContextCompat
@@ -102,26 +101,18 @@ fun SignUpModal(
                     ) {
                         when (step) {
                             "welcome" -> {
-                                val context = LocalContext.current
-                                val coroutineScope = rememberCoroutineScope()
                                 WelcomeStep(
                                     onNext = {
                                         isLoading = true
-                                        coroutineScope.launch {
-                                            val success = viewModel.signUpWithPasskey(context)
-                                            if (success) {
-                                                val acc = viewModel.generateNewAccount()
-                                                if (acc != null) {
-                                                    generatedAccount = acc
-                                                    step = "backup"
-                                                } else {
-                                                    error = "アカウント作成に失敗しました"
-                                                }
-                                            } else {
-                                                error = "パスキーの作成に失敗しました"
-                                            }
-                                            isLoading = false
+                                        error = ""
+                                        val acc = viewModel.generateNewAccount()
+                                        if (acc != null) {
+                                            generatedAccount = acc
+                                            step = "backup"
+                                        } else {
+                                            error = "アカウント作成に失敗しました"
                                         }
+                                        isLoading = false
                                     },
                                     onClose = onClose,
                                     isLoading = isLoading,
@@ -148,7 +139,7 @@ fun SignUpModal(
                                             // Publish metadata and relay list
                                             val internalSigner = io.nurunuru.app.data.InternalSigner(viewModel.keyManager)
                                             val relayTriples: List<Triple<String, Boolean, Boolean>>? = selectedRelays?.map { Triple(it.url, it.read, it.write) }
-                                            viewModel.publishInitialMetadata(
+                                            val publishedProfile = viewModel.publishInitialMetadata(
                                                 signer = internalSigner,
                                                 name = name,
                                                 about = about,
@@ -160,11 +151,13 @@ fun SignUpModal(
                                                 birthday = birthday,
                                                 relays = relayTriples
                                             )
-                                            // Complete registration locally
-                                            // 秘密鍵は generateNewAccount() で既に SecureKeyManager に保存済み
-                                            viewModel.completeRegistration(
-                                                generatedAccount!!.pubkeyHex
-                                            )
+                                            if (!publishedProfile) {
+                                                error = "プロフィール(kind0)のリレー送信に失敗しました。通信状況とリレー設定を確認してください。"
+                                                isLoading = false
+                                                return@launch
+                                            }
+                                            // iOS と同じく、公開鍵コピー画面を表示してから登録完了にする。
+                                            // ここで LoggedIn に遷移すると LoginScreen が切り替わり、success 画面がスキップされる。
                                             step = "success"
                                             isLoading = false
                                         }
@@ -175,6 +168,7 @@ fun SignUpModal(
                             "success" -> SuccessStep(
                                 npub = generatedAccount?.npub ?: "",
                                 onComplete = {
+                                    viewModel.completeRegistration(generatedAccount!!.pubkeyHex)
                                     onSuccess(generatedAccount!!.pubkeyHex)
                                 }
                             )
@@ -655,12 +649,14 @@ fun ProfileStep(
 @Composable
 fun SuccessStep(npub: String, onComplete: () -> Unit) {
     val nuruColors = LocalNuruColors.current
+    val clipboardManager = LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
 
     IconBox(icon = Icons.Default.CheckCircle, containerColor = LineGreen.copy(alpha = 0.1f), iconColor = LineGreen)
 
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("準備完了！", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = nuruColors.textPrimary)
-        Text("アカウントが作成されました。ぬるぬるへようこそ！", fontSize = 14.sp, color = nuruColors.textSecondary, textAlign = TextAlign.Center)
+        Text("アカウントが作成されました。公開鍵をコピーしてから始めましょう。", fontSize = 14.sp, color = nuruColors.textSecondary, textAlign = TextAlign.Center)
     }
 
     Card(
@@ -668,9 +664,36 @@ fun SuccessStep(npub: String, onComplete: () -> Unit) {
         colors = CardDefaults.cardColors(containerColor = nuruColors.bgSecondary),
         shape = RoundedCornerShape(16.dp)
     ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("あなたの公開鍵 (npub)", fontSize = 10.sp, color = nuruColors.textTertiary)
-            Text(npub, fontSize = 12.sp, color = nuruColors.textPrimary, maxLines = 2)
+            Text(
+                text = npub,
+                fontSize = 12.sp,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                color = nuruColors.textPrimary,
+                maxLines = 3,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color.Black.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+                    .padding(8.dp)
+            )
+            OutlinedButton(
+                onClick = {
+                    clipboardManager.setText(AnnotatedString(npub))
+                    copied = true
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = LineGreen)
+            ) {
+                Icon(
+                    imageVector = if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(if (copied) "コピーしました" else "公開鍵をコピー", fontWeight = FontWeight.Bold)
+            }
         }
     }
 

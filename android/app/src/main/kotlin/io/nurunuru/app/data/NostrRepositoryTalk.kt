@@ -33,15 +33,44 @@ private fun mlsLogPrefixes(values: List<String>): List<String> = values.map { ml
  */
 private val MLS_INTEROP_RELAYS = listOf(
     "wss://auth.nostr1.com",
+    "wss://relay.0xchat.com",
     "wss://relay.damus.io",
     "wss://relay.primal.net",
     "wss://nos.lol",
     "wss://yabu.me",
+    "wss://r.kojira.io",
+    "wss://relay.nostr.wirednet.jp",
+    "wss://relay-jp.nostr.wirednet.jp",
     "wss://relay.nostr.band",
     "wss://purplepag.es"
 )
 
+private val DEFAULT_MLS_KEY_PACKAGE_RELAYS = listOf(
+    "wss://relay.0xchat.com",
+    "wss://auth.nostr1.com",
+    "wss://relay.damus.io",
+    "wss://relay.primal.net",
+    "wss://nos.lol",
+    "wss://relay.nostr.wirednet.jp",
+    "wss://yabu.me",
+    "wss://r.kojira.io"
+)
+
+private val DEFAULT_MLS_INBOX_RELAYS = listOf(
+    "wss://relay.0xchat.com",
+    "wss://auth.nostr1.com",
+    "wss://yabu.me",
+    "wss://r.kojira.io"
+)
+
 // ─── MLS Groups (Marmot MIP-00〜03, WhiteNoise 互換) ─────────────────────────
+
+private fun NostrRepository.isCurrentAccountMlsGroup(memberPubkeys: List<String>): Boolean {
+    val account = myPubkeyHex.trim().lowercase()
+    if (account.isEmpty()) return false
+    return memberPubkeys.any { it.equals(account, ignoreCase = true) }
+}
+
 //
 // 設計方針:
 //   - Rust SQLite (MDK) を single source of truth とし、アプリ側キャッシュは保持しない。
@@ -64,7 +93,12 @@ suspend fun NostrRepository.getLocalMlsMessages(groupIdHex: String): List<MlsMes
     val rustClient = client.getRustClient() ?: return emptyList()
     return withContext(Dispatchers.IO) {
         try {
-            val history = rustClient.mlsGetMessageHistory(groupIdHex, 200u)
+            val groupInfo = try { rustClient.mlsGetGroupInfo(groupIdHex) } catch (_: Exception) { null }
+            if (groupInfo == null || !isCurrentAccountMlsGroup(groupInfo.memberPubkeys)) {
+                android.util.Log.w("NostrRepository", "getLocalMlsMessages($groupIdHex): blocked stale cross-account group")
+                return@withContext emptyList()
+            }
+            val history = rustClient.mlsGetMessageHistory(groupIdHex, 300u)
             val senderPubkeys = history.map { it.senderPubkey }.distinct()
             val profiles = fetchProfiles(senderPubkeys)
             history.map { msg ->
@@ -106,11 +140,11 @@ suspend fun NostrRepository.fetchMlsGroups(): List<MlsGroup> {
                 limit = 200
             )
             val legacyWelcomeFilter = NostrClient.Filter(
-                kinds = listOf(NostrKind.MLS_WELCOME_INNER),
+                kinds = listOf(NostrKind.MLS_WELCOME_INNER, NostrKind.MLS_WELCOME_INNER_MARMOT),
                 tags = mapOf("p" to listOf(pubkey)),
-                limit = 200
+                limit = 500
             )
-            val welcomeEvents = (client.fetchEventsFrom(welcomeRelays, giftWrapWelcomeFilter, timeoutMs = 8_000) +
+            val welcomeEvents = (client.fetchEventsFrom(welcomeRelays, giftWrapWelcomeFilter.copy(limit = 500), timeoutMs = 8_000) +
                 client.fetchEventsFrom(welcomeRelays, legacyWelcomeFilter, timeoutMs = 8_000))
                 .distinctBy { it.id }
                 .sortedBy { it.createdAt }
@@ -119,7 +153,7 @@ suspend fun NostrRepository.fetchMlsGroups(): List<MlsGroup> {
             var skippedWelcomeCount = 0
             var failedWelcomeCount = 0
             for (event in welcomeEvents) {
-                if (event.kind != NostrKind.MLS_WELCOME && event.kind != NostrKind.MLS_WELCOME_INNER) continue
+                if (event.kind != NostrKind.MLS_WELCOME && event.kind != NostrKind.MLS_WELCOME_INNER && event.kind != NostrKind.MLS_WELCOME_INNER_MARMOT) continue
                 if (event.kind == NostrKind.MLS_WELCOME && event.getTagValues("p").none { it.equals(pubkey, ignoreCase = true) }) {
                     // 1059 の recipient は KeyPackage event owner pubkey。自分宛て以外は unwrap しない。
                     skippedWelcomeCount++
@@ -165,7 +199,7 @@ suspend fun NostrRepository.fetchMlsGroups(): List<MlsGroup> {
             // 2. Rust SQLite からグループ一覧（process success 後なので新規 join 済み group も含まれる）
             val ffiGroups = rustClient.mlsListGroups()
             val leftIds = cache.getLeftGroupIds()
-            val activeGroups = ffiGroups.filter { it.groupIdHex !in leftIds }
+            val activeGroups = ffiGroups.filter { it.groupIdHex !in leftIds && isCurrentAccountMlsGroup(it.memberPubkeys) }
 
             // 3. メンバープロファイルエンリッチ
             val allPubkeys = activeGroups.flatMap { it.memberPubkeys }.distinct()
@@ -213,12 +247,17 @@ suspend fun NostrRepository.fetchMlsGroups(): List<MlsGroup> {
  * - Commit/Proposal は StateUpdate として処理済みにする
  * - relay out-of-order で今は処理できないイベントは processedIds に入れず retry queue に残す
  */
-suspend fun NostrRepository.fetchMlsMessages(groupIdHex: String): List<MlsMessage> {
+suspend fun NostrRepository.fetchMlsMessages(groupIdHex: String, repairFull: Boolean = false): List<MlsMessage> {
     val rustClient = client.getRustClient() ?: return emptyList()
 
     return withContext(Dispatchers.IO) {
         try {
             // FFI/App 境界の groupIdHex は Nostr group id。internal MLS group id は扱わない。
+            if (repairFull) {
+                mlsProcessedIds.remove(groupIdHex)
+                mlsMessageRetryQueues.remove(groupIdHex)
+                try { rustClient.mlsClearPendingCommit(groupIdHex) } catch (_: Exception) { }
+            }
             val processedIds = mlsProcessedIds.getOrPut(groupIdHex) {
                 java.util.concurrent.ConcurrentHashMap.newKeySet()
             }
@@ -226,10 +265,14 @@ suspend fun NostrRepository.fetchMlsMessages(groupIdHex: String): List<MlsMessag
                 java.util.concurrent.ConcurrentHashMap<String, NostrEvent>()
             }
 
-            // 1. グループのリレーリストを取得
-            val groupRelays = try {
-                rustClient.mlsGetGroupInfo(groupIdHex)?.relays ?: emptyList()
-            } catch (_: Exception) { emptyList() }
+            // 1. グループのリレーリストを取得。ログアウト/別アカウント後に
+            // 旧アカウントの MLS SQLite 履歴を表示しないよう memberPubkeys を検証する。
+            val groupInfo = try { rustClient.mlsGetGroupInfo(groupIdHex) } catch (_: Exception) { null }
+            if (groupInfo == null || !isCurrentAccountMlsGroup(groupInfo.memberPubkeys)) {
+                android.util.Log.w("NostrRepository", "fetchMlsMessages($groupIdHex): blocked stale cross-account group")
+                return@withContext emptyList()
+            }
+            val groupRelays = groupInfo.relays
 
             // デフォルトリレー + グループリレー + Marmot interop fallback を統合（重複排除）。
             // iOS/WhiteNoise が group relay 外にも self-update/message を publish するケースを拾う。
@@ -242,14 +285,14 @@ suspend fun NostrRepository.fetchMlsMessages(groupIdHex: String): List<MlsMessag
             val filter = NostrClient.Filter(
                 kinds = listOf(NostrKind.MLS_GROUP_MESSAGE),
                 tags = mapOf("h" to listOf(groupIdHex)),
-                limit = 100
+                limit = if (repairFull) 500 else 150
             )
 
             // 特定リレーから取得（自動追加・接続も行われる）
             val events = if (allRelays.isNotEmpty()) {
-                client.fetchEventsFrom(allRelays, filter, timeoutMs = 8_000)
+                client.fetchEventsFrom(allRelays, filter, timeoutMs = if (repairFull) 15_000 else 8_000)
             } else {
-                client.fetchEvents(filter, timeoutMs = 5_000)
+                client.fetchEvents(filter, timeoutMs = if (repairFull) 12_000 else 5_000)
             }.distinctBy { it.id }
 
             android.util.Log.d("NostrRepository",
@@ -347,7 +390,7 @@ suspend fun NostrRepository.fetchMlsMessages(groupIdHex: String): List<MlsMessag
                 "fetchMlsMessages($groupIdHex): applied=$applied stateOnly=$stateOnly dropped=$dropped retryable=$retryable duplicates=$duplicates retryQueued=${retryQueue.size}")
 
             // 3. Rust SQLite から全履歴（= single source of truth）
-            val history = rustClient.mlsGetMessageHistory(groupIdHex, 200u)
+            val history = rustClient.mlsGetMessageHistory(groupIdHex, 300u)
 
             // 4. プロファイルエンリッチ
             val senderPubkeys = history.map { it.senderPubkey }.distinct()
@@ -533,7 +576,7 @@ suspend fun NostrRepository.createDmGroup(partnerPubkey: String): MlsGroup? {
 
     return withContext(Dispatchers.IO) {
         try {
-            val relays = prefs.relays.take(3).toList()
+            val relays = myMlsInboxRelays().take(4)
             val ffiGroup = rustClient.mlsCreateGroup(
                 name = "", adminPubkeys = listOf(myPubkeyHex), relays = relays
             )
@@ -578,7 +621,7 @@ suspend fun NostrRepository.createGroupChat(name: String, memberPubkeys: List<St
 
     return withContext(Dispatchers.IO) {
         try {
-            val relays = prefs.relays.take(3).toList()
+            val relays = myMlsInboxRelays().take(4)
             val ffiGroup = rustClient.mlsCreateGroup(
                 name = name, adminPubkeys = listOf(myPubkeyHex), relays = relays
             )
@@ -645,7 +688,7 @@ suspend fun NostrRepository.addMemberToGroup(groupIdHex: String, memberPubkey: S
     val rustClient = client.getRustClient() ?: return false
     return withContext(Dispatchers.IO) {
         try {
-            val relays = prefs.relays.take(3).toList()
+            val relays = myMlsKeyPackageRelays().take(8)
             val kpEvent = fetchKeyPackage(memberPubkey, relays) ?: return@withContext false
             val kpJson = json.encodeToString(NostrEvent.serializer(),
                 patchKeyPackageRelays(kpEvent, relays))
@@ -686,6 +729,62 @@ suspend fun NostrRepository.removeMemberFromGroup(groupIdHex: String, memberPubk
     }
 }
 
+
+suspend fun NostrRepository.repairMlsGroupHistory(groupIdHex: String): List<MlsMessage> {
+    val rustClient = client.getRustClient() ?: return emptyList()
+    return withContext(Dispatchers.IO) {
+        try {
+            try { rustClient.mlsClearPendingCommit(groupIdHex) } catch (_: Exception) { }
+            mlsProcessedIds.remove(groupIdHex)
+            mlsMessageRetryQueues.remove(groupIdHex)
+            fetchMlsMessages(groupIdHex, repairFull = true)
+        } catch (e: Exception) {
+            android.util.Log.w("NostrRepository", "repairMlsGroupHistory($groupIdHex): ${mlsRedactedError(e)}")
+            getLocalMlsMessages(groupIdHex)
+        }
+    }
+}
+
+fun NostrRepository.hideMlsGroupLocally(groupIdHex: String) {
+    cache.markGroupAsLeft(groupIdHex)
+    mlsProcessedIds.remove(groupIdHex)
+    mlsMessageRetryQueues.remove(groupIdHex)
+    prefs.publicKeyHex?.let { pubkey -> cache.removeGroupFromCache(pubkey, groupIdHex, json) }
+}
+
+suspend fun NostrRepository.forceRepublishMyKeyPackageIfNeeded() {
+    withContext(Dispatchers.IO) {
+        try {
+            publishKeyPackage()
+            publishMlsRelayLists()
+            android.util.Log.d("NostrRepository", "forceRepublishMyKeyPackageIfNeeded: republished key package + relay lists")
+        } catch (e: Exception) {
+            android.util.Log.w("NostrRepository", "forceRepublishMyKeyPackageIfNeeded: ${mlsRedactedError(e)}")
+        }
+    }
+}
+
+private suspend fun NostrRepository.publishMlsRelayLists() {
+    val keyPackageRelays = myMlsKeyPackageRelays().take(12)
+    val inboxRelays = myMlsInboxRelays().take(12)
+    val discoveryRelays = mlsDiscoveryRelays(keyPackageRelays + inboxRelays).take(20)
+    if (keyPackageRelays.isEmpty() && inboxRelays.isEmpty()) return
+    val keyPackageTags = keyPackageRelays.map { listOf("relay", it) }
+    val inboxTags = inboxRelays.map { listOf("relay", it) }
+    for (relay in discoveryRelays) { try { client.addRelay(relay) } catch (_: Exception) { } }
+    try {
+        if (isExternalSigner()) {
+            signAndPublishGetId(client.getRustClient()?.createUnsignedEvent(NostrKind.MLS_KEY_PACKAGE_RELAYS.toUInt(), "", keyPackageTags, myPubkeyHex) ?: return)
+            signAndPublishGetId(client.getRustClient()?.createUnsignedEvent(NostrKind.DM_RELAY_LIST.toUInt(), "", inboxTags, myPubkeyHex) ?: return)
+        } else {
+            client.getRustClient()?.publishEvent(NostrKind.MLS_KEY_PACKAGE_RELAYS.toUInt(), "", keyPackageTags)
+            client.getRustClient()?.publishEvent(NostrKind.DM_RELAY_LIST.toUInt(), "", inboxTags)
+        }
+    } catch (e: Exception) {
+        android.util.Log.w("NostrRepository", "publishMlsRelayLists: ${mlsRedactedError(e)}")
+    }
+}
+
 suspend fun NostrRepository.ensureKeyPackagePublished() {
     val pubkey = prefs.publicKeyHex ?: return
     val rustClient = client.getRustClient() ?: return
@@ -694,8 +793,8 @@ suspend fun NostrRepository.ensureKeyPackagePublished() {
             val consumedIds = prefs.mlsConsumedKeyPackageEventIds
             val existing = client.fetchEvents(
                 NostrClient.Filter(
-                    // Fetch both Marmot canonical 30443 and legacy 443; constants are historical.
-                    kinds = listOf(NostrKind.MLS_KEY_PACKAGE_LEGACY, NostrKind.MLS_KEY_PACKAGE),
+                    // Fetch both Marmot canonical 30443 and legacy 443 fallback.
+                    kinds = listOf(NostrKind.MLS_KEY_PACKAGE, NostrKind.MLS_KEY_PACKAGE_LEGACY),
                     authors = listOf(pubkey), limit = 10
                 ), timeoutMs = 3_000
             ).filter { it.id.lowercase() !in consumedIds }
@@ -766,13 +865,35 @@ private suspend fun NostrRepository.fetchKeyPackage(
         authors = listOf(pubkey), limit = 10
     )
     val consumedIds = prefs.mlsConsumedKeyPackageEventIds
-    val kpEvents = client.fetchEvents(kpFilter, timeoutMs = 5_000)
-        .filter { it.id.lowercase() !in consumedIds }
-    // Marmot canonical KeyPackage is kind 30443; legacy kind 443 is fallback.
-    // Constant names are historical in this module: MLS_KEY_PACKAGE_LEGACY == 30443.
-    return kpEvents.filter { it.kind == NostrKind.MLS_KEY_PACKAGE_LEGACY }.maxByOrNull { it.createdAt }
-        ?: kpEvents.filter { it.kind == NostrKind.MLS_KEY_PACKAGE }.maxByOrNull { it.createdAt }
-        ?: kpEvents.maxByOrNull { it.createdAt }
+
+    fun best(events: List<NostrEvent>): NostrEvent? {
+        val usable = events.filter { it.id.lowercase() !in consumedIds }
+        // Marmot canonical KeyPackage is kind 30443; legacy kind 443 is fallback.
+        return usable.filter { it.kind == NostrKind.MLS_KEY_PACKAGE }.maxByOrNull { it.createdAt }
+            ?: usable.filter { it.kind == NostrKind.MLS_KEY_PACKAGE_LEGACY }.maxByOrNull { it.createdAt }
+            ?: usable.maxByOrNull { it.createdAt }
+    }
+
+    // iOS parity: first resolve peer-advertised KeyPackage relays via kind:10051,
+    // then fall back to the Marmot discovery pool.
+    val discoveryRelays = mlsDiscoveryRelays(fallbackRelays)
+    val kpRelayFilter = NostrClient.Filter(
+        kinds = listOf(NostrKind.MLS_KEY_PACKAGE_RELAYS),
+        authors = listOf(pubkey),
+        limit = 3
+    )
+    val advertisedRelays = try {
+        client.fetchEventsFrom(discoveryRelays, kpRelayFilter, timeoutMs = 5_000)
+            .sortedByDescending { it.createdAt }
+            .flatMap { ev -> ev.tags.filter { it.firstOrNull() == "relay" }.mapNotNull { it.getOrNull(1) } }
+            .let { canonicalMlsRelays(it) }
+    } catch (_: Exception) { emptyList() }
+
+    if (advertisedRelays.isNotEmpty()) {
+        best(client.fetchEventsFrom(advertisedRelays, kpFilter, timeoutMs = 6_000))?.let { return it }
+    }
+
+    return best(client.fetchEventsFrom(discoveryRelays, kpFilter, timeoutMs = 6_000))
 }
 
 private fun patchKeyPackageRelays(kpEvent: NostrEvent, fallbackRelays: List<String>): NostrEvent {
@@ -792,12 +913,17 @@ private suspend fun NostrRepository.publishKeyPackage() {
         val tags = if (kpData.tags.any { it.firstOrNull() == "relays" && it.size > 1 }) {
             kpData.tags
         } else {
-            val relayUrls = prefs.relays.take(3).toList()
+            val relayUrls = myMlsKeyPackageRelays().take(12)
             val relayTag = listOf("relays") + relayUrls
             kpData.tags.map { tag ->
                 if (tag.firstOrNull() == "relays") relayTag else tag
             }
         }
+        // iOS parity: KeyPackages must be published to advertised KeyPackage relays,
+        // not only the general NIP-65 relay set. Rust publishEvent broadcasts to the
+        // currently connected relay pool, so add them before signing/publishing.
+        for (relay in myMlsKeyPackageRelays()) { try { client.addRelay(relay) } catch (_: Exception) { } }
+
         val eventId = if (isExternalSigner()) {
             val unsigned = rustClient.createUnsignedEvent(kpData.kind, kpData.content, tags, myPubkeyHex)
             signAndPublishGetId(unsigned)
@@ -820,11 +946,29 @@ private suspend fun NostrRepository.publishKeyPackage() {
  * and common global fallback relays so Bob self-update and follow-up messages are
  * discoverable even when each platform has a different selected relay set.
  */
-private fun NostrRepository.mlsPublishRelays(groupRelays: List<String> = emptyList()): List<String> =
-    (groupRelays + prefs.relays.toList() + MLS_INTEROP_RELAYS)
-        .map { it.trim() }
+private fun canonicalMlsRelays(relays: List<String>): List<String> =
+    relays
+        .map { it.trim().removeSuffix("/") }
         .filter { it.startsWith("wss://") || it.startsWith("ws://") }
         .distinct()
+
+private fun NostrRepository.myMlsKeyPackageRelays(): List<String> {
+    val configured = prefs.mlsKeyPackageRelays
+    val fallback = prefs.relays.take(3).toList() + DEFAULT_MLS_KEY_PACKAGE_RELAYS
+    return canonicalMlsRelays(if (configured.isEmpty()) fallback else configured)
+}
+
+private fun NostrRepository.myMlsInboxRelays(): List<String> {
+    val configured = prefs.mlsInboxRelays
+    val fallback = prefs.relays.take(3).toList() + DEFAULT_MLS_INBOX_RELAYS
+    return canonicalMlsRelays(if (configured.isEmpty()) fallback else configured)
+}
+
+private fun NostrRepository.mlsDiscoveryRelays(extra: List<String> = emptyList()): List<String> =
+    canonicalMlsRelays(extra + prefs.relays.toList() + myMlsKeyPackageRelays() + myMlsInboxRelays() + MLS_INTEROP_RELAYS)
+
+private fun NostrRepository.mlsPublishRelays(groupRelays: List<String> = emptyList()): List<String> =
+    canonicalMlsRelays(groupRelays + prefs.relays.toList() + myMlsInboxRelays() + MLS_INTEROP_RELAYS)
 
 private data class MlsRawEventSummary(
     val id: String,

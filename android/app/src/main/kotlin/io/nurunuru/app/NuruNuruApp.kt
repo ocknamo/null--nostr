@@ -9,6 +9,7 @@ import io.nurunuru.app.data.RecommendationEngine
 import io.nurunuru.app.data.cache.NostrCache
 import io.nurunuru.app.data.prefs.AppPreferences
 import uniffi.nurunuru.initEngine
+import java.io.File
 
 class NuruNuruApp : Application() {
 
@@ -54,6 +55,13 @@ class NuruNuruApp : Application() {
                 }
             } ?: rawPubkey
         } else null
+        if (pubkey == null) {
+            // Privacy/account isolation: older builds did not delete local Rust MLS
+            // SQLite on logout. If the app starts logged out, purge stale local DBs so
+            // the next login cannot see the previous user's Talk history.
+            clearLocalRustDatabases()
+        }
+
         if (prefs.isExternalSigner && pubkey != null) {
             try {
                 val signer = ExternalSigner.apply { setCurrentUser(pubkey) }
@@ -65,6 +73,23 @@ class NuruNuruApp : Application() {
                 Log.d("NuruNuruApp", "Pre-warmed NostrClient for external signer")
             } catch (e: Exception) {
                 Log.w("NuruNuruApp", "Pre-warm failed (non-fatal): ${e.message}")
+            }
+        }
+    }
+
+    private fun clearLocalRustDatabases() {
+        listOf(
+            File(filesDir, "nostrdb_ndb"),
+            File(filesDir, "nostrdb_ndb_mls.sqlite3"),
+            File(filesDir, "nostrdb_ndb_mls.sqlite3-shm"),
+            File(filesDir, "nostrdb_ndb_mls.sqlite3-wal")
+        ).forEach { file ->
+            try {
+                if (file.exists()) {
+                    if (file.isDirectory) file.deleteRecursively() else file.delete()
+                }
+            } catch (e: Exception) {
+                Log.w("NuruNuruApp", "Failed to delete local Rust DB ${file.name}: ${e.message}")
             }
         }
     }

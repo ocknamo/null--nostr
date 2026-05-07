@@ -77,6 +77,11 @@ class NostrRepository(
     internal fun getOneHourAgo(): Long = System.currentTimeMillis() / 1000 - Constants.Time.HOUR_SECS
     internal fun getOneDayAgo(): Long = System.currentTimeMillis() / 1000 - Constants.Time.DAY_SECS
 
+    internal val clientTag: List<String> get() = listOf("client", "nullnull Android")
+
+    internal fun withClientTag(tags: List<List<String>>): List<List<String>> =
+        if (tags.any { it.getOrNull(0) == "client" }) tags else tags + listOf(clientTag)
+
     // ─── External Signer helpers ──────────────────────────────────────────────
 
     /** True when the current user signs externally (Amber / NIP-55). */
@@ -99,13 +104,13 @@ class NostrRepository(
      * Sign an unsigned event JSON via the AppSigner and broadcast via rustClient.
      * Used by all write operations when [isExternalSigner] is true.
      */
-    internal suspend fun signAndPublish(unsignedJson: String): Boolean =
-        signAndPublishGetId(unsignedJson) != null
+    internal suspend fun signAndPublish(unsignedJson: String, requireManualApproval: Boolean = false): Boolean =
+        signAndPublishGetId(unsignedJson, requireManualApproval) != null
 
     /** Signs, publishes, and returns the event ID on success (null on failure). */
-    internal suspend fun signAndPublishGetId(unsignedJson: String): String? {
+    internal suspend fun signAndPublishGetId(unsignedJson: String, requireManualApproval: Boolean = false): String? {
         // signEvent() は Amber Intent 起動を伴うため Main スレッドで呼ぶ
-        val signedJson = client.getSigner().signEvent(unsignedJson) ?: run {
+        val signedJson = client.getSigner().signEvent(unsignedJson, requireManualApproval) ?: run {
             android.util.Log.w("NostrRepository", "signAndPublish: signer returned null")
             return null
         }
@@ -138,15 +143,16 @@ class NostrRepository(
         tags: List<List<String>>
     ): String? {
         val rustClient = client.getRustClient() ?: return null
+        val eventTags = withClientTag(tags)
         return try {
             if (isExternalSigner()) {
                 val unsigned = withContext(Dispatchers.IO) {
-                    rustClient.createUnsignedEvent(kind.toUInt(), content, tags, myPubkeyHex)
+                    rustClient.createUnsignedEvent(kind.toUInt(), content, eventTags, myPubkeyHex)
                 }
-                signAndPublishGetId(unsigned)
+                signAndPublishGetId(unsigned, requireManualApproval = true)
             } else {
                 withContext(Dispatchers.IO) {
-                    rustClient.publishEvent(kind.toUInt(), content, tags).takeIf { it.isNotEmpty() }
+                    rustClient.publishEvent(kind.toUInt(), content, eventTags).takeIf { it.isNotEmpty() }
                 }
             }
         } catch (e: Exception) {
@@ -357,14 +363,22 @@ class NostrRepository(
     fun getCachedMuteList(pubkeyHex: String): MuteListData? {
         val jsonStr = cache.getCachedMuteList(pubkeyHex) ?: return null
         return try {
-            val event = json.decodeFromString<NostrEvent>(jsonStr)
-            MuteListData(
-                pubkeys = event.getTagValues("p"),
-                eventIds = event.getTagValues("e"),
-                hashtags = event.getTagValues("t"),
-                words = event.getTagValues("word")
-            )
-        } catch (e: Exception) { null }
+            // New cache format: already-decrypted public/private mute data.
+            json.decodeFromString(MuteListData.serializer(), jsonStr)
+        } catch (_: Exception) {
+            // Backward compatibility with old cache format that stored the raw kind 10000 event.
+            try {
+                val event = json.decodeFromString<NostrEvent>(jsonStr)
+                val publicPubkeys = event.getTagValues("p")
+                MuteListData(
+                    pubkeys = publicPubkeys,
+                    eventIds = event.getTagValues("e"),
+                    hashtags = event.getTagValues("t"),
+                    words = event.getTagValues("word"),
+                    publicPubkeys = publicPubkeys
+                )
+            } catch (_: Exception) { null }
+        }
     }
 
     // ─── Post Enrichment (shared — used by all timeline/notifications) ────────

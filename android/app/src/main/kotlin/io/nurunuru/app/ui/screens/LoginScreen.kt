@@ -4,8 +4,10 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -14,7 +16,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -25,6 +26,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.nurunuru.app.R
@@ -48,6 +50,15 @@ fun LoginScreen(
     var showNsecLogin by remember { mutableStateOf(false) }
     var showOtherMethods by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
+    var showTermsDialog by remember { mutableStateOf(false) }
+    var pendingTermsAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    fun requireTerms(action: () -> Unit) {
+        if (viewModel.prefs.hasAcceptedTerms) action() else {
+            pendingTermsAction = action
+            showTermsDialog = true
+        }
+    }
 
     val amberLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) {
@@ -153,7 +164,7 @@ fun LoginScreen(
                 if (!showNsecLogin) {
                     // Sign Up Button
                     Button(
-                        onClick = { showSignUp = true },
+                        onClick = { requireTerms { showSignUp = true } },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(64.dp)
@@ -173,7 +184,7 @@ fun LoginScreen(
 
                     // Login Button (Combined)
                     Button(
-                        onClick = { showNsecLogin = true },
+                        onClick = { requireTerms { showNsecLogin = true } },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(56.dp),
@@ -238,7 +249,7 @@ fun LoginScreen(
                         }
 
                         Button(
-                            onClick = { viewModel.login(nsecInput) },
+                            onClick = { requireTerms { viewModel.login(nsecInput) } },
                             enabled = nsecInput.isNotBlank() && !isLoading,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -322,10 +333,12 @@ fun LoginScreen(
                                     // External Signer Button (NIP-55)
                                     Button(
                                         onClick = {
-                                            try {
-                                                amberLauncher.launch(ExternalSigner.createGetPublicKeyIntent(context))
-                                            } catch (e: Exception) {
-                                                android.widget.Toast.makeText(context, "外部署名アプリが見つかりません", android.widget.Toast.LENGTH_SHORT).show()
+                                            requireTerms {
+                                                try {
+                                                    amberLauncher.launch(ExternalSigner.createGetPublicKeyIntent(context))
+                                                } catch (e: Exception) {
+                                                    android.widget.Toast.makeText(context, "外部署名アプリが見つかりません", android.widget.Toast.LENGTH_SHORT).show()
+                                                }
                                             }
                                         },
                                         modifier = Modifier
@@ -377,6 +390,22 @@ fun LoginScreen(
         }
     }
 
+    if (showTermsDialog) {
+        TermsAgreementScreen(
+            onOpenTerms = { uriHandler.openUri("https://tami1A84.github.io/null--nostr/terms.html") },
+            onAgree = {
+                viewModel.prefs.hasAcceptedTerms = true
+                showTermsDialog = false
+                pendingTermsAction?.invoke()
+                pendingTermsAction = null
+            },
+            onCancel = {
+                showTermsDialog = false
+                pendingTermsAction = null
+            }
+        )
+    }
+
     if (showSignUp) {
         SignUpModal(
             viewModel = viewModel,
@@ -386,5 +415,199 @@ fun LoginScreen(
                 // Logged in via completeRegistration in Modal
             }
         )
+    }
+}
+
+@Composable
+private fun TermsAgreementScreen(
+    onOpenTerms: () -> Unit,
+    onAgree: () -> Unit,
+    onCancel: () -> Unit
+) {
+    val nuruColors = LocalNuruColors.current
+
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = nuruColors.bgPrimary
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+                    .padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(onClick = onCancel) {
+                    Text(
+                        text = "閉じる",
+                        color = nuruColors.textSecondary,
+                        fontSize = 14.sp
+                    )
+                }
+                Text(
+                    text = "利用規約",
+                    modifier = Modifier.weight(1f),
+                    color = nuruColors.textPrimary,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.width(64.dp))
+            }
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState())
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    text = "利用規約への同意",
+                    color = nuruColors.textPrimary,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Text(
+                    text = "ぬるぬるでは、ユーザー投稿コンテンツを安全に利用するため、以下の内容に同意してから開始してください。",
+                    color = nuruColors.textSecondary,
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp
+                )
+
+                TermsNoticeCard(
+                    icon = Icons.Default.Security,
+                    title = "ゼロトレランス方針",
+                    bodyText = "不適切なコンテンツ、嫌がらせ、差別、脅迫、スパム、違法行為、迷惑ユーザーを一切許容しません。"
+                )
+
+                TermsNoticeCard(
+                    icon = Icons.Default.Flag,
+                    title = "通報機能",
+                    bodyText = "不適切な投稿やプロフィール、迷惑行為を見つけた場合は、アプリ内の通報機能から報告できます。"
+                )
+
+                TermsNoticeCard(
+                    icon = Icons.Default.PersonOff,
+                    title = "ブロック機能",
+                    bodyText = "迷惑なユーザーや表示したくないユーザーは、アプリ内のブロック機能でブロックできます。"
+                )
+
+                Surface(
+                    onClick = onOpenTerms,
+                    modifier = Modifier.fillMaxWidth(),
+                    color = nuruColors.bgSecondary,
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Description,
+                            contentDescription = null,
+                            tint = LineGreen,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            text = "利用規約の全文を開く",
+                            modifier = Modifier.weight(1f),
+                            color = LineGreen,
+                            fontSize = 14.sp
+                        )
+                        Icon(
+                            imageVector = Icons.Default.OpenInNew,
+                            contentDescription = null,
+                            tint = LineGreen,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(nuruColors.bgPrimary)
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Button(
+                    onClick = onAgree,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = LineGreen),
+                    shape = RoundedCornerShape(24.dp)
+                ) {
+                    Text(
+                        text = "利用規約に同意して開始",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+
+                TextButton(onClick = onCancel) {
+                    Text(
+                        text = "同意しない",
+                        color = nuruColors.textTertiary,
+                        fontSize = 14.sp
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TermsNoticeCard(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    bodyText: String
+) {
+    val nuruColors = LocalNuruColors.current
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = nuruColors.bgSecondary,
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = LineGreen,
+                modifier = Modifier
+                    .width(28.dp)
+                    .size(20.dp)
+            )
+
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = title,
+                    color = nuruColors.textPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = bodyText,
+                    color = nuruColors.textSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp
+                )
+            }
+        }
     }
 }

@@ -2,8 +2,6 @@ package io.nurunuru.app.viewmodel
 
 import android.app.Application
 import android.content.Context
-import androidx.credentials.CreatePublicKeyCredentialRequest
-import androidx.credentials.CredentialManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.nurunuru.app.data.NostrClient
@@ -14,6 +12,7 @@ import io.nurunuru.app.data.models.UserProfile
 import io.nurunuru.app.data.prefs.AppPreferences
 import io.nurunuru.app.data.*
 import javax.crypto.Cipher
+import java.io.File
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -196,7 +195,12 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 website = website,
                 birthday = birthday
             )
-            repository.updateProfile(profile)
+            val profilePublished = repository.updateProfile(profile)
+            if (!profilePublished) {
+                android.util.Log.e("AuthViewModel", "Initial kind0 profile publish failed")
+                client.disconnect()
+                return@withContext false
+            }
 
             val relayList = relays ?: targetRelays.map { Triple(it, true, true) }
             repository.updateRelayList(relayList)
@@ -205,6 +209,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             client.disconnect()
             true
         } catch (e: Exception) {
+            android.util.Log.e("AuthViewModel", "publishInitialMetadata failed", e)
             false
         }
     }
@@ -311,32 +316,6 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Passkey signup simulation
-     */
-    suspend fun signUpWithPasskey(context: Context): Boolean {
-        return try {
-            val credentialManager = CredentialManager.create(context)
-            val requestJson = """
-                {
-                    "challenge": "Y2hhbGxlbmdl",
-                    "rp": { "name": "ぬるぬる", "id": "www.nullnull.app" },
-                    "user": { "id": "dXNlcmlk", "name": "user", "displayName": "Nostr User" },
-                    "pubKeyCredParams": [{ "type": "public-key", "alg": -7 }],
-                    "timeout": 60000,
-                    "attestation": "none",
-                    "authenticatorSelection": { "authenticatorAttachment": "platform", "userVerification": "required" }
-                }
-            """.trimIndent()
-
-            val createPublicKeyCredentialRequest = CreatePublicKeyCredentialRequest(requestJson)
-            credentialManager.createCredential(context, createPublicKeyCredentialRequest)
-            true
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    /**
      * 生体認証を有効化する (設定画面から呼ばれる)。
      */
     fun enableBiometric() {
@@ -362,9 +341,32 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun logout() {
+        val app = getApplication<Application>()
         keyManager.deleteAll()
+
+        // Privacy/account isolation: Talk uses Rust MLS SQLite as its source of truth.
+        // If it survives logout, a different account can still see old local groups/messages
+        // because the FFI DB is app-global. Clear both app-layer cache and local Rust DB files.
+        try { io.nurunuru.app.data.cache.NostrCache(app).clearAll() } catch (_: Exception) { }
+        try { clearLocalRustDatabases(app) } catch (_: Exception) { }
+
         prefs.clear()
         _authState.value = AuthState.LoggedOut
+    }
+
+    private fun clearLocalRustDatabases(context: Context) {
+        val base = File(context.filesDir, "nostrdb_ndb")
+        // MLS database path is configured in Rust as "${filesDir}/nostrdb_ndb_mls.sqlite3".
+        listOf(
+            base,
+            File(context.filesDir, "nostrdb_ndb_mls.sqlite3"),
+            File(context.filesDir, "nostrdb_ndb_mls.sqlite3-shm"),
+            File(context.filesDir, "nostrdb_ndb_mls.sqlite3-wal")
+        ).forEach { file ->
+            if (file.exists()) {
+                if (file.isDirectory) file.deleteRecursively() else file.delete()
+            }
+        }
     }
 
     fun clearError() {

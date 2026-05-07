@@ -19,7 +19,7 @@ suspend fun NostrRepository.likePost(
     return try {
         if (isExternalSigner()) {
             val unsigned = rustClient.createUnsignedReaction(eventId, authorPubkey, emoji, myPubkeyHex)
-            signAndPublishGetId(unsigned).also { if (it != null) android.util.Log.d("NostrRepository", "Ext react OK: $eventId id=$it") }
+            signAndPublishGetId(unsigned, requireManualApproval = true).also { if (it != null) android.util.Log.d("NostrRepository", "Ext react OK: $eventId id=$it") }
         } else {
             val reactionId = withContext(Dispatchers.IO) {
                 rustClient.react(eventId, authorPubkey, emoji)
@@ -47,7 +47,7 @@ suspend fun NostrRepository.repostPost(eventId: String, eventJson: String? = nul
     return try {
         if (isExternalSigner()) {
             val unsigned = rustClient.createUnsignedRepost(eventJson, myPubkeyHex)
-            signAndPublishGetId(unsigned).also { if (it != null) android.util.Log.d("NostrRepository", "Ext repost OK: $eventId id=$it") }
+            signAndPublishGetId(unsigned, requireManualApproval = true).also { if (it != null) android.util.Log.d("NostrRepository", "Ext repost OK: $eventId id=$it") }
         } else {
             val repostId = withContext(Dispatchers.IO) { rustClient.repost(eventJson) }
             android.util.Log.d("NostrRepository", "Rust repost OK: $eventId id=$repostId")
@@ -81,7 +81,7 @@ suspend fun NostrRepository.publishNote(
         tags.add(listOf("-"))
     }
     if (tags.none { it.getOrNull(0) == "client" }) {
-        tags.add(listOf("client", "nullnull"))
+        tags.add(clientTag)
     }
 
     val rustClient = client.getRustClient() ?: return null
@@ -92,7 +92,7 @@ suspend fun NostrRepository.publishNote(
                 rustClient.createUnsignedEvent(kind.toUInt(), content, tags, myPubkeyHex)
             }
             android.util.Log.d("NostrRepository", "Ext publishNote: unsigned created (${unsigned.length} chars), signing...")
-            val signedJson = client.getSigner().signEvent(unsigned) ?: run {
+            val signedJson = client.getSigner().signEvent(unsigned, requireManualApproval = true) ?: run {
                 android.util.Log.w("NostrRepository", "Ext publishNote: signer returned null")
                 return null
             }
@@ -194,48 +194,30 @@ suspend fun NostrRepository.fetchMuteList(pubkeyHex: String): MuteListData {
     val event = events.maxByOrNull { it.createdAt }
 
     if (event != null) {
-        // NIP-44 private mute list: content is encrypted, tags may be empty
+        // NIP-51 kind 10000:
+        // - public mute entries are event.tags
+        // - private mute entries are NIP-44 encrypted JSON tags in content
+        val publicPubkeys = event.getTagValues("p")
         val signer = client.getSigner()
-        val muteData = if (event.content.isNotBlank() && signer != null) {
+        val privateTags = if (event.content.isNotBlank() && signer != null) {
             try {
                 val decrypted = signer.nip44Decrypt(pubkeyHex, event.content)
                 if (decrypted != null) {
-                    // Decrypted content is a JSON array of tags: [["p","..."],["e","..."],...]
-                    val decryptedTags = try {
-                        kotlinx.serialization.json.Json.decodeFromString<List<List<String>>>(decrypted)
-                    } catch (_: Exception) { emptyList() }
-                    val allTags = event.tags + decryptedTags
-                    MuteListData(
-                        pubkeys = allTags.filter { it.firstOrNull() == "p" }.mapNotNull { it.getOrNull(1) },
-                        eventIds = allTags.filter { it.firstOrNull() == "e" }.mapNotNull { it.getOrNull(1) },
-                        hashtags = allTags.filter { it.firstOrNull() == "t" }.mapNotNull { it.getOrNull(1) },
-                        words = allTags.filter { it.firstOrNull() == "word" }.mapNotNull { it.getOrNull(1) }
-                    )
-                } else {
-                    MuteListData(
-                        pubkeys = event.getTagValues("p"),
-                        eventIds = event.getTagValues("e"),
-                        hashtags = event.getTagValues("t"),
-                        words = event.getTagValues("word")
-                    )
-                }
-            } catch (_: Exception) {
-                MuteListData(
-                    pubkeys = event.getTagValues("p"),
-                    eventIds = event.getTagValues("e"),
-                    hashtags = event.getTagValues("t"),
-                    words = event.getTagValues("word")
-                )
-            }
-        } else {
-            MuteListData(
-                pubkeys = event.getTagValues("p"),
-                eventIds = event.getTagValues("e"),
-                hashtags = event.getTagValues("t"),
-                words = event.getTagValues("word")
-            )
-        }
-        cache.setCachedMuteList(pubkeyHex, json.encodeToString(NostrEvent.serializer(), event))
+                    kotlinx.serialization.json.Json.decodeFromString<List<List<String>>>(decrypted)
+                } else emptyList()
+            } catch (_: Exception) { emptyList() }
+        } else emptyList()
+
+        val privatePubkeys = privateTags.filter { it.firstOrNull() == "p" }.mapNotNull { it.getOrNull(1) }
+        val muteData = MuteListData(
+            pubkeys = (privatePubkeys + publicPubkeys).distinct(),
+            eventIds = (privateTags.filter { it.firstOrNull() == "e" }.mapNotNull { it.getOrNull(1) } + event.getTagValues("e")).distinct(),
+            hashtags = (privateTags.filter { it.firstOrNull() == "t" }.mapNotNull { it.getOrNull(1) } + event.getTagValues("t")).distinct(),
+            words = (privateTags.filter { it.firstOrNull() == "word" }.mapNotNull { it.getOrNull(1) } + event.getTagValues("word")).distinct(),
+            privatePubkeys = privatePubkeys.distinct(),
+            publicPubkeys = publicPubkeys.distinct()
+        )
+        cache.setCachedMuteList(pubkeyHex, json.encodeToString(MuteListData.serializer(), muteData))
         return muteData
     }
 
@@ -266,73 +248,114 @@ suspend fun NostrRepository.removeFromMuteList(pubkeyHex: String, type: String, 
     val latest = client.fetchEvents(filter, timeoutMs = 4_000).maxByOrNull { it.createdAt } ?: return true
 
     val tagType = when (type) {
-        "pubkey" -> "p"; "event" -> "e"; "hashtag" -> "t"; "word" -> "word"
+        "pubkey", "privatePubkey", "publicPubkey" -> "p"
+        "event" -> "e"
+        "hashtag" -> "t"
+        "word" -> "word"
         else -> return false
     }
+    val removePrivate = type != "publicPubkey"
+    val removePublic = type == "pubkey" || type == "publicPubkey"
 
-    if (signer != null && latest.content.isNotBlank()) {
-        val existingTags = try {
+    val privateTags = if (latest.content.isNotBlank() && signer != null) {
+        try {
             val decrypted = signer.nip44Decrypt(pubkeyHex, latest.content)
-            if (decrypted != null) kotlinx.serialization.json.Json.decodeFromString<List<List<String>>>(decrypted) else latest.tags
-        } catch (_: Exception) { latest.tags }
-        val newTags = existingTags.filter { !(it.firstOrNull() == tagType && it.getOrNull(1) == value) }
-        if (newTags.size == existingTags.size) return true
-        val encryptedContent = try { signer.nip44Encrypt(pubkeyHex, kotlinx.serialization.json.Json.encodeToString(newTags)) ?: "" } catch (_: Exception) { "" }
-        return publishNewEvent(NostrKind.MUTE_LIST, encryptedContent, emptyList()) != null
-    } else {
-        val newTags = latest.tags.filter { !(it.firstOrNull() == tagType && it.getOrNull(1) == value) }
-        if (newTags.size == latest.tags.size) return true
-        return publishNewEvent(NostrKind.MUTE_LIST, latest.content, newTags) != null
+            if (decrypted != null) kotlinx.serialization.json.Json.decodeFromString<List<List<String>>>(decrypted) else emptyList()
+        } catch (_: Exception) { emptyList() }
+    } else emptyList()
+    val publicTags = latest.tags
+
+    val newPrivateTags = if (removePrivate) privateTags.filter { !(it.firstOrNull() == tagType && it.getOrNull(1) == value) } else privateTags
+    val newPublicTags = if (removePublic) publicTags.filter { !(it.firstOrNull() == tagType && it.getOrNull(1) == value) } else publicTags
+    if (newPrivateTags.size == privateTags.size && newPublicTags.size == publicTags.size) return true
+
+    val encryptedContent = if (newPrivateTags.isNotEmpty()) {
+        if (signer == null) return false
+        try { signer.nip44Encrypt(pubkeyHex, kotlinx.serialization.json.Json.encodeToString(newPrivateTags)) ?: return false }
+        catch (_: Exception) { return false }
+    } else ""
+
+    val success = publishNewEvent(NostrKind.MUTE_LIST, encryptedContent, newPublicTags) != null
+    if (success) {
+        val data = MuteListData(
+            pubkeys = (newPrivateTags.filter { it.firstOrNull() == "p" }.mapNotNull { it.getOrNull(1) } + newPublicTags.filter { it.firstOrNull() == "p" }.mapNotNull { it.getOrNull(1) }).distinct(),
+            eventIds = (newPrivateTags.filter { it.firstOrNull() == "e" }.mapNotNull { it.getOrNull(1) } + newPublicTags.filter { it.firstOrNull() == "e" }.mapNotNull { it.getOrNull(1) }).distinct(),
+            hashtags = (newPrivateTags.filter { it.firstOrNull() == "t" }.mapNotNull { it.getOrNull(1) } + newPublicTags.filter { it.firstOrNull() == "t" }.mapNotNull { it.getOrNull(1) }).distinct(),
+            words = (newPrivateTags.filter { it.firstOrNull() == "word" }.mapNotNull { it.getOrNull(1) } + newPublicTags.filter { it.firstOrNull() == "word" }.mapNotNull { it.getOrNull(1) }).distinct(),
+            privatePubkeys = newPrivateTags.filter { it.firstOrNull() == "p" }.mapNotNull { it.getOrNull(1) }.distinct(),
+            publicPubkeys = newPublicTags.filter { it.firstOrNull() == "p" }.mapNotNull { it.getOrNull(1) }.distinct()
+        )
+        cache.setCachedMuteList(pubkeyHex, json.encodeToString(MuteListData.serializer(), data))
     }
+    return success
 }
 
 suspend fun NostrRepository.muteUser(pubkeyHex: String): Boolean {
-    val myPubkey = prefs.publicKeyHex ?: return false
-    val signer = client.getSigner()
+    // iOS と同じく、投稿メニューの「ミュート」は必ず非公開ミュートにする。
+    // NIP-44 が利用できない場合に公開タグへフォールバックしない。
+    val myPubkey = myPubkeyHex.ifBlank { prefs.publicKeyHex ?: return false }
+    val signer = client.getSigner() ?: return false
     val filter = NostrClient.Filter(kinds = listOf(NostrKind.MUTE_LIST), authors = listOf(myPubkey), limit = 1)
     val latest = client.fetchEvents(filter, timeoutMs = 4_000).maxByOrNull { it.createdAt }
 
-    if (signer != null) {
-        // NIP-44 private mute list
-        val existingPrivateTags = if (latest != null && latest.content.isNotBlank()) {
-            try {
-                val decrypted = signer.nip44Decrypt(myPubkey, latest.content)
-                if (decrypted != null) kotlinx.serialization.json.Json.decodeFromString<List<List<String>>>(decrypted) else emptyList()
-            } catch (_: Exception) { emptyList() }
-        } else {
-            latest?.tags ?: emptyList()  // Migrate from public tags
-        }
-        val allTags = existingPrivateTags.toMutableList()
-        if (allTags.any { it.firstOrNull() == "p" && it.getOrNull(1) == pubkeyHex }) return true
-        allTags.add(listOf("p", pubkeyHex))
-        val encryptedContent = try {
-            signer.nip44Encrypt(myPubkey, kotlinx.serialization.json.Json.encodeToString(allTags)) ?: ""
-        } catch (_: Exception) { "" }
-        return publishNewEvent(NostrKind.MUTE_LIST, encryptedContent, emptyList()) != null
+    val existingPrivateTags = if (latest != null && latest.content.isNotBlank()) {
+        try {
+            val decrypted = signer.nip44Decrypt(myPubkey, latest.content)
+            if (decrypted != null) kotlinx.serialization.json.Json.decodeFromString<List<List<String>>>(decrypted) else emptyList()
+        } catch (_: Exception) { emptyList() }
     } else {
-        // Fallback: public tags
-        val tags = latest?.tags?.toMutableList() ?: mutableListOf()
-        if (tags.any { it.firstOrNull() == "p" && it.getOrNull(1) == pubkeyHex }) return true
-        tags.add(listOf("p", pubkeyHex))
-        return publishNewEvent(NostrKind.MUTE_LIST, latest?.content ?: "", tags) != null
+        emptyList()
     }
+    val publicTags = latest?.tags ?: emptyList()
+    val allPrivateTags = existingPrivateTags.toMutableList()
+    if (allPrivateTags.any { it.firstOrNull() == "p" && it.getOrNull(1) == pubkeyHex }) return true
+    allPrivateTags.add(listOf("p", pubkeyHex))
+
+    val encryptedContent = try {
+        signer.nip44Encrypt(myPubkey, kotlinx.serialization.json.Json.encodeToString(allPrivateTags)) ?: return false
+    } catch (_: Exception) { return false }
+
+    val success = publishNewEvent(NostrKind.MUTE_LIST, encryptedContent, publicTags) != null
+    if (success) {
+        val privatePubkeys = allPrivateTags.filter { it.firstOrNull() == "p" }.mapNotNull { it.getOrNull(1) }.distinct()
+        val publicPubkeys = publicTags.filter { it.firstOrNull() == "p" }.mapNotNull { it.getOrNull(1) }.distinct()
+        cache.setCachedMuteList(myPubkey, json.encodeToString(MuteListData.serializer(), MuteListData(
+            pubkeys = (privatePubkeys + publicPubkeys).distinct(),
+            eventIds = (allPrivateTags.filter { it.firstOrNull() == "e" }.mapNotNull { it.getOrNull(1) } + publicTags.filter { it.firstOrNull() == "e" }.mapNotNull { it.getOrNull(1) }).distinct(),
+            hashtags = (allPrivateTags.filter { it.firstOrNull() == "t" }.mapNotNull { it.getOrNull(1) } + publicTags.filter { it.firstOrNull() == "t" }.mapNotNull { it.getOrNull(1) }).distinct(),
+            words = (allPrivateTags.filter { it.firstOrNull() == "word" }.mapNotNull { it.getOrNull(1) } + publicTags.filter { it.firstOrNull() == "word" }.mapNotNull { it.getOrNull(1) }).distinct(),
+            privatePubkeys = privatePubkeys,
+            publicPubkeys = publicPubkeys
+        )))
+    }
+    return success
 }
 
 suspend fun NostrRepository.followUser(myPubkeyHex: String, targetPubkeyHex: String): Boolean {
     return try {
-        if (isExternalSigner()) {
-            val contactsFilter = NostrClient.Filter(kinds = listOf(NostrKind.CONTACT_LIST), authors = listOf(myPubkeyHex), limit = 1)
-            val latest = client.fetchEvents(contactsFilter, timeoutMs = 4_000).maxByOrNull { it.createdAt }
-            val tags = latest?.tags?.toMutableList() ?: mutableListOf()
-            if (tags.any { it.firstOrNull() == "p" && it.getOrNull(1) == targetPubkeyHex }) return true
-            tags.add(listOf("p", targetPubkeyHex))
-            publishNewEvent(NostrKind.CONTACT_LIST, latest?.content ?: "", tags) != null
-        } else {
-            val rustClient = client.getRustClient() ?: return false
-            rustClient.followUser(targetPubkeyHex)
-            android.util.Log.d("NostrRepository", "Rust followUser OK: $targetPubkeyHex")
-            true
+        // kind 3 is a replaceable "complete contact list" event.  Build the new
+        // list from the latest relay state and publish it through the same path
+        // for internal and Amber signers so profile-page follow always updates
+        // the cached list and does not depend on Rust helper edge cases.
+        val contactsFilter = NostrClient.Filter(kinds = listOf(NostrKind.CONTACT_LIST), authors = listOf(myPubkeyHex), limit = 1)
+        val latest = client.fetchEvents(contactsFilter, timeoutMs = 4_000).maxByOrNull { it.createdAt }
+        val tags = latest?.tags?.toMutableList() ?: mutableListOf()
+        if (tags.any { it.firstOrNull() == "p" && it.getOrNull(1) == targetPubkeyHex }) {
+            val current = tags.filter { it.firstOrNull() == "p" }.mapNotNull { it.getOrNull(1) }.distinct()
+            cache.setCachedFollowList(myPubkeyHex, current)
+            return true
         }
+        tags.add(listOf("p", targetPubkeyHex))
+        val success = publishNewEvent(NostrKind.CONTACT_LIST, latest?.content ?: "", tags) != null
+        if (success) {
+            val updated = tags.filter { it.firstOrNull() == "p" }.mapNotNull { it.getOrNull(1) }.distinct()
+            cache.setCachedFollowList(myPubkeyHex, updated)
+            if (myPubkeyHex == this.myPubkeyHex) {
+                followingSet.clear()
+                followingSet.addAll(updated)
+            }
+        }
+        success
     } catch (e: Exception) {
         android.util.Log.e("NostrRepository", "followUser failed: ${e.message}")
         false
@@ -341,18 +364,25 @@ suspend fun NostrRepository.followUser(myPubkeyHex: String, targetPubkeyHex: Str
 
 suspend fun NostrRepository.unfollowUser(myPubkeyHex: String, targetPubkeyHex: String): Boolean {
     return try {
-        if (isExternalSigner()) {
-            val contactsFilter = NostrClient.Filter(kinds = listOf(NostrKind.CONTACT_LIST), authors = listOf(myPubkeyHex), limit = 1)
-            val latest = client.fetchEvents(contactsFilter, timeoutMs = 4_000).maxByOrNull { it.createdAt } ?: return true
-            val newTags = latest.tags.filter { !(it.firstOrNull() == "p" && it.getOrNull(1) == targetPubkeyHex) }
-            if (newTags.size == latest.tags.size) return true
-            publishNewEvent(NostrKind.CONTACT_LIST, latest.content, newTags) != null
-        } else {
-            val rustClient = client.getRustClient() ?: return false
-            rustClient.unfollowUser(targetPubkeyHex)
-            android.util.Log.d("NostrRepository", "Rust unfollowUser OK: $targetPubkeyHex")
-            true
+        val contactsFilter = NostrClient.Filter(kinds = listOf(NostrKind.CONTACT_LIST), authors = listOf(myPubkeyHex), limit = 1)
+        val latest = client.fetchEvents(contactsFilter, timeoutMs = 4_000).maxByOrNull { it.createdAt }
+        val tags = latest?.tags ?: emptyList()
+        val newTags = tags.filter { !(it.firstOrNull() == "p" && it.getOrNull(1) == targetPubkeyHex) }
+        if (newTags.size == tags.size) {
+            val current = newTags.filter { it.firstOrNull() == "p" }.mapNotNull { it.getOrNull(1) }.distinct()
+            cache.setCachedFollowList(myPubkeyHex, current)
+            return true
         }
+        val success = publishNewEvent(NostrKind.CONTACT_LIST, latest?.content ?: "", newTags) != null
+        if (success) {
+            val updated = newTags.filter { it.firstOrNull() == "p" }.mapNotNull { it.getOrNull(1) }.distinct()
+            cache.setCachedFollowList(myPubkeyHex, updated)
+            if (myPubkeyHex == this.myPubkeyHex) {
+                followingSet.clear()
+                followingSet.addAll(updated)
+            }
+        }
+        success
     } catch (e: Exception) {
         android.util.Log.e("NostrRepository", "unfollowUser failed: ${e.message}")
         false

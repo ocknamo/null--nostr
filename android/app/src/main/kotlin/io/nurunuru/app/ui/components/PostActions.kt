@@ -85,7 +85,7 @@ fun PostActions(
         if (client != null) {
             Spacer(modifier = Modifier.weight(1f))
             Text(
-                text = "via $client",
+                text = if (client.startsWith("via ")) client else "via $client",
                 style = MaterialTheme.typography.labelSmall,
                 color = nuruColors.textTertiary.copy(alpha = 0.6f),
                 fontSize = 10.sp

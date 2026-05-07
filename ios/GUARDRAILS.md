@@ -61,7 +61,7 @@ These rules are non-negotiable. Every PR and code review must verify compliance.
 
 ## 8. Navigation Rules
 
-- 4-tab `TabView` at root. Tab order: ホーム / トーク / タイムライン / ミニアプリ.
+- 5-tab bottom navigation at root. Tab order: ホーム / トーク / ろくなな / タイムライン / ミニアプリ.
 - Modals as `.sheet` (half/full). Image viewer as `.fullScreenCover`.
 - No `NavigationLink` for modals — use `@State` booleans + `.sheet`.
 - Deep link scheme: `nurunuru://`

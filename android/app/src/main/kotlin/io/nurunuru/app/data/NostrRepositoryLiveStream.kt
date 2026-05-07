@@ -47,7 +47,7 @@ suspend fun NostrRepository.publishEvent(
 ): NostrEvent? {
     val allTags = tags.toMutableList()
     if (allTags.none { it.getOrNull(0) == "client" }) {
-        allTags.add(listOf("client", "nullnull"))
+        allTags.add(clientTag)
     }
     val eventId = publishNewEvent(kind, content, allTags) ?: return null
     return NostrEvent(id = eventId, pubkey = myPubkeyHex, kind = kind, tags = allTags, content = content)
@@ -264,7 +264,7 @@ suspend fun NostrRepository.signEventForWebBridge(eventJson: String): String? = 
             append("\"pubkey\":\"$myPubkeyHex\"")
             append("}")
         }
-        client.getSigner().signEvent(unsigned)
+        client.getSigner().signEvent(unsigned, requireManualApproval = true)
     } catch (e: Exception) {
         android.util.Log.e("NostrRepository", "signEventForWebBridge: ${e.message}")
         null

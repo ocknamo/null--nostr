@@ -2,6 +2,7 @@ package io.nurunuru.app.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -11,6 +12,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.nurunuru.app.data.models.ScoredPost
@@ -20,6 +24,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun PostItem(
     post: ScoredPost,
@@ -39,6 +44,7 @@ fun PostItem(
     birdwatchNotes: List<io.nurunuru.app.data.models.NostrEvent> = emptyList(),
     onHashtagClick: ((String) -> Unit)? = null,
     onNoteClick: ((String) -> Unit)? = null,
+    onLongPressReply: (() -> Unit)? = null,
     myPubkey: String = ""
 ) {
     val nuruColors = LocalNuruColors.current
@@ -90,10 +96,29 @@ fun PostItem(
     var showReactionPicker by remember { mutableStateOf(false) }
     var showQuoteRepost by remember { mutableStateOf(false) }
 
+    val replyLongPressModifier = if (onLongPressReply != null) {
+        Modifier.pointerInput(post.event.id) {
+            awaitPointerEventScope {
+                while (true) {
+                    val down = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.pressed } ?: continue
+                    val longPress = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: return@withTimeoutOrNull false
+                            if (change.changedToUpIgnoreConsumed() || !change.pressed) return@withTimeoutOrNull false
+                        }
+                    }
+                    if (longPress == null) onLongPressReply.invoke()
+                }
+            }
+        }
+    } else Modifier
+
     Column(
         modifier = modifier
             .fillMaxWidth()
             .background(nuruColors.bgPrimary)
+            .then(replyLongPressModifier)
     ) {
         PostIndicators(post = post, onProfileClick = onProfileClick)
 

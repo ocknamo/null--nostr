@@ -11,11 +11,15 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 import io.nurunuru.app.NuruNuruApp
@@ -23,6 +27,7 @@ import io.nurunuru.app.data.NostrClient
 import io.nurunuru.app.data.NostrRepository
 import io.nurunuru.app.data.SecureKeyManager
 import io.nurunuru.app.data.prefs.AppPreferences
+import io.nurunuru.app.ui.components.ConnectionStatusBanner
 import io.nurunuru.app.ui.theme.LineGreen
 import io.nurunuru.app.ui.theme.LocalNuruColors
 import io.nurunuru.app.viewmodel.*
@@ -56,6 +61,7 @@ fun MainScreen(
     val nuruColors = LocalNuruColors.current
     var activeTab by remember { mutableStateOf(BottomTab.TIMELINE) }
     var isExternalAppOpen by remember { mutableStateOf(false) }
+    var showAppSettings by remember { mutableStateOf(false) }
     var selectedNoteEventId by remember { mutableStateOf<String?>(null) }
 
     // Create shared NostrClient and Repository
@@ -97,6 +103,10 @@ fun MainScreen(
     val homeVM: HomeViewModel = viewModel(
         HomeViewModel::class.java,
         factory = HomeViewModel.Factory(repository, pubkeyHex)
+    )
+    val connectionVM: ConnectionViewModel = viewModel(
+        ConnectionViewModel::class.java,
+        factory = ConnectionViewModel.Factory(context.applicationContext, app.prefs.relays.toList())
     )
 
     // My profile for post modal avatar
@@ -194,6 +204,13 @@ fun MainScreen(
         // 3タブ（HOME・TALK・TIMELINE）は常時コンポーズして状態（スクロール位置等）を保持する。
         // AnimatedVisibility は非表示時もコンポジションツリーに残るため ViewModel 状態が失われない。
         Box(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
+            ConnectionStatusBanner(
+                viewModel = connectionVM,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .zIndex(10f)
+            )
+
 
             // ── TIMELINE ──────────────────────────────────────────────────────
             androidx.compose.animation.AnimatedVisibility(
@@ -227,11 +244,22 @@ fun MainScreen(
                 HomeScreen(
                     viewModel = homeVM,
                     repository = repository,
+                    onSettingsTap = { showAppSettings = true },
                     onStartDM = { partnerPubkey ->
                         talkVM.createDmConversation(partnerPubkey)
                         activeTab = BottomTab.TALK
                     },
                     onNoteClick = { eventId -> selectedNoteEventId = eventId }
+                )
+            }
+
+            if (showAppSettings) {
+                AppSettingsDialog(
+                    onDismiss = { showAppSettings = false },
+                    onLogout = {
+                        showAppSettings = false
+                        authViewModel.logout()
+                    }
                 )
             }
 
@@ -273,5 +301,88 @@ fun MainScreen(
                 )
             }
         }
+    }
+}
+
+
+@Composable
+private fun AppSettingsDialog(
+    onDismiss: () -> Unit,
+    onLogout: () -> Unit
+) {
+    val uriHandler = LocalUriHandler.current
+    val nuruColors = LocalNuruColors.current
+    var showLogoutConfirm by remember { mutableStateOf(false) }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = nuruColors.bgPrimary
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp)
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("設定", fontWeight = FontWeight.Bold, fontSize = 20.sp, modifier = Modifier.weight(1f))
+                    IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, contentDescription = "閉じる") }
+                }
+                HorizontalDivider(color = nuruColors.border, thickness = 0.5.dp)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    AppSettingsRow(Icons.Default.PanTool, "プライバシーポリシー", "個人情報とデータの取り扱いを確認") { uriHandler.openUri("https://tami1A84.github.io/null--nostr/privacy.html") }
+                    AppSettingsRow(Icons.Default.Description, "利用規約", "禁止事項、通報、ブロックについて確認") { uriHandler.openUri("https://tami1A84.github.io/null--nostr/terms.html") }
+                    AppSettingsRow(Icons.Default.Logout, "ログアウト", "このデバイスから秘密鍵を削除します", Color.Red) { showLogoutConfirm = true }
+                }
+            }
+        }
+    }
+    if (showLogoutConfirm) {
+        AlertDialog(
+            onDismissRequest = { showLogoutConfirm = false },
+            title = { Text("ログアウト") },
+            text = { Text("ログアウトします。秘密鍵はこのデバイスから削除されます。") },
+            confirmButton = { TextButton(onClick = onLogout) { Text("ログアウト", color = Color.Red) } },
+            dismissButton = { TextButton(onClick = { showLogoutConfirm = false }) { Text("キャンセル") } }
+        )
+    }
+}
+
+@Composable
+private fun AppSettingsRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    titleColor: Color? = null,
+    onClick: () -> Unit
+) {
+    val nuruColors = LocalNuruColors.current
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Surface(color = nuruColors.bgSecondary, shape = androidx.compose.foundation.shape.CircleShape, modifier = Modifier.size(40.dp)) {
+            Box(contentAlignment = Alignment.Center) { Icon(icon, null, tint = titleColor ?: nuruColors.textSecondary) }
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.Bold, color = titleColor ?: nuruColors.textPrimary)
+            Text(subtitle, fontSize = 12.sp, color = nuruColors.textTertiary)
+        }
+        if (titleColor == null) Icon(Icons.Default.ChevronRight, null, tint = nuruColors.textTertiary)
     }
 }

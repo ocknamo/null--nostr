@@ -1,6 +1,7 @@
 package io.nurunuru.app.data
 
 import io.nurunuru.app.data.models.*
+import io.nurunuru.app.data.prefs.NotificationSenderScope
 import kotlinx.coroutines.*
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
@@ -21,8 +22,15 @@ suspend fun NostrRepository.fetchNotifications(pubkeyHex: String, limit: Int = 5
             try {
                 val result = json.decodeFromString<NotificationResult>(cached)
                 if (result.items.isNotEmpty()) {
-                    android.util.Log.d("NostrRepository", "notifications cache hit: ${result.items.size}")
-                    return result
+                    val dedupedItems = dedupeFollowNotifications(result.items)
+                    val dedupedResult = if (dedupedItems.size != result.items.size) {
+                        result.copy(items = dedupedItems)
+                    } else result
+                    android.util.Log.d("NostrRepository", "notifications cache hit: ${result.items.size} deduped=${dedupedItems.size}")
+                    if (dedupedItems.size != result.items.size) {
+                        try { cache.setCachedNotifications(pubkeyHex, json.encodeToString(NotificationResult.serializer(), dedupedResult)) } catch (_: Exception) { }
+                    }
+                    return dedupedResult
                 }
             } catch (_: Exception) { }
         }
@@ -70,8 +78,26 @@ suspend fun NostrRepository.fetchNotifications(pubkeyHex: String, limit: Int = 5
         limit = limit
     )
 
+    // 6. Fetch new followers (Kind 3 #p tag)
+    val followFilter = NostrClient.Filter(
+        kinds = listOf(NostrKind.CONTACT_LIST),
+        tags = mapOf("p" to listOf(pubkeyHex)),
+        since = oneDayAgo,
+        limit = limit
+    )
+
     val enabledKinds = prefs.notificationEnabledKinds
     val emojiReactionEnabled = prefs.notificationEmojiReactionEnabled
+    val allowedSenders: Set<String>? = when (prefs.notificationSenderScope) {
+        NotificationSenderScope.ALL -> null
+        NotificationSenderScope.FOLLOWING -> fetchFollowList(pubkeyHex).toSet()
+        NotificationSenderScope.NETWORK -> {
+            val follows = fetchFollowList(pubkeyHex)
+            val secondDegree = fetchFollowListsBatch(follows).values.flatten()
+            (follows + secondDegree).toSet()
+        }
+    }
+    fun canNotify(sender: String): Boolean = sender != pubkeyHex && (allowedSenders == null || sender in allowedSenders)
     android.util.Log.d("NostrRepository",
         "fetchNotifications: enabledKinds=${enabledKinds.sorted()} emojiReaction=$emojiReactionEnabled")
 
@@ -97,8 +123,10 @@ suspend fun NostrRepository.fetchNotifications(pubkeyHex: String, limit: Int = 5
         fetchWith(replyFilter) else emptyList()
     val badges = if (NostrKind.BADGE_AWARD in enabledKinds)
         fetchWith(badgeFilter) else emptyList()
+    val follows = if (NostrKind.CONTACT_LIST in enabledKinds)
+        fetchWith(followFilter) else emptyList()
     android.util.Log.d("NostrRepository",
-        "fetchNotifications: reactions=${reactions.size} zaps=${zaps.size} reposts=${reposts.size} mentions=${mentions.size} badges=${badges.size}")
+        "fetchNotifications: reactions=${reactions.size} zaps=${zaps.size} reposts=${reposts.size} mentions=${mentions.size} badges=${badges.size} follows=${follows.size}")
 
     // Build notification items
     val notificationItems = mutableListOf<NotificationItem>()
@@ -106,7 +134,7 @@ suspend fun NostrRepository.fetchNotifications(pubkeyHex: String, limit: Int = 5
     val notifierPubkeys = mutableSetOf<String>()
 
     for (event in reactions) {
-        if (event.pubkey == pubkeyHex) continue // Skip self-reactions
+        if (!canNotify(event.pubkey)) continue
         val targetEvent = event.getTagValue("e")
         val emojiTag = event.tags.firstOrNull { it.getOrNull(0) == "emoji" }
         val emojiUrl = emojiTag?.getOrNull(2)
@@ -175,7 +203,7 @@ suspend fun NostrRepository.fetchNotifications(pubkeyHex: String, limit: Int = 5
     }
 
     for (event in reposts) {
-        if (event.pubkey == pubkeyHex) continue
+        if (!canNotify(event.pubkey)) continue
         val targetEvent = event.getTagValue("e")
         targetEvent?.let { targetEventIds.add(it) }
         notifierPubkeys.add(event.pubkey)
@@ -192,7 +220,7 @@ suspend fun NostrRepository.fetchNotifications(pubkeyHex: String, limit: Int = 5
     }
 
     for (event in mentions) {
-        if (event.pubkey == pubkeyHex) continue
+        if (!canNotify(event.pubkey)) continue
         // Distinguish reply (has "e" tag) vs plain mention (only "p" tag)
         val targetEvent = event.getTagValue("e")
         targetEvent?.let { targetEventIds.add(it) }
@@ -212,7 +240,7 @@ suspend fun NostrRepository.fetchNotifications(pubkeyHex: String, limit: Int = 5
     }
 
     for (event in badges) {
-        if (event.pubkey == pubkeyHex) continue
+        if (!canNotify(event.pubkey)) continue
         notifierPubkeys.add(event.pubkey)
         // バッジ名: "a" タグ "30009:pubkey:d-tag" の d-tag 部分
         val aRef = event.tags.find { it.getOrNull(0) == "a" && it.getOrNull(1)?.startsWith("30009:") == true }
@@ -228,6 +256,57 @@ suspend fun NostrRepository.fetchNotifications(pubkeyHex: String, limit: Int = 5
         )
     }
 
+
+
+    // Follow notifications: mirror iOS high-water + known-followers de-duplication.
+    // Kind 3 is a full contact-list replacement. If someone already follows me,
+    // every later contact-list update still contains my pubkey, so it must not be
+    // treated as a new follow. Notify only on an author first seen after the last
+    // processed high-water mark; baseline existing followers without emitting.
+    if (follows.isNotEmpty()) {
+        val allCandidates = follows
+            .filter { it.pubkey != pubkeyHex }
+            .filter { event -> event.tags.any { it.firstOrNull() == "p" && it.getOrNull(1) == pubkeyHex } }
+            .sortedBy { it.createdAt }
+        if (allCandidates.isNotEmpty()) {
+            val previousHighWater = prefs.notificationFollowLastSeenAt
+            val maxSeenAt = maxOf(previousHighWater, allCandidates.maxOfOrNull { it.createdAt.toLong() } ?: previousHighWater)
+            val knownFollowers = prefs.notificationKnownFollowerPubkeys.toMutableSet()
+
+            // 初回、または過去版で high-water だけ保存され known が空の状態は、まず現存フォロワーをベースライン化する。
+            // ここで通知は出さない（既存フォロワーの contact list 更新を重複通知しないため）。
+            if (previousHighWater == 0L || knownFollowers.isEmpty()) {
+                knownFollowers.addAll(allCandidates.map { it.pubkey })
+                prefs.notificationKnownFollowerPubkeys = knownFollowers
+                prefs.notificationFollowLastSeenAt = maxSeenAt
+                android.util.Log.d("NostrRepository", "NotificationFollow baseline known=${knownFollowers.size} highWater=$maxSeenAt all=${allCandidates.size}")
+            } else {
+                val emittedAuthors = mutableSetOf<String>()
+                for (event in allCandidates) {
+                    val wasKnown = event.pubkey in knownFollowers
+                    val isNewEvent = event.createdAt.toLong() > previousHighWater
+                    if (isNewEvent && !wasKnown && canNotify(event.pubkey) && emittedAuthors.add(event.pubkey)) {
+                        notifierPubkeys.add(event.pubkey)
+                        notificationItems.add(
+                            NotificationItem(
+                                id = event.id,
+                                pubkey = event.pubkey,
+                                type = "follow",
+                                createdAt = event.createdAt,
+                                comment = null
+                            )
+                        )
+                    }
+                    // canNotify で除外した相手も既知化し、設定変更後に古い Kind 3 が通知化されるのを防ぐ。
+                    knownFollowers.add(event.pubkey)
+                }
+                prefs.notificationKnownFollowerPubkeys = knownFollowers
+                prefs.notificationFollowLastSeenAt = maxSeenAt
+                android.util.Log.d("NostrRepository", "NotificationFollow all=${allCandidates.size} emitted=${emittedAuthors.size} known=${knownFollowers.size} prevHighWater=$previousHighWater highWater=$maxSeenAt")
+            }
+        }
+    }
+
     // Fetch original posts
     val originalPosts = mutableMapOf<String, NostrEvent>()
     if (targetEventIds.isNotEmpty()) {
@@ -241,8 +320,8 @@ suspend fun NostrRepository.fetchNotifications(pubkeyHex: String, limit: Int = 5
     // Fetch notifier profiles
     val profiles = fetchProfiles(notifierPubkeys.toList())
 
-    // Sort by time descending
-    val sorted = notificationItems.sortedByDescending { it.createdAt }
+    // Sort by time descending and remove duplicated follow notifications by follower pubkey.
+    val sorted = dedupeFollowNotifications(notificationItems)
 
     val result = NotificationResult(sorted, profiles, originalPosts)
 
@@ -252,6 +331,22 @@ suspend fun NostrRepository.fetchNotifications(pubkeyHex: String, limit: Int = 5
     } catch (_: Exception) { }
 
     return result
+}
+
+
+private fun dedupeFollowNotifications(items: List<NotificationItem>): List<NotificationItem> {
+    val seenFollowPubkeys = mutableSetOf<String>()
+    val seenIds = mutableSetOf<String>()
+    return items
+        .sortedByDescending { it.createdAt }
+        .filter { item ->
+            if (item.type == "follow") {
+                // 同じフォロワーの Kind 3 更新が複数リレー/複数回届いても、最新1件だけ表示する。
+                seenFollowPubkeys.add(item.pubkey)
+            } else {
+                seenIds.add(item.id)
+            }
+        }
 }
 
 /**

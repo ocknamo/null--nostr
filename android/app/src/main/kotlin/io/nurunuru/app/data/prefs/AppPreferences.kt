@@ -85,6 +85,11 @@ class AppPreferences(context: Context) {
             // nip65Relays
             val nip65 = securePrefs.getString(KEY_NIP65_RELAYS, null)
             if (nip65 != null) editor.putString(KEY_NIP65_RELAYS, nip65)
+            // MLS / Marmot relay settings
+            val mlsKeyPackageRelays = securePrefs.getString(KEY_MLS_KEY_PACKAGE_RELAYS, null)
+            if (mlsKeyPackageRelays != null) editor.putString(KEY_MLS_KEY_PACKAGE_RELAYS, mlsKeyPackageRelays)
+            val mlsInboxRelays = securePrefs.getString(KEY_MLS_INBOX_RELAYS, null)
+            if (mlsInboxRelays != null) editor.putString(KEY_MLS_INBOX_RELAYS, mlsInboxRelays)
 
             editor.putBoolean(KEY_PLAIN_MIGRATED, true)
             editor.apply()
@@ -216,6 +221,26 @@ class AppPreferences(context: Context) {
             plainPrefs.edit().putString(KEY_NIP65_RELAYS, jsonStr).apply()
         }
 
+    /** Marmot/WhiteNoise MLS KeyPackage discovery relays (kind:10051 + KeyPackage publish targets). */
+    var mlsKeyPackageRelays: List<String>
+        get() {
+            val jsonStr = plainPrefs.getString(KEY_MLS_KEY_PACKAGE_RELAYS, "[]") ?: "[]"
+            return try { Json.decodeFromString(jsonStr) } catch (_: Exception) { emptyList() }
+        }
+        set(value) {
+            plainPrefs.edit().putString(KEY_MLS_KEY_PACKAGE_RELAYS, Json.encodeToString(value)).apply()
+        }
+
+    /** Marmot/NIP-17 inbox relays (kind:10050) where peers should send Welcomes/MLS wrappers. */
+    var mlsInboxRelays: List<String>
+        get() {
+            val jsonStr = plainPrefs.getString(KEY_MLS_INBOX_RELAYS, "[]") ?: "[]"
+            return try { Json.decodeFromString(jsonStr) } catch (_: Exception) { emptyList() }
+        }
+        set(value) {
+            plainPrefs.edit().putString(KEY_MLS_INBOX_RELAYS, Json.encodeToString(value)).apply()
+        }
+
     var externalApps: String
         get() = plainPrefs.getString(KEY_EXTERNAL_APPS, "[]") ?: "[]"
         set(value) = plainPrefs.edit().putString(KEY_EXTERNAL_APPS, value).apply()
@@ -225,7 +250,7 @@ class AppPreferences(context: Context) {
         set(value) = plainPrefs.edit().putInt(KEY_DEFAULT_ZAP_AMOUNT, value).apply()
 
     var autoSignEnabled: Boolean
-        get() = plainPrefs.getBoolean(KEY_AUTO_SIGN_ENABLED, true)
+        get() = plainPrefs.getBoolean(KEY_AUTO_SIGN_ENABLED, false)
         set(value) = plainPrefs.edit().putBoolean(KEY_AUTO_SIGN_ENABLED, value).apply()
 
     // ElevenLabs APIキーは機密なので securePrefs に残す
@@ -306,6 +331,7 @@ class AppPreferences(context: Context) {
                     io.nurunuru.app.data.models.NostrKind.ZAP_RECEIPT,
                     io.nurunuru.app.data.models.NostrKind.REPOST,
                     io.nurunuru.app.data.models.NostrKind.TEXT_NOTE,
+                    io.nurunuru.app.data.models.NostrKind.CONTACT_LIST,
                     io.nurunuru.app.data.models.NostrKind.BADGE_AWARD
                 )
             } else {
@@ -319,6 +345,24 @@ class AppPreferences(context: Context) {
     var notificationEmojiReactionEnabled: Boolean
         get() = plainPrefs.getBoolean("notif_emoji_reaction_enabled", true)
         set(value) { plainPrefs.edit().putBoolean("notif_emoji_reaction_enabled", value).apply() }
+
+    var hasAcceptedTerms: Boolean
+        get() = plainPrefs.getBoolean(KEY_HAS_ACCEPTED_TERMS, false)
+        set(value) { plainPrefs.edit().putBoolean(KEY_HAS_ACCEPTED_TERMS, value).apply() }
+
+    var notificationSenderScope: NotificationSenderScope
+        get() = NotificationSenderScope.fromValue(plainPrefs.getString(KEY_NOTIFICATION_SENDER_SCOPE, null))
+        set(value) { plainPrefs.edit().putString(KEY_NOTIFICATION_SENDER_SCOPE, value.value).apply() }
+
+    /** フォロー通知の重複抑止用: 既知フォロワー pubkey（iOS notificationKnownFollowerPubkeys と同じ）。 */
+    var notificationKnownFollowerPubkeys: Set<String>
+        get() = plainPrefs.getStringSet(KEY_NOTIFICATION_KNOWN_FOLLOWERS, emptySet()) ?: emptySet()
+        set(value) { plainPrefs.edit().putStringSet(KEY_NOTIFICATION_KNOWN_FOLLOWERS, value).apply() }
+
+    /** フォロー通知の重複抑止用: 処理済み Kind 3 の最大 created_at（iOS notificationFollowLastSeenAt と同じ）。 */
+    var notificationFollowLastSeenAt: Long
+        get() = plainPrefs.getLong(KEY_NOTIFICATION_FOLLOW_LAST_SEEN_AT, 0L)
+        set(value) { plainPrefs.edit().putLong(KEY_NOTIFICATION_FOLLOW_LAST_SEEN_AT, value).apply() }
 
     fun clear() {
         securePrefs.edit().clear().apply()
@@ -348,9 +392,27 @@ class AppPreferences(context: Context) {
         private const val KEY_MAIN_RELAY = "main_relay"
         private const val KEY_PLAIN_MIGRATED = "plain_migrated_v1"
         private const val KEY_NOTIFICATION_KINDS = "notification_enabled_kinds"
+        private const val KEY_NOTIFICATION_SENDER_SCOPE = "notification_sender_scope"
+        private const val KEY_NOTIFICATION_KNOWN_FOLLOWERS = "notification_known_followers"
+        private const val KEY_NOTIFICATION_FOLLOW_LAST_SEEN_AT = "notification_follow_last_seen_at"
+        private const val KEY_HAS_ACCEPTED_TERMS = "has_accepted_terms"
         private const val KEY_MLS_SELF_UPDATE_SUCCESS_PREFIX = "mls_self_update_success_at_"
         private const val KEY_MLS_PUBLISHED_KEY_PACKAGE_EVENT_ID = "mls_published_key_package_event_id"
         private const val KEY_MLS_PUBLISHED_KEY_PACKAGE_AT = "mls_published_key_package_at"
         private const val KEY_MLS_CONSUMED_KEY_PACKAGE_EVENT_IDS = "mls_consumed_key_package_event_ids"
+        private const val KEY_MLS_KEY_PACKAGE_RELAYS = "mls_key_package_relays"
+        private const val KEY_MLS_INBOX_RELAYS = "mls_inbox_relays"
+    }
+}
+
+
+enum class NotificationSenderScope(val value: String, val label: String, val description: String) {
+    ALL("all", "全員", "すべてのユーザーからの通知を表示"),
+    FOLLOWING("following", "フォロー中のみ", "フォローしているユーザーからの通知のみ表示"),
+    NETWORK("network", "ネットワーク", "フォローしている人がフォローしているユーザーまで表示");
+
+    companion object {
+        fun fromValue(value: String?): NotificationSenderScope =
+            values().firstOrNull { it.value == value } ?: ALL
     }
 }

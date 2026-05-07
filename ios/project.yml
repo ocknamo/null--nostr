@@ -41,8 +41,10 @@ targets:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
         NSFaceIDUsageDescription: 秘密鍵の保護に生体認証を使用します
+        NSCameraUsageDescription: ろくなな動画の録画とQRコード読み取りのためにカメラを使用します
         NSSpeechRecognitionUsageDescription: 投稿や引用投稿で音声入力を行うために音声認識を使用します
-        NSMicrophoneUsageDescription: 投稿や引用投稿で音声入力を行うためにマイクを使用します
+        NSMicrophoneUsageDescription: 投稿や引用投稿、ろくなな動画録画で音声を収録するためにマイクを使用します
+        NSPhotoLibraryUsageDescription: ろくなな動画投稿のためにフォトライブラリから動画を選択します
         NSLocationWhenInUseUsageDescription: 最寄りのNostrリレーを自動検出するために位置情報を使用します
         LSRequiresIPhoneOS: true
         UISupportedInterfaceOrientations:

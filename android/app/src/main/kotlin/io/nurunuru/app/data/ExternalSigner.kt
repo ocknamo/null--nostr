@@ -7,202 +7,171 @@ import android.util.Log
 import io.nurunuru.app.MainActivity
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
+/**
+ * NIP-55 / Amber signer bridge.
+ *
+ * Important rules:
+ * - sign_event first tries Amber ContentProvider.  If Amber has a remembered
+ *   approval (1m/5m/10m/Always/full trust), this signs silently and Amber UI never opens.
+ * - If ContentProvider explicitly says "rejected", there is no remembered
+ *   approval, so we open Amber ActivityResult UI.  The user can then choose
+ *   Never / 1m / 5m / 10m / Always.
+ * - Background NIP-04/44 encrypt/decrypt never opens Amber UI unless the app's
+ *   own autoSignEnabled setting allows ContentProvider use.
+ */
 object ExternalSigner : AppSigner {
     private const val TAG = "ExternalSigner"
-    private var currentUserPubkey: String = ""
-
-    fun setCurrentUser(pubkey: String) {
-        currentUserPubkey = pubkey
-    }
-
     private const val PACKAGE_NAME = "com.greenart7c3.nostrsigner"
+    private const val CALLER_PACKAGE = "io.nurunuru.app"
 
-    // NIP-55 Actions (Official)
-    private const val ACTION_GET_PUBLIC_KEY = "com.nostr.signer.GET_PUBLIC_KEY"
-    private const val ACTION_SIGN_EVENT = "com.nostr.signer.SIGN_EVENT"
-    private const val ACTION_NIP04_ENCRYPT = "com.nostr.signer.NIP_04_ENCRYPT"
-    private const val ACTION_NIP04_DECRYPT = "com.nostr.signer.NIP_04_DECRYPT"
-    private const val ACTION_NIP44_ENCRYPT = "com.nostr.signer.NIP_44_ENCRYPT"
-    private const val ACTION_NIP44_DECRYPT = "com.nostr.signer.NIP_44_DECRYPT"
-
-    // Legacy Amber Actions (Backwards compatibility)
-    private const val ACTION_GET_PUBLIC_KEY_LEGACY = "com.greenart7c3.nostr.signer.GET_PUBLIC_KEY"
-    private const val ACTION_SIGN_EVENT_LEGACY = "com.greenart7c3.nostr.signer.SIGN_EVENT"
-
-    // NIP-55 Content Provider URIs (try multiple authorities for compatibility)
-    private val CONTENT_URIS = listOf(
-        "content://com.greenart7c3.nostrsigner",
-        "content://com.nostr.signer"
-    )
-    @Volatile private var workingContentUri: String? = null
-
+    private var currentUserPubkey: String = ""
     private var pendingRequest: CompletableDeferred<Intent>? = null
     private val mutex = kotlinx.coroutines.sync.Mutex()
 
-    fun createGetPublicKeyIntent(context: Context?): Intent {
-        // Request auto-sign permissions for all operations this app needs.
-        // Amber will ask the user once to grant these; subsequent ContentProvider
-        // calls will then succeed silently without showing the approval UI.
-        val permissions = """[
-            {"type":"sign_event","kind":0},
-            {"type":"sign_event","kind":1},
-            {"type":"sign_event","kind":3},
-            {"type":"sign_event","kind":4},
-            {"type":"sign_event","kind":5},
-            {"type":"sign_event","kind":6},
-            {"type":"sign_event","kind":7},
-            {"type":"sign_event","kind":443},
-            {"type":"sign_event","kind":444},
-            {"type":"sign_event","kind":445},
-            {"type":"sign_event","kind":30443},
-            {"type":"sign_event","kind":10051},
-            {"type":"sign_event","kind":10000},
-            {"type":"sign_event","kind":10002},
-            {"type":"sign_event","kind":30030},
-            {"type":"sign_event","kind":30008},
-            {"type":"sign_event","kind":1984},
-            {"type":"sign_event","kind":1985},
-            {"type":"nip04_encrypt"},
-            {"type":"nip04_decrypt"},
-            {"type":"nip44_encrypt"},
-            {"type":"nip44_decrypt"}
-        ]""".trimIndent().replace("\n", "").replace("  ", "")
-        return Intent(Intent.ACTION_VIEW, Uri.parse("nostrsigner:")).apply {
+    // Try Amber first, then generic package authority.
+    private val contentAuthorities = listOf(
+        "com.greenart7c3.nostrsigner",
+        "com.nostr.signer"
+    )
+    @Volatile private var workingAuthority: String? = null
+
+    fun setCurrentUser(pubkey: String) { currentUserPubkey = pubkey }
+
+    fun createGetPublicKeyIntent(context: Context?): Intent =
+        Intent(Intent.ACTION_VIEW, Uri.parse("nostrsigner:")).apply {
             `package` = PACKAGE_NAME
             putExtra("type", "get_public_key")
-            putExtra("permissions", permissions)
-            // Amber 5.x requires the calling package name to register app in ContentProvider DB.
-            // Without this, ContentProvider queries return null (app not trusted).
-            putExtra("package", "io.nurunuru.app")
+            // Account selection only. Do not pass permissions here; Amber should let
+            // the user set remember policy from each approval screen.
+            putExtra("package", CALLER_PACKAGE)
             addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
-    }
 
-    fun createSignEventIntent(context: Context?, eventJson: String, pubkey: String): Intent {
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("nostrsigner:$eventJson")).apply {
+    private fun createSignEventIntent(eventJson: String, pubkey: String): Intent =
+        Intent(Intent.ACTION_VIEW, Uri.parse("nostrsigner:$eventJson")).apply {
             `package` = PACKAGE_NAME
             putExtra("type", "sign_event")
+            putExtra("event_json", eventJson)
             putExtra("current_user", pubkey)
-            putExtra("package", "io.nurunuru.app")
-            try {
-                val id = Json.parseToJsonElement(eventJson).jsonObject["id"]?.jsonPrimitive?.content
-                if (id != null) putExtra("id", id)
-            } catch (e: Exception) {}
+            putExtra("package", CALLER_PACKAGE)
             putExtra("returnType", "event")
             addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
-        return intent
-    }
 
-    fun createDecryptIntent(content: String, pubkey: String, currentUser: String, nip44: Boolean): Intent {
-        return Intent(Intent.ACTION_VIEW, Uri.parse("nostrsigner:$content")).apply {
+    private fun createCryptoIntent(content: String, pubkey: String, currentUser: String, type: String): Intent =
+        Intent(Intent.ACTION_VIEW, Uri.parse("nostrsigner:$content")).apply {
             `package` = PACKAGE_NAME
-            putExtra("type", if (nip44) "nip44_decrypt" else "nip04_decrypt")
+            putExtra("type", type)
             putExtra("current_user", currentUser)
             putExtra("pubkey", pubkey)
             putExtra("returnType", "signature")
             addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
-    }
 
-    fun createEncryptIntent(content: String, pubkey: String, currentUser: String, nip44: Boolean): Intent {
-        return Intent(Intent.ACTION_VIEW, Uri.parse("nostrsigner:$content")).apply {
-            `package` = PACKAGE_NAME
-            putExtra("type", if (nip44) "nip44_encrypt" else "nip04_encrypt")
-            putExtra("current_user", currentUser)
-            putExtra("pubkey", pubkey)
-            putExtra("returnType", "signature")
-            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        }
-    }
-
-    suspend fun signEvent(context: Context?, eventJson: String, pubkey: String): String? {
-        Log.d(TAG, "Requesting signature")
-        val intent = createSignEventIntent(context, eventJson, pubkey)
-        val result = request(context, intent) ?: run {
+    suspend fun signEvent(context: Context?, eventJson: String, pubkey: String, requireManualApproval: Boolean = false): String? {
+        Log.d(TAG, "Requesting sign_event")
+        val result = request(context, createSignEventIntent(eventJson, pubkey)) ?: run {
             Log.w(TAG, "Signing request failed or cancelled")
             return null
         }
+        return parseSignedResult(result, eventJson, pubkey)
+    }
 
-        val signedEvent = result.getStringExtra("event")
-        if (signedEvent != null && signedEvent.isNotBlank()) {
-            return signedEvent
+    private fun parseSignedResult(result: Intent, eventJson: String, pubkey: String): String? {
+        result.getStringExtra("event")?.takeIf { it.isNotBlank() }?.let { return it }
+        val value = result.getStringExtra("signature")
+            ?: result.getStringExtra("sig")
+            ?: result.getStringExtra("result")
+            ?: result.data?.toString()?.removePrefix("nostrsigner:")
+        if (value.isNullOrBlank()) {
+            Log.w(TAG, "No event or signature found in signer result")
+            return null
         }
 
-        val signature = result.getStringExtra("signature") ?: result.getStringExtra("sig") ?: result.getStringExtra("result") ?: result.data?.toString()?.removePrefix("nostrsigner:")
-        if (signature != null && signature.isNotBlank()) {
-
-            // Check if it's already a full signed event JSON
-            if (signature.trim().startsWith("{")) {
-                try {
-                    val jsonObj = Json.parseToJsonElement(signature).jsonObject
-                    if (jsonObj.containsKey("sig") || jsonObj.containsKey("signature")) {
-                        return signature
-                    }
-                } catch (_: Exception) {}
-            }
-
-            // Reconstruct event if only signature is returned
-            return try {
-                val map = Json.parseToJsonElement(eventJson).jsonObject.toMutableMap()
-                map["sig"] = kotlinx.serialization.json.JsonPrimitive(signature)
-
-                // Ensure pubkey is present (required for Event.fromJson)
-                if (!map.containsKey("pubkey")) {
-                    map["pubkey"] = kotlinx.serialization.json.JsonPrimitive(pubkey)
-                }
-
-                // Ensure id is present (some signers might strip it or expect it)
-                if (!map.containsKey("id")) {
-                    try {
-                        val id = Json.parseToJsonElement(eventJson).jsonObject["id"]?.jsonPrimitive?.content
-                        if (id != null) map["id"] = kotlinx.serialization.json.JsonPrimitive(id)
-                    } catch (e: Exception) {}
-                }
-
-                Json.encodeToString(JsonObject(map))
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to reconstruct event", e)
-                null
-            }
+        if (value.trim().startsWith("{")) {
+            try {
+                val obj = Json.parseToJsonElement(value).jsonObject
+                if (obj.containsKey("sig") || obj.containsKey("signature")) return value
+            } catch (_: Exception) {}
         }
-        Log.w(TAG, "No event or signature found in signer result")
-        return null
+
+        return try {
+            val map = Json.parseToJsonElement(eventJson).jsonObject.toMutableMap()
+            map["sig"] = kotlinx.serialization.json.JsonPrimitive(value)
+            if (!map.containsKey("pubkey")) map["pubkey"] = kotlinx.serialization.json.JsonPrimitive(pubkey)
+            if (!map.containsKey("id")) {
+                Json.parseToJsonElement(eventJson).jsonObject["id"]?.jsonPrimitive?.content?.let {
+                    map["id"] = kotlinx.serialization.json.JsonPrimitive(it)
+                }
+            }
+            Json.encodeToString(JsonObject(map))
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to reconstruct signed event", e)
+            null
+        }
     }
 
     suspend fun decrypt(context: Context?, content: String, pubkey: String, currentUser: String, nip44: Boolean): String? {
-        val intent = createDecryptIntent(content, pubkey, currentUser, nip44)
-        val result = request(context, intent) ?: return null
-        return result.getStringExtra("signature") ?: result.getStringExtra("sig") ?: result.getStringExtra("content") ?: result.getStringExtra("result") ?: result.data?.toString()?.removePrefix("nostrsigner:")
+        val type = if (nip44) "nip44_decrypt" else "nip04_decrypt"
+        return request(context, createCryptoIntent(content, pubkey, currentUser, type))?.extractCryptoResult()
     }
 
     suspend fun encrypt(context: Context?, content: String, pubkey: String, currentUser: String, nip44: Boolean): String? {
-        val intent = createEncryptIntent(content, pubkey, currentUser, nip44)
-        val result = request(context, intent) ?: return null
-        return result.getStringExtra("signature") ?: result.getStringExtra("sig") ?: result.getStringExtra("content") ?: result.getStringExtra("result") ?: result.data?.toString()?.removePrefix("nostrsigner:")
+        val type = if (nip44) "nip44_encrypt" else "nip04_encrypt"
+        return request(context, createCryptoIntent(content, pubkey, currentUser, type))?.extractCryptoResult()
     }
+
+    private fun Intent.extractCryptoResult(): String? =
+        getStringExtra("signature") ?: getStringExtra("sig") ?: getStringExtra("content") ?: getStringExtra("result") ?: data?.toString()?.removePrefix("nostrsigner:")
 
     private suspend fun request(context: Context?, intent: Intent): Intent? = mutex.withLock {
         val ctx = context ?: MainActivity.instance ?: return null
+        val type = intent.getStringExtra("type") ?: return null
 
-        // ContentProvider クエリはブロッキング I/O — IO スレッドで実行してメインをブロックしない
-        val resultIntent = withContext(Dispatchers.IO) { tryContentResolver(ctx, intent) }
-        if (resultIntent != null) return resultIntent
+        if (type == "sign_event") {
+            when (val provider = withContext(Dispatchers.IO) { queryContentProvider(ctx, intent) }) {
+                is ProviderResult.Success -> {
+                    Log.d(TAG, "Amber remembered approval success via ContentProvider; no UI")
+                    return provider.intent
+                }
+                ProviderResult.Rejected -> {
+                    Log.d(TAG, "Amber ContentProvider reports no remembered approval; opening approval UI")
+                    return launchForResult(ctx, intent)
+                }
+                ProviderResult.Unavailable -> {
+                    Log.d(TAG, "Amber ContentProvider unavailable; opening approval UI")
+                    return launchForResult(ctx, intent)
+                }
+            }
+        }
 
-        // Fallback to Intent (App switching)
-        Log.d(TAG, "ContentProvider returned null, falling back to Intent (type=${intent.getStringExtra("type")})")
+        val autoSignEnabled = (ctx.applicationContext as? io.nurunuru.app.NuruNuruApp)?.prefs?.autoSignEnabled ?: false
+        if (autoSignEnabled) {
+            return when (val provider = withContext(Dispatchers.IO) { queryContentProvider(ctx, intent) }) {
+                is ProviderResult.Success -> provider.intent
+                ProviderResult.Rejected, ProviderResult.Unavailable -> null
+            }
+        }
+
+        if (type.startsWith("nip04_") || type.startsWith("nip44_")) {
+            Log.d(TAG, "Skipping automatic Amber request for background crypto (type=$type)")
+            return null
+        }
+
+        return launchForResult(ctx, intent)
+    }
+
+    private suspend fun launchForResult(ctx: Context, intent: Intent): Intent? {
         val deferred = CompletableDeferred<Intent>()
         pendingRequest = deferred
-
-        // Activity 起動はメインスレッドで行う
         val launched = withContext(Dispatchers.Main.immediate) {
             when {
                 ctx is MainActivity -> { ctx.launchExternalSigner(intent); true }
@@ -214,155 +183,112 @@ object ExternalSigner : AppSigner {
             pendingRequest = null
             return null
         }
-
-        Log.d(TAG, "Intent launched, awaiting result...")
         return try {
-            val result = deferred.await()
-            Log.d(TAG, "Deferred completed: extras=${result.extras?.keySet()?.joinToString()}")
-            result
+            deferred.await()
         } catch (e: Exception) {
-            Log.w(TAG, "Deferred cancelled/failed: ${e.message}")
+            Log.w(TAG, "Signer result wait failed: ${e.message}")
             null
         } finally {
             pendingRequest = null
         }
     }
 
-    private fun tryContentResolver(context: Context, intent: Intent): Intent? {
-        val type = intent.getStringExtra("type") ?: return null
-        val data = intent.data?.toString()?.removePrefix("nostrsigner:") ?: ""
-        val currentUser = intent.getStringExtra("current_user") ?: ""
-        val pubKey = intent.getStringExtra("pubkey") ?: ""
-
-        // Try previously working URI first
-        workingContentUri?.let { uri ->
-            val result = queryProvider(context, uri, type, data, currentUser, pubKey)
-            if (result != null) return result
-        }
-
-        // Try all known Content Provider URIs
-        for (uri in CONTENT_URIS) {
-            if (uri == workingContentUri) continue
-            val result = queryProvider(context, uri, type, data, currentUser, pubKey)
-            if (result != null) {
-                workingContentUri = uri
-                Log.d(TAG, "Found working Content Provider URI: $uri")
-                return result
-            }
-        }
-        return null
+    private sealed class ProviderResult {
+        data class Success(val intent: Intent) : ProviderResult()
+        object Rejected : ProviderResult()
+        object Unavailable : ProviderResult()
     }
 
-    private fun queryProvider(
-        context: Context,
-        baseUri: String,
-        type: String,
-        data: String,
-        currentUser: String,
-        pubKey: String
-    ): Intent? {
-        // Amber 5.x ContentProvider authority format: <package>.<METHOD> (dot + uppercase).
-        // e.g. content://com.greenart7c3.nostrsigner.SIGN_EVENT
-        // Path-based (/<method>) and lowercase variants do NOT exist in Amber 5.x
-        // and produce "Failed to find provider info" errors — skip them.
-        // We still try lowercase as a NIP-55 generic fallback for other signers.
-        val methods = listOf(type.uppercase(), type.lowercase())
-        val delimiters = listOf(".")   // only dot-separated; slash-based not used by Amber 5.x
+    private fun queryContentProvider(context: Context, intent: Intent): ProviderResult {
+        val type = intent.getStringExtra("type") ?: return ProviderResult.Unavailable
+        val data = intent.getStringExtra("event_json")
+            ?: intent.data?.toString()?.removePrefix("nostrsigner:")
+            ?: ""
+        val currentUser = intent.getStringExtra("current_user") ?: currentUserPubkey
+        val counterparty = intent.getStringExtra("pubkey") ?: ""
+        val normalizedType = type.uppercase()
 
-        for (delimiter in delimiters) {
-            for (method in methods) {
-                try {
-                    val uri = Uri.parse("${baseUri.removeSuffix("/")}$delimiter$method")
-                    Log.d(TAG, "Querying provider: $uri")
+        val authorities = buildList {
+            workingAuthority?.let { add(it) }
+            addAll(contentAuthorities.filter { it != workingAuthority })
+        }
 
-                    // NIP-55 Content Provider query (Amber / Amethyst compatible format):
-                    // projection[0]: the payload (unsigned event JSON, or ciphertext)
-                    // selection: null — type is already in the URI path, passing "sign_event"
-                    //            as selection causes Amber to return a null cursor
-                    // selectionArgs[0]: account pubkey (hex); [1]: counterparty pubkey if needed
-                    val projection = arrayOf(data)
-                    val selection: String? = null
-                    val selectionArgs = if (pubKey.isNotBlank()) {
-                        arrayOf(currentUser, pubKey)
+        var sawRejected = false
+        for (authority in authorities) {
+            val uri = Uri.parse("content://$authority.$normalizedType")
+            try {
+                Log.d(TAG, "Querying Amber provider: $uri")
+                val projection = if (normalizedType == "SIGN_EVENT") {
+                    // Amber SignerProvider expects projection[0]=json, projection[2]=npub/hex.
+                    // NIP-55 / Amber expect sortOrder=null. Amber then uses
+                    // ContentProvider.callingPackage for app identity. Passing
+                    // "io.nurunuru.app" as sortOrder makes Amber treat it as a
+                    // non-hex pubkey and return null, causing UI flicker.
+                    arrayOf(data, "", currentUser)
+                } else {
+                    // Crypto expects projection[0]=content, projection[1]=counterparty, projection[2]=account.
+                    arrayOf(data, counterparty, currentUser)
+                }
+                val cursor = context.contentResolver.query(
+                    uri,
+                    projection,
+                    null,
+                    null,
+                    null
+                )
+                if (cursor == null) {
+                    Log.d(TAG, "  → null cursor")
+                    continue
+                }
+                cursor.use { c ->
+                    if (!c.moveToFirst()) {
+                        Log.d(TAG, "  → empty cursor")
                     } else {
-                        arrayOf(currentUser)
-                    }
-
-                    Log.d(TAG, "  query: currentUser=${currentUser.take(8)}.., data=${data.take(20)}.., selectionArgs=${selectionArgs.size}")
-                    val cursor = context.contentResolver.query(uri, projection, selection, selectionArgs, null)
-                    if (cursor == null) {
-                        Log.d(TAG, "  → null cursor from $uri")
-                    } else if (!cursor.moveToFirst()) {
-                        Log.d(TAG, "  → empty cursor (${cursor.columnCount} cols) from $uri")
-                        cursor.close()
-                    }
-                    cursor?.use { cursor ->
-                        if (cursor.moveToFirst()) {
-                            val signatureIndex = cursor.getColumnIndex("signature")
-                            val eventIndex = cursor.getColumnIndex("event")
-                            val resultIndex = cursor.getColumnIndex("result")
-
-                            val signature = if (signatureIndex != -1) cursor.getString(signatureIndex) else null
-                            val event = if (eventIndex != -1) cursor.getString(eventIndex) else null
-                            val result = if (resultIndex != -1) cursor.getString(resultIndex) else null
-
-                            if (signature != null || event != null || result != null) {
-                                Log.d(TAG, "ContentProvider success [$uri]: event=${event?.take(20)}, sig=${signature?.take(20)}")
-                                return Intent().apply {
+                        val rejectedIndex = c.getColumnIndex("rejected")
+                        if (rejectedIndex >= 0 && c.getString(rejectedIndex) == "true") {
+                            Log.d(TAG, "  → provider rejected (no remembered approval)")
+                            sawRejected = true
+                        } else {
+                            val signature = c.getColumnIndex("signature").takeIf { it >= 0 }?.let { c.getString(it) }
+                            val event = c.getColumnIndex("event").takeIf { it >= 0 }?.let { c.getString(it) }
+                            val result = c.getColumnIndex("result").takeIf { it >= 0 }?.let { c.getString(it) }
+                            if (!signature.isNullOrBlank() || !event.isNullOrBlank() || !result.isNullOrBlank()) {
+                                workingAuthority = authority
+                                return ProviderResult.Success(Intent().apply {
                                     putExtra("signature", signature)
                                     putExtra("event", event)
                                     putExtra("result", result)
-                                }
+                                })
                             }
 
-                            // If we didn't find the expected columns, try any non-null column as fallback
-                            for (i in 0 until cursor.columnCount) {
-                                val value = cursor.getString(i)
+                            for (i in 0 until c.columnCount) {
+                                val value = c.getString(i)
                                 if (!value.isNullOrBlank()) {
-                                    return Intent().apply { putExtra("signature", value) }
+                                    workingAuthority = authority
+                                    return ProviderResult.Success(Intent().apply { putExtra("signature", value) })
                                 }
                             }
                         }
                     }
-                } catch (e: Exception) {
-                    Log.e(TAG, "ContentProvider query failed [$baseUri$delimiter$method]: ${e::class.simpleName}: ${e.message}")
                 }
+            } catch (e: Exception) {
+                Log.d(TAG, "Provider query failed [$uri]: ${e::class.simpleName}: ${e.message}")
             }
         }
-        return null
+        return if (sawRejected) ProviderResult.Rejected else ProviderResult.Unavailable
     }
 
-    override fun getPublicKeyHex(): String {
-        return currentUserPubkey
-    }
-
-    override suspend fun signEvent(eventJson: String): String? {
-        return signEvent(null, eventJson, getPublicKeyHex())
-    }
-
-    override suspend fun nip04Encrypt(receiverPubkeyHex: String, content: String): String? {
-        return encrypt(null, content, receiverPubkeyHex, getPublicKeyHex(), false)
-    }
-
-    override suspend fun nip04Decrypt(senderPubkeyHex: String, encryptedContent: String): String? {
-        return decrypt(null, encryptedContent, senderPubkeyHex, getPublicKeyHex(), false)
-    }
-
-    override suspend fun nip44Encrypt(receiverPubkeyHex: String, content: String): String? {
-        return encrypt(null, content, receiverPubkeyHex, getPublicKeyHex(), true)
-    }
-
-    override suspend fun nip44Decrypt(senderPubkeyHex: String, encryptedContent: String): String? {
-        return decrypt(null, encryptedContent, senderPubkeyHex, getPublicKeyHex(), true)
-    }
+    override fun getPublicKeyHex(): String = currentUserPubkey
+    override suspend fun signEvent(eventJson: String, requireManualApproval: Boolean): String? = signEvent(null, eventJson, getPublicKeyHex(), requireManualApproval)
+    override suspend fun nip04Encrypt(receiverPubkeyHex: String, content: String): String? = encrypt(null, content, receiverPubkeyHex, getPublicKeyHex(), false)
+    override suspend fun nip04Decrypt(senderPubkeyHex: String, encryptedContent: String): String? = decrypt(null, encryptedContent, senderPubkeyHex, getPublicKeyHex(), false)
+    override suspend fun nip44Encrypt(receiverPubkeyHex: String, content: String): String? = encrypt(null, content, receiverPubkeyHex, getPublicKeyHex(), true)
+    override suspend fun nip44Decrypt(senderPubkeyHex: String, encryptedContent: String): String? = decrypt(null, encryptedContent, senderPubkeyHex, getPublicKeyHex(), true)
 
     fun onResult(intent: Intent?) {
         Log.d(TAG, "onResult called: intent=${if (intent != null) "non-null (extras: ${intent.extras?.keySet()?.joinToString()})" else "null"}")
-        if (intent != null) {
-            pendingRequest?.takeIf { !it.isCompleted }?.complete(intent)
-        } else {
-            pendingRequest?.takeIf { !it.isCompleted }?.cancel()
-        }
+        if (intent != null) pendingRequest?.takeIf { !it.isCompleted }?.complete(intent)
+        else pendingRequest?.takeIf { !it.isCompleted }?.cancel()
         pendingRequest = null
     }
 }

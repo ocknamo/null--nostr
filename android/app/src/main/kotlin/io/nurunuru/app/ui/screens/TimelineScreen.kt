@@ -121,6 +121,7 @@ fun TimelineScreen(
                         viewModel.search(tag)
                     },
                     myPubkey = myPubkey,
+                    onReplyLongPress = { eventId -> onNoteClick?.invoke(eventId) },
                     onNoteClick = onNoteClick
                 )
             }
@@ -185,6 +186,7 @@ private fun TimelineContent(
     onProfileClick: (String) -> Unit,
     onHashtagClick: (String) -> Unit,
     myPubkey: String,
+    onReplyLongPress: (String) -> Unit = {},
     onNoteClick: ((String) -> Unit)? = null
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -303,6 +305,7 @@ private fun TimelineContent(
                                 isOwnPost = post.event.pubkey == myPubkey,
                                 onHashtagClick = onHashtagClick,
                                 onNoteClick = onNoteClick,
+                                onLongPressReply = { onReplyLongPress(post.event.id) },
                                 myPubkey = myPubkey
                             )
                         }

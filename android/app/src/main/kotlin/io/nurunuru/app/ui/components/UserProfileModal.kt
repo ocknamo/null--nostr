@@ -48,6 +48,7 @@ fun UserProfileModal(
     onStartDM: (String) -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val displayedPubkey = uiState.viewingPubkey ?: pubkey
     val nuruColors = io.nurunuru.app.ui.theme.LocalNuruColors.current
     val clipboardManager = LocalClipboardManager.current
 
@@ -58,6 +59,7 @@ fun UserProfileModal(
 
     var showSearch by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    var showFollowList by remember { mutableStateOf(false) }
     var showBirthdayAnimation by remember { mutableStateOf(false) }
 
     // Check for birthday
@@ -127,7 +129,7 @@ fun UserProfileModal(
                                         text = { Text("ミュート", color = nuruColors.error) },
                                         onClick = {
                                             showMenu = false
-                                            viewModel.muteUser(pubkey)
+                                            viewModel.muteUser(displayedPubkey)
                                             onDismiss()
                                         },
                                         leadingIcon = { Icon(NuruIcons.Block, null, tint = nuruColors.error) }
@@ -195,12 +197,13 @@ fun UserProfileModal(
                             badges = uiState.badges,
                             onEditClick = { /* N/A for other profile */ },
                             onFollowClick = {
-                                if (uiState.isFollowing) viewModel.unfollowUser(pubkey)
-                                else viewModel.followUser(pubkey)
+                                if (uiState.isFollowing) viewModel.unfollowUser(displayedPubkey)
+                                else viewModel.followUser(displayedPubkey)
                             },
-                            onMessageClick = if (!uiState.isOwnProfile) ({ onStartDM(pubkey) }) else null,
+                            onMessageClick = if (!uiState.isOwnProfile) ({ onStartDM(displayedPubkey) }) else null,
                             onFollowListClick = {
-                                viewModel.loadFollowProfiles(pubkey)
+                                viewModel.loadFollowProfiles(displayedPubkey)
+                                showFollowList = true
                             },
                             clipboardManager = clipboardManager
                         )
@@ -283,6 +286,20 @@ fun UserProfileModal(
                     containerColor = if (pullRefreshState.isRefreshing || pullRefreshState.progress > 0f) Color.Black else Color.Transparent,
                     contentColor = io.nurunuru.app.ui.theme.LineGreen
                 )
+
+                if (showFollowList) {
+                    FollowListModal(
+                        pubkeys = uiState.followList,
+                        profiles = uiState.followProfiles,
+                        onDismiss = { showFollowList = false },
+                        onUnfollow = { viewModel.unfollowUser(it) },
+                        onProfileClick = {
+                            showFollowList = false
+                            viewModel.loadProfile(it)
+                        },
+                        showUnfollowButtons = uiState.isOwnProfile
+                    )
+                }
 
                 // Birthday Animation Overlay
                 if (showBirthdayAnimation) {

@@ -1,6 +1,7 @@
 package io.nurunuru.app.ui.components
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -25,10 +26,20 @@ fun FollowListModal(
     profiles: Map<String, UserProfile>,
     onDismiss: () -> Unit,
     onUnfollow: (String) -> Unit,
-    onProfileClick: (String) -> Unit
+    onProfileClick: (String) -> Unit,
+    showUnfollowButtons: Boolean = true
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Color.Black) {
-        Column(Modifier.fillMaxWidth().heightIn(min = 400.dp)) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = Color.Black,
+        modifier = Modifier.fillMaxHeight(0.94f)
+    ) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .navigationBarsPadding()
+        ) {
             Text(
                 "フォロー中 (${pubkeys.size})",
                 fontSize = 18.sp,
@@ -37,7 +48,10 @@ fun FollowListModal(
                 modifier = Modifier.padding(16.dp)
             )
             HorizontalDivider(color = BorderColor, thickness = 0.5.dp)
-            LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                contentPadding = PaddingValues(bottom = 16.dp)
+            ) {
                 items(pubkeys) { pk ->
                     val p = profiles[pk]
                     Row(
@@ -63,17 +77,19 @@ fun FollowListModal(
                                 )
                             }
                         }
-                        Button(
-                            onClick = { onUnfollow(pk) },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color.Transparent,
-                                contentColor = Color.Red
-                            ),
-                            border = BorderStroke(1.dp, Color.Red),
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier.height(32.dp)
-                        ) {
-                            Text("解除", fontSize = 12.sp)
+                        if (showUnfollowButtons) {
+                            Button(
+                                onClick = { onUnfollow(pk) },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color.Transparent,
+                                    contentColor = Color.Red
+                                ),
+                                border = BorderStroke(1.dp, Color.Red),
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier.height(32.dp)
+                            ) {
+                                Text("解除", fontSize = 12.sp)
+                            }
                         }
                     }
                     HorizontalDivider(color = BorderColor, thickness = 0.5.dp)

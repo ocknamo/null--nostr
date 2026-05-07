@@ -724,6 +724,82 @@ struct MuteIcon: View {
     }
 }
 
+// MARK: - Short Video Tab (Vine-style loop)
+
+struct ShortVideoTabIcon: View {
+    let filled: Bool
+
+    var body: some View {
+        Canvas { ctx, size in
+            let sx = size.width / 24, sy = size.height / 24
+            let scale = min(sx, sy)
+
+            let phoneRect = CGRect(x: 5.2 * sx, y: 2.5 * sy, width: 13.6 * sx, height: 19 * sy)
+            let phone = Path(roundedRect: phoneRect, cornerRadius: 4.8 * scale)
+
+            if filled {
+                ctx.fill(phone, with: .foreground)
+
+                ctx.blendMode = .destinationOut
+                var cutouts = Path()
+                cutouts.move(to: pt(10.2, 8.2, sx, sy))
+                cutouts.addQuadCurve(to: pt(10.2, 15.8, sx, sy), control: pt(9.4, 12, sx, sy))
+                cutouts.addQuadCurve(to: pt(16.3, 12, sx, sy), control: pt(10.4, 17.1, sx, sy))
+                cutouts.addQuadCurve(to: pt(10.2, 8.2, sx, sy), control: pt(10.4, 6.9, sx, sy))
+                cutouts.closeSubpath()
+
+                cutouts.addEllipse(in: CGRect(x: 8.0 * sx, y: 4.7 * sy, width: 2.2 * sx, height: 2.2 * sy))
+                cutouts.addEllipse(in: CGRect(x: 14.4 * sx, y: 17.2 * sy, width: 1.9 * sx, height: 1.9 * sy))
+                ctx.fill(cutouts, with: .color(.black))
+
+                ctx.blendMode = .normal
+                var shine = Path()
+                shine.move(to: pt(17.1, 4.6, sx, sy))
+                shine.addLine(to: pt(17.7, 5.9, sx, sy))
+                shine.addLine(to: pt(19.0, 6.5, sx, sy))
+                shine.addLine(to: pt(17.7, 7.1, sx, sy))
+                shine.addLine(to: pt(17.1, 8.4, sx, sy))
+                shine.addLine(to: pt(16.5, 7.1, sx, sy))
+                shine.addLine(to: pt(15.2, 6.5, sx, sy))
+                shine.addLine(to: pt(16.5, 5.9, sx, sy))
+                shine.closeSubpath()
+                ctx.fill(shine, with: .foreground)
+            } else {
+                ctx.stroke(phone, with: .foreground, style: StrokeStyle(lineWidth: 1.8 * scale, lineCap: .round, lineJoin: .round))
+
+                var play = Path()
+                play.move(to: pt(10.0, 8.0, sx, sy))
+                play.addQuadCurve(to: pt(10.0, 16.0, sx, sy), control: pt(9.2, 12, sx, sy))
+                play.addQuadCurve(to: pt(16.5, 12, sx, sy), control: pt(10.4, 17.0, sx, sy))
+                play.addQuadCurve(to: pt(10.0, 8.0, sx, sy), control: pt(10.4, 7.0, sx, sy))
+                play.closeSubpath()
+                ctx.fill(play, with: .foreground)
+
+                var loop = Path()
+                loop.move(to: pt(7.6, 6.8, sx, sy))
+                loop.addCurve(to: pt(16.4, 5.8, sx, sy), control1: pt(9.7, 4.2, sx, sy), control2: pt(13.7, 3.8, sx, sy))
+                loop.move(to: pt(16.4, 5.8, sx, sy))
+                loop.addLine(to: pt(15.1, 4.5, sx, sy))
+                loop.move(to: pt(16.4, 5.8, sx, sy))
+                loop.addLine(to: pt(14.7, 6.6, sx, sy))
+                ctx.stroke(loop, with: .foreground, style: StrokeStyle(lineWidth: 1.45 * scale, lineCap: .round, lineJoin: .round))
+
+                var sparkle = Path()
+                sparkle.move(to: pt(17.3, 16.2, sx, sy))
+                sparkle.addLine(to: pt(17.8, 17.4, sx, sy))
+                sparkle.addLine(to: pt(19.0, 17.9, sx, sy))
+                sparkle.addLine(to: pt(17.8, 18.4, sx, sy))
+                sparkle.addLine(to: pt(17.3, 19.6, sx, sy))
+                sparkle.addLine(to: pt(16.8, 18.4, sx, sy))
+                sparkle.addLine(to: pt(15.6, 17.9, sx, sy))
+                sparkle.addLine(to: pt(16.8, 17.4, sx, sy))
+                sparkle.closeSubpath()
+                ctx.fill(sparkle, with: .foreground)
+            }
+        }
+    }
+}
+
 // MARK: - Home (house — no chimney)
 
 struct HomeIcon: View {

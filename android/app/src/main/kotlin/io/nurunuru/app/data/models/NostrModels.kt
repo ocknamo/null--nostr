@@ -127,11 +127,14 @@ data class BadgeInfo(
     val description: String = ""
 )
 
+@Serializable
 data class MuteListData(
     val pubkeys: List<String> = emptyList(),
     val eventIds: List<String> = emptyList(),
     val hashtags: List<String> = emptyList(),
-    val words: List<String> = emptyList()
+    val words: List<String> = emptyList(),
+    val privatePubkeys: List<String> = emptyList(),
+    val publicPubkeys: List<String> = emptyList()
 )
 
 data class ImportResult(
@@ -245,10 +248,11 @@ object NostrKind {
     const val TIME_BASED_EVENT = 31927
     const val CHRONOSTR_EVENT = 31928
     // MLS / Marmot
-    const val MLS_KEY_PACKAGE = 443             // Marmot MIP-00 (Kind 443, per MDK/nostr-sdk spec)
-    const val MLS_KEY_PACKAGE_LEGACY = 30443   // Legacy addressable variant (read-only during migration)
+    const val MLS_KEY_PACKAGE = 30443          // Marmot MIP-00 canonical (addressable)
+    const val MLS_KEY_PACKAGE_LEGACY = 443     // Legacy regular event (migration fallback)
     const val MLS_WELCOME = 1059               // NIP-59 gift-wrapped Welcome (Marmot MIP-02)
     const val MLS_WELCOME_INNER = 444          // Inner rumor kind (unwrapped by Rust)
+    const val MLS_WELCOME_INNER_MARMOT = 10444 // Marmot/WhiteNoise alias seen in the ecosystem
     const val MLS_GROUP_MESSAGE = 445          // Unchanged
     const val MLS_KEY_PACKAGE_RELAYS = 10051
 }

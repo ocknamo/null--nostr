@@ -37,7 +37,7 @@ class InternalSigner(private val keyManager: SecureKeyManager) : AppSigner, Clos
             ?: ensureKeys().publicKey().toHex()
     }
 
-    override suspend fun signEvent(eventJson: String): String? {
+    override suspend fun signEvent(eventJson: String, requireManualApproval: Boolean): String? {
         return try {
             val unsigned = UnsignedEvent.fromJson(eventJson)
             ensureSigner().signEvent(unsigned).asJson()

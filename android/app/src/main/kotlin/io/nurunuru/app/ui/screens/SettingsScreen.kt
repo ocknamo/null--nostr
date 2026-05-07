@@ -30,6 +30,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -72,6 +73,7 @@ import io.nurunuru.app.ui.miniapps.NostrBrowserApp
 import io.nurunuru.app.ui.miniapps.CacheSettings
 import io.nurunuru.app.ui.miniapps.ZapSettings
 import io.nurunuru.app.ui.miniapps.SchedulerApp
+import io.nurunuru.app.ui.miniapps.ScrollsApp
 import io.nurunuru.app.ui.miniapps.VanishRequest
 import io.nurunuru.app.ui.theme.LineGreen
 import io.nurunuru.app.ui.theme.LocalNuruColors
@@ -107,6 +109,7 @@ fun MiniAppData.getIcon(): ImageVector {
         "backup" -> NuruIcons.Backup
         "vanish" -> NuruIcons.Trash
         "cache"  -> Icons.Outlined.Storage
+        "scrolls" -> NuruIcons.Backup
         else -> if (type == "external") Icons.Outlined.OpenInNew else Icons.Outlined.Extension
     }
 }
@@ -153,7 +156,8 @@ fun SettingsScreen(
             MiniAppData("elevenlabs", "音声入力設定", "ElevenLabs Scribeによる高精度な音声入力", "tools"),
             MiniAppData("backup", "バックアップ", "自分の投稿データをJSON形式でエクスポート", "tools"),
             MiniAppData("vanish", "削除リクエスト", "リレーに対して全データの削除を要求", "tools"),
-            MiniAppData("cache", "キャッシュ設定", "キャッシュするkindと保持日数を管理", "tools")
+            MiniAppData("cache", "キャッシュ設定", "キャッシュするkindと保持日数を管理", "tools"),
+            MiniAppData("scrolls", "スクロール", "NIP-A5 WASMミニアプリを実行", "tools")
         )
     }
 
@@ -287,7 +291,13 @@ fun SettingsScreen(
                                 prefs.favoriteApps = favorites.toList()
                             },
                             onClick = { selectedApp = app },
-                            onLongClick = if (app.type == "external") ({ editingApp = app }) else null
+                            onLongClick = if (app.type == "external") ({ editingApp = app }) else null,
+                            onDeleteExternal = if (app.type == "external") ({
+                                externalApps.removeAll { it.id == app.id }
+                                favorites.remove(app.id)
+                                prefs.externalApps = Json.encodeToString(externalApps.toList())
+                                prefs.favoriteApps = favorites.toList()
+                            }) else null
                         )
                     }
                     item {
@@ -359,23 +369,6 @@ fun SettingsScreen(
                         }
                     }
 
-                    item {
-                        val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { uriHandler.openUri("https://tami1A84.github.io/null--nostr/privacy.html") }
-                                .padding(vertical = 14.dp, horizontal = 4.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "プライバシーポリシー",
-                                fontSize = 13.sp,
-                                color = nuruColors.textTertiary,
-                                textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline
-                            )
-                        }
-                    }
                 }
             }
 
@@ -690,9 +683,11 @@ private fun MiniAppRow(
     isFavorite: Boolean,
     onToggleFavorite: () -> Unit,
     onClick: () -> Unit,
-    onLongClick: (() -> Unit)? = null
+    onLongClick: (() -> Unit)? = null,
+    onDeleteExternal: (() -> Unit)? = null
 ) {
     val nuruColors = LocalNuruColors.current
+    var showExternalMenu by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -737,6 +732,37 @@ private fun MiniAppRow(
                 modifier = Modifier.size(20.dp)
             )
         }
+        if (app.type == "external") {
+            Box {
+                IconButton(onClick = { showExternalMenu = true }) {
+                    Icon(
+                        Icons.Default.MoreVert,
+                        contentDescription = "外部ミニアプリの操作",
+                        tint = nuruColors.textTertiary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                DropdownMenu(
+                    expanded = showExternalMenu,
+                    onDismissRequest = { showExternalMenu = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("編集") },
+                        onClick = {
+                            showExternalMenu = false
+                            onLongClick?.invoke()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("削除", color = Color.Red) },
+                        onClick = {
+                            showExternalMenu = false
+                            onDeleteExternal?.invoke()
+                        }
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -762,6 +788,7 @@ private fun MiniAppDetailView(
         "backup" -> "バックアップ"
         "vanish" -> "削除リクエスト"
         "cache"  -> "キャッシュ設定"
+        "scrolls" -> "スクロール"
         else -> app.name
     }
 
@@ -804,6 +831,7 @@ private fun MiniAppDetailView(
                 "vanish" -> VanishRequest(pubkey = pubkeyHex, repository = repository)
                 "cache" -> CacheSettings(prefs = prefs, repository = repository, onMlsCacheCleared = onMlsCacheCleared)
                 "scheduler" -> SchedulerApp(pubkey = pubkeyHex, repository = repository)
+                "scrolls" -> ScrollsApp(repository = repository, pubkeyHex = pubkeyHex)
                 else -> {
                     Column(
                         modifier = Modifier.fillMaxSize(),
@@ -970,6 +998,10 @@ private fun RelaySettingsViewContent(prefs: AppPreferences, repository: NostrRep
     var advancedExpanded by remember { mutableStateOf(false) }
     var newRelayRead by remember { mutableStateOf(true) }
     var newRelayWrite by remember { mutableStateOf(true) }
+    var mlsKeyPackageRelays by remember { mutableStateOf(prefs.mlsKeyPackageRelays) }
+    var mlsInboxRelays by remember { mutableStateOf(prefs.mlsInboxRelays) }
+    var manualKeyPackageRelayUrl by remember { mutableStateOf("") }
+    var manualInboxRelayUrl by remember { mutableStateOf("") }
 
     val selectedRegion = remember(selectedRegionId) {
         RelayDiscovery.REGION_COORDINATES.find { it.id == selectedRegionId }
@@ -1395,6 +1427,27 @@ private fun RelaySettingsViewContent(prefs: AppPreferences, repository: NostrRep
                                 }
                             }
 
+
+                            // MLS / WhiteNoise リレー（iOS と同等）
+                            MlsRelaySettingsSection(
+                                keyPackageRelays = mlsKeyPackageRelays,
+                                inboxRelays = mlsInboxRelays,
+                                manualKeyPackageRelayUrl = manualKeyPackageRelayUrl,
+                                manualInboxRelayUrl = manualInboxRelayUrl,
+                                onManualKeyPackageRelayUrlChange = { manualKeyPackageRelayUrl = it },
+                                onManualInboxRelayUrlChange = { manualInboxRelayUrl = it },
+                                onKeyPackageRelaysChange = { updated ->
+                                    mlsKeyPackageRelays = updated
+                                    prefs.mlsKeyPackageRelays = updated
+                                },
+                                onInboxRelaysChange = { updated ->
+                                    mlsInboxRelays = updated
+                                    prefs.mlsInboxRelays = updated
+                                },
+                                onManualKeyPackageRelayUrlClear = { manualKeyPackageRelayUrl = "" },
+                                onManualInboxRelayUrlClear = { manualInboxRelayUrl = "" }
+                            )
+
                             // 自分のリレーリストを読み込む
                             Button(
                                 onClick = {
@@ -1563,6 +1616,163 @@ private fun RelaySettingsViewContent(prefs: AppPreferences, repository: NostrRep
     }
 }
 
+
+@Composable
+private fun MlsRelaySettingsSection(
+    keyPackageRelays: List<String>,
+    inboxRelays: List<String>,
+    manualKeyPackageRelayUrl: String,
+    manualInboxRelayUrl: String,
+    onManualKeyPackageRelayUrlChange: (String) -> Unit,
+    onManualInboxRelayUrlChange: (String) -> Unit,
+    onKeyPackageRelaysChange: (List<String>) -> Unit,
+    onInboxRelaysChange: (List<String>) -> Unit,
+    onManualKeyPackageRelayUrlClear: () -> Unit,
+    onManualInboxRelayUrlClear: () -> Unit
+) {
+    val nuruColors = LocalNuruColors.current
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Surface(
+            color = nuruColors.bgTertiary,
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text(
+                    "MLS / WhiteNoise リレー",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = nuruColors.textPrimary
+                )
+                Text(
+                    "KeyPackage relays は招待用KeyPackage(30443/443/10051)を置く場所、Marmot Inbox relays はWelcome/MLS受信用(10050)です。トーク画面はMarmot MLS専用で、NIP-17メッセージは表示しません。",
+                    fontSize = 11.sp,
+                    color = nuruColors.textSecondary,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+        }
+
+        MlsRelayListEditor(
+            title = "Key Package Relays (kind:10051)",
+            relays = keyPackageRelays,
+            manualUrl = manualKeyPackageRelayUrl,
+            defaultRelays = listOf(
+                "wss://relay.0xchat.com",
+                "wss://auth.nostr1.com",
+                "wss://relay.damus.io",
+                "wss://relay.primal.net",
+                "wss://nos.lol",
+                "wss://relay.nostr.wirednet.jp",
+                "wss://yabu.me",
+                "wss://r.kojira.io"
+            ),
+            onManualUrlChange = onManualKeyPackageRelayUrlChange,
+            onManualUrlClear = onManualKeyPackageRelayUrlClear,
+            onRelaysChange = onKeyPackageRelaysChange
+        )
+
+        MlsRelayListEditor(
+            title = "Marmot Inbox Relays (kind:10050)",
+            relays = inboxRelays,
+            manualUrl = manualInboxRelayUrl,
+            defaultRelays = listOf(
+                "wss://relay.0xchat.com",
+                "wss://auth.nostr1.com",
+                "wss://yabu.me",
+                "wss://r.kojira.io"
+            ),
+            onManualUrlChange = onManualInboxRelayUrlChange,
+            onManualUrlClear = onManualInboxRelayUrlClear,
+            onRelaysChange = onInboxRelaysChange
+        )
+    }
+}
+
+@Composable
+private fun MlsRelayListEditor(
+    title: String,
+    relays: List<String>,
+    manualUrl: String,
+    defaultRelays: List<String>,
+    onManualUrlChange: (String) -> Unit,
+    onManualUrlClear: () -> Unit,
+    onRelaysChange: (List<String>) -> Unit
+) {
+    val nuruColors = LocalNuruColors.current
+    fun canonical(list: List<String>): List<String> = list
+        .map { it.trim().removeSuffix("/") }
+        .filter { it.startsWith("wss://") || it.startsWith("ws://") }
+        .distinct()
+        .take(10)
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(title, fontSize = 10.sp, color = nuruColors.textTertiary, modifier = Modifier.weight(1f))
+            TextButton(onClick = { onRelaysChange(canonical(defaultRelays)) }) {
+                Text("標準", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = LineGreen)
+            }
+        }
+
+        relays.forEach { relay ->
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = nuruColors.bgTertiary,
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .background(LineGreen, CircleShape)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        relay.replace("wss://", ""),
+                        fontSize = 12.sp,
+                        color = nuruColors.textPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(
+                        onClick = { onRelaysChange(relays.filter { it != relay }) },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(Icons.Outlined.Cancel, null, tint = nuruColors.textTertiary, modifier = Modifier.size(16.dp))
+                    }
+                }
+            }
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = manualUrl,
+                onValueChange = onManualUrlChange,
+                placeholder = { Text("wss://relay.example.com", fontSize = 12.sp) },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                shape = RoundedCornerShape(12.dp),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp)
+            )
+            Button(
+                onClick = {
+                    val url = manualUrl.trim().removeSuffix("/")
+                    if (url.startsWith("wss://") || url.startsWith("ws://")) {
+                        onRelaysChange(canonical(listOf(url) + relays.filter { it != url }))
+                        onManualUrlClear()
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = LineGreen),
+                shape = RoundedCornerShape(12.dp)
+            ) { Text("追加", fontSize = 12.sp) }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ExternalAppEditSheet(
@@ -1651,7 +1861,7 @@ private fun ExternalAppEditSheet(
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Text(
-                            "「${app.name}」を削除しますか？",
+                            "本当に削除しますか？",
                             fontWeight = FontWeight.Medium,
                             fontSize = 14.sp
                         )
@@ -1677,7 +1887,7 @@ private fun ExternalAppEditSheet(
                 ) {
                     Icon(Icons.Default.Delete, null, tint = Color.Red, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("このミニアプリを削除", color = Color.Red, fontSize = 14.sp)
+                    Text("削除", color = Color.Red, fontSize = 14.sp)
                 }
             }
         }

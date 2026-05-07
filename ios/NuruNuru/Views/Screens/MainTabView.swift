@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// 4-tab navigation shell — ホーム / トーク / タイムライン / ミニアプリ.
-/// Mirrors Android MainScreen.kt: AnimatedVisibility tabs, black bottom nav.
+/// 5-tab navigation shell — ホーム / トーク / ろくなな / タイムライン / ミニアプリ.
+/// Current iOS-forward sync target: keep tab content alive and use a black bottom nav.
 struct MainTabView: View {
 
     let pubkeyHex:    String
@@ -27,6 +27,7 @@ struct MainTabView: View {
     @State private var timelineVM:    TimelineViewModel
     @State private var homeVM:        HomeViewModel
     @State private var talkVM:        TalkViewModel
+    @State private var rokunanaVM:    RokunanaViewModel
     @State private var connectionVM:  ConnectionViewModel
 
     init(pubkeyHex: String, authViewModel: AuthViewModel) {
@@ -46,6 +47,7 @@ struct MainTabView: View {
         _timelineVM     = State(initialValue: TimelineViewModel(repository: repo, pubkeyHex: pubkeyHex))
         _homeVM         = State(initialValue: HomeViewModel(repository: repo, myPubkeyHex: pubkeyHex))
         _talkVM         = State(initialValue: TalkViewModel(repository: repo, myPubkeyHex: pubkeyHex))
+        _rokunanaVM     = State(initialValue: RokunanaViewModel(repository: repo, pubkeyHex: pubkeyHex))
         _connectionVM   = State(initialValue: ConnectionViewModel(repository: repo))
     }
 
@@ -107,6 +109,15 @@ struct MainTabView: View {
             // TALK (keep alive)
             tabContent(for: .talk) {
                 TalkView(viewModel: talkVM)
+            }
+
+            // ROKUNANA / diVine short videos (keep alive)
+            tabContent(for: .rokunana) {
+                RokunanaView(
+                    viewModel: rokunanaVM,
+                    onProfileTap: { viewingProfile = ProfileID($0) },
+                    onZap: { zapTarget = $0 }
+                )
             }
 
             // MINIAPP (recreated on demand)
@@ -244,12 +255,13 @@ struct MainTabView: View {
 
     private func bottomTabItem(_ tab: BottomTab) -> some View {
         let selected = activeTab == tab
-        let iconColor = selected ? NuruColors.lineGreen : theme.textTertiary
+        let iconColor = (tab == .rokunana && selected) ? Color.white : (selected ? NuruColors.lineGreen : theme.textTertiary)
         return Button {
             if activeTab == tab {
                 switch tab {
                 case .timeline: Task { await timelineVM.refreshRelay() }
                 case .home:     Task { await homeVM.refresh() }
+                case .rokunana: Task { await rokunanaVM.refresh() }
                 default: break
                 }
             }
@@ -260,11 +272,12 @@ struct MainTabView: View {
             }
         } label: {
             VStack(spacing: 2) {
-                // All custom icons — matches Android NuruIcons exactly
+                // Custom bottom-nav icons styled consistently with Android/iOS tab glyphs.
                 Group {
                     switch tab {
                     case .home:     HomeIcon(filled: selected)
                     case .talk:     TalkIcon(filled: selected)
+                    case .rokunana: ShortVideoTabIcon(filled: selected)
                     case .timeline: TimelineIcon(filled: selected)
                     case .miniapp:  GridIcon(filled: selected)
                     }
@@ -295,12 +308,13 @@ struct ProfileID: Identifiable {
 // MARK: - Bottom Tab Enum
 
 enum BottomTab: CaseIterable {
-    case home, talk, timeline, miniapp
+    case home, talk, rokunana, timeline, miniapp
 
     var label: String {
         switch self {
         case .home:     return "ホーム"
         case .talk:     return "トーク"
+        case .rokunana: return "ろくなな"
         case .timeline: return "タイムライン"
         case .miniapp:  return "ミニアプリ"
         }
@@ -310,6 +324,7 @@ enum BottomTab: CaseIterable {
         switch self {
         case .home:     return NuruIcons.home(filled: true)
         case .talk:     return NuruIcons.talk(filled: true)
+        case .rokunana: return "67"
         case .timeline: return NuruIcons.timeline(filled: true)
         case .miniapp:  return NuruIcons.grid(filled: true)
         }
@@ -319,6 +334,7 @@ enum BottomTab: CaseIterable {
         switch self {
         case .home:     return NuruIcons.home(filled: false)
         case .talk:     return NuruIcons.talk(filled: false)
+        case .rokunana: return "67"
         case .timeline: return NuruIcons.timeline(filled: false)
         case .miniapp:  return NuruIcons.grid(filled: false)
         }

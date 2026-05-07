@@ -46,6 +46,7 @@ fun TalkScreen(viewModel: TalkViewModel, myPubkeyHex: String, repository: NostrR
     val uiState by viewModel.uiState.collectAsState()
 
     LaunchedEffect(Unit) {
+        viewModel.loadGroupsIfNeeded()
         viewModel.ensureKeyPackagePublished()
     }
 
@@ -326,7 +327,7 @@ private fun GroupChatScreen(
             )
             MessageInputBar(
                 onSendMessage = { text ->
-                    viewModel.sendMessage(group.groupIdHex, text)
+                    viewModel.sendMessage(uiState.activeGroup?.groupIdHex ?: group.groupIdHex, text)
                 },
                 onImageAttach = { imagePickerLauncher.launch("image/*") },
                 isSending = isSending,
