@@ -83,6 +83,25 @@
             text-decoration: underline;
             text-underline-offset: 3px;
         }
+        .grant-info {
+            max-width: 560px;
+            color: #ddd;
+            font-size: 0.95rem;
+            line-height: 1.7;
+            text-align: center;
+        }
+        .grant-info a {
+            color: #fff;
+            text-decoration: underline;
+            text-underline-offset: 3px;
+        }
+        .footer-links {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            justify-content: center;
+            align-items: center;
+        }
         .privacy-link {
             font-size: 0.875rem;
             color: #555;
@@ -101,6 +120,12 @@
         class="app-icon"
     >
     <div class="app-name">ぬるぬる</div>
+
+    <section class="grant-info" aria-label="OpenSats Nostr Grant 支援情報">
+        <p>
+            <a href="https://github.com/tami1A84/null--nostr" target="_blank" rel="noopener">ぬるぬる（null--nostr）</a>は、OpenSats の Nostr Grant から支援を受けています。詳しくは OpenSats の記事「<a href="https://opensats.org/blog/sixteenth-wave-of-nostr-grants" target="_blank" rel="noopener">Sixteenth Wave of Nostr Grants</a>」をご覧ください。
+        </p>
+    </section>
 
     <div class="store-buttons">
         <a href="https://play.google.com/store/apps/details?id=io.nurunuru.app" class="store-btn" target="_blank" rel="noopener">
@@ -134,6 +159,10 @@
         </ol>
     </section>
 
-    <a href="privacy.html" class="privacy-link">プライバシーポリシー</a>
+    <nav class="footer-links" aria-label="フッターリンク">
+        <a href="privacy.html" class="privacy-link">プライバシーポリシー</a>
+        <a href="terms.html" class="privacy-link">利用規約</a>
+        <a href="https://gitworkshop.dev/npub194dkgpxl2vk7pqkeualh7sjh5m6rldumh80gm5av0h67d494qzcqum2u20/relay.ngit.dev/null--nostr/tree/" class="privacy-link" target="_blank" rel="noopener">オープンソース</a>
+    </nav>
 </body>
 </html>
