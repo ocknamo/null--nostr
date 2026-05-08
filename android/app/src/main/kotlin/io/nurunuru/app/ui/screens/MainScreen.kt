@@ -12,6 +12,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -20,6 +21,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 import io.nurunuru.app.NuruNuruApp
@@ -27,6 +29,7 @@ import io.nurunuru.app.data.NostrClient
 import io.nurunuru.app.data.NostrRepository
 import io.nurunuru.app.data.SecureKeyManager
 import io.nurunuru.app.data.prefs.AppPreferences
+import io.nurunuru.app.data.models.ScoredPost
 import io.nurunuru.app.ui.components.ConnectionStatusBanner
 import io.nurunuru.app.ui.theme.LineGreen
 import io.nurunuru.app.ui.theme.LocalNuruColors
@@ -58,20 +61,35 @@ fun MainScreen(
     app: NuruNuruApp
 ) {
     val context = LocalContext.current
+    val view = LocalView.current
     val nuruColors = LocalNuruColors.current
     var activeTab by remember { mutableStateOf(BottomTab.TIMELINE) }
     var isExternalAppOpen by remember { mutableStateOf(false) }
     var showAppSettings by remember { mutableStateOf(false) }
     var selectedNoteEventId by remember { mutableStateOf<String?>(null) }
+    var selectedNoteInitialPost by remember { mutableStateOf<ScoredPost?>(null) }
 
     // Create shared NostrClient and Repository
     // NostrCache と RecommendationEngine は NuruNuruApp.onCreate() で事前生成済み。
     // remember { } は参照を保持するだけで SharedPreferences I/O は発生しない。
+    DisposableEffect(view) {
+        val window = (view.context as? android.app.Activity)?.window
+        if (window != null) {
+            window.statusBarColor = android.graphics.Color.BLACK
+            window.navigationBarColor = android.graphics.Color.BLACK
+            WindowCompat.getInsetsController(window, view).isAppearanceLightNavigationBars = false
+            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = false
+        }
+        onDispose { }
+    }
+
+    val activeRelays = remember { app.prefs.nip65Relays.map { it.url }.ifEmpty { app.prefs.relays.toList() } }
     val recommendationEngine = remember { app.recommendationEngine }
     val nostrClient = remember {
-        if (!hasInternalKey && app.prewarmedNostrClient != null) {
-            // Reuse the client pre-warmed in Application.onCreate() — relay
-            // connections are already established by the time we get here.
+        if (!hasInternalKey && app.prewarmedNostrClient != null && app.prefs.nip65Relays.isEmpty()) {
+            // Reuse the startup pre-warmed client only before a NIP-65 relay list is known.
+            // Once login sync has loaded user relays, build the client with those relays so
+            // users with relay lists do not continue on the default startup relays.
             app.prewarmedNostrClient!!
         } else {
             val signer = if (hasInternalKey) {
@@ -83,7 +101,7 @@ fun MainScreen(
             }
             NostrClient(
                 context = context,
-                relays = app.prefs.relays.toList(),
+                relays = activeRelays,
                 signer = signer
             ).also { it.connect() }
         }
@@ -106,7 +124,7 @@ fun MainScreen(
     )
     val connectionVM: ConnectionViewModel = viewModel(
         ConnectionViewModel::class.java,
-        factory = ConnectionViewModel.Factory(context.applicationContext, app.prefs.relays.toList())
+        factory = ConnectionViewModel.Factory(context.applicationContext, activeRelays)
     )
 
     // My profile for post modal avatar
@@ -146,7 +164,7 @@ fun MainScreen(
                 color = Color.Black,
                 tonalElevation = 0.dp
             ) {
-                Column(modifier = Modifier.navigationBarsPadding()) {
+                Column(modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Horizontal))) {
                     // Top border for the nav bar to match web style
                     androidx.compose.material3.HorizontalDivider(
                         color = io.nurunuru.app.ui.theme.BorderColor,
@@ -195,6 +213,7 @@ fun MainScreen(
                             }
                         }
                     }
+                    Spacer(Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars))
                 }
             }
             } // AnimatedVisibility
@@ -230,7 +249,10 @@ fun MainScreen(
                         talkVM.createDmConversation(partnerPubkey)
                         activeTab = BottomTab.TALK
                     },
-                    onNoteClick = { eventId -> selectedNoteEventId = eventId }
+                    onNoteClick = { eventId, post ->
+                        selectedNoteEventId = eventId
+                        selectedNoteInitialPost = post
+                    }
                 )
             }
 
@@ -249,7 +271,10 @@ fun MainScreen(
                         talkVM.createDmConversation(partnerPubkey)
                         activeTab = BottomTab.TALK
                     },
-                    onNoteClick = { eventId -> selectedNoteEventId = eventId }
+                    onNoteClick = { eventId, post ->
+                        selectedNoteEventId = eventId
+                        selectedNoteInitialPost = post
+                    }
                 )
             }
 
@@ -290,11 +315,16 @@ fun MainScreen(
             if (selectedNoteEventId != null) {
                 PostDetailScreen(
                     eventId = selectedNoteEventId!!,
+                    initialPost = selectedNoteInitialPost,
                     repository = repository,
                     myPubkey = pubkeyHex,
-                    onBack = { selectedNoteEventId = null },
+                    onBack = {
+                        selectedNoteEventId = null
+                        selectedNoteInitialPost = null
+                    },
                     onProfileClick = { pubkey ->
                         selectedNoteEventId = null
+                        selectedNoteInitialPost = null
                         homeVM.loadProfile(pubkey)
                         activeTab = BottomTab.HOME
                     }

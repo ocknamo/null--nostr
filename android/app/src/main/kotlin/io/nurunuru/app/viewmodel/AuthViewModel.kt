@@ -66,7 +66,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun checkStoredLogin() {
+    private suspend fun checkStoredLogin() {
         val pubKey = prefs.publicKeyHex
         val isExternal = prefs.isExternalSigner
         val hasSecureKey = keyManager.hasStoredKey()
@@ -75,6 +75,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             if (isExternal) {
                 io.nurunuru.app.data.ExternalSigner.setCurrentUser(pubKey)
                 _authState.value = AuthState.LoggedIn(pubKey, isExternal = true)
+                viewModelScope.launch(Dispatchers.IO) { syncRelayListOnLogin(pubKey, io.nurunuru.app.data.ExternalSigner) }
             } else if (hasSecureKey) {
                 if (keyManager.isBiometricBound()) {
                     // 生体認証が必要 → BiometricRequired 状態にして UI に委譲
@@ -87,6 +88,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                             isExternal = false,
                             hasInternalKey = true
                         )
+                        viewModelScope.launch(Dispatchers.IO) { syncRelayListOnLogin(pubKey, io.nurunuru.app.data.InternalSigner(keyManager)) }
                     } else {
                         _authState.value = AuthState.Error("秘密鍵の復号に失敗しました")
                     }
@@ -109,6 +111,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                     isExternal = false,
                     hasInternalKey = true
                 )
+                launch { syncRelayListOnLogin(pubKey, io.nurunuru.app.data.InternalSigner(keyManager)) }
             } else {
                 _authState.value = AuthState.Error("秘密鍵のアンロックに失敗しました")
             }
@@ -120,7 +123,10 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun onBiometricFallbackSuccess() {
         val pubKey = prefs.publicKeyHex ?: return
-        _authState.value = AuthState.LoggedIn(pubKey, isExternal = false, hasInternalKey = true)
+        viewModelScope.launch(Dispatchers.IO) {
+            _authState.value = AuthState.LoggedIn(pubKey, isExternal = false, hasInternalKey = true)
+            launch { syncRelayListOnLogin(pubKey, io.nurunuru.app.data.InternalSigner(keyManager)) }
+        }
     }
 
     /**
@@ -214,11 +220,32 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private suspend fun syncRelayListOnLogin(pubKeyHex: String, signer: io.nurunuru.app.data.AppSigner) {
+        try {
+            val discoveryRelays = (prefs.nip65Relays.map { it.url } + prefs.relays.toList() + OutboxModel.RELAY_LIST_DISCOVERY_RELAYS).distinct()
+            val client = NostrClient(
+                context = getApplication(),
+                relays = discoveryRelays,
+                signer = signer
+            )
+            client.connect()
+            delay(1200)
+            val cache = io.nurunuru.app.data.cache.NostrCache(getApplication())
+            val recommendationEngine = io.nurunuru.app.data.RecommendationEngine(getApplication())
+            val repository = NostrRepository(client, prefs, cache, recommendationEngine)
+            repository.syncLoggedInUserRelayList(pubKeyHex)
+            client.disconnect()
+        } catch (e: Exception) {
+            android.util.Log.w("AuthViewModel", "syncRelayListOnLogin failed: " + e.message)
+        }
+    }
+
     fun completeRegistration(pubKeyHex: String) {
         viewModelScope.launch(Dispatchers.IO) {
             // 秘密鍵は既に SecureKeyManager に保存済み
             prefs.publicKeyHex = pubKeyHex
             prefs.isExternalSigner = false
+            syncRelayListOnLogin(pubKeyHex, io.nurunuru.app.data.InternalSigner(keyManager))
             _authState.value = AuthState.LoggedIn(pubKeyHex, isExternal = false, hasInternalKey = true)
         }
     }
@@ -230,6 +257,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             prefs.publicKeyHex = pubkeyHex
             prefs.isExternalSigner = true
             io.nurunuru.app.data.ExternalSigner.setCurrentUser(pubkeyHex)
+            syncRelayListOnLogin(pubkeyHex, io.nurunuru.app.data.ExternalSigner)
             _authState.value = AuthState.LoggedIn(pubkeyHex, isExternal = true)
         }
     }
@@ -278,6 +306,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 prefs.isExternalSigner = false
                 prefs.clearPrivateKey()
 
+                syncRelayListOnLogin(pubKeyHex, io.nurunuru.app.data.InternalSigner(keyManager))
                 _authState.value = AuthState.LoggedIn(pubKeyHex, isExternal = false, hasInternalKey = true)
             } catch (e: Exception) {
                 _authState.value = AuthState.Error("ログイン処理中にエラーが発生しました: ${e.message}")

@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// 5-tab navigation shell — ホーム / トーク / ろくなな / タイムライン / ミニアプリ.
+/// 4-tab navigation shell — ホーム / トーク / タイムライン / ミニアプリ.
+/// App Store submission build: ろくなな / diVine short-video related UI is commented out.
 /// Current iOS-forward sync target: keep tab content alive and use a black bottom nav.
 struct MainTabView: View {
 
@@ -27,7 +28,8 @@ struct MainTabView: View {
     @State private var timelineVM:    TimelineViewModel
     @State private var homeVM:        HomeViewModel
     @State private var talkVM:        TalkViewModel
-    @State private var rokunanaVM:    RokunanaViewModel
+    // App Store submission build: ろくなな / diVine short-video ViewModel is disabled.
+    // @State private var rokunanaVM:    RokunanaViewModel
     @State private var connectionVM:  ConnectionViewModel
 
     init(pubkeyHex: String, authViewModel: AuthViewModel) {
@@ -47,7 +49,8 @@ struct MainTabView: View {
         _timelineVM     = State(initialValue: TimelineViewModel(repository: repo, pubkeyHex: pubkeyHex))
         _homeVM         = State(initialValue: HomeViewModel(repository: repo, myPubkeyHex: pubkeyHex))
         _talkVM         = State(initialValue: TalkViewModel(repository: repo, myPubkeyHex: pubkeyHex))
-        _rokunanaVM     = State(initialValue: RokunanaViewModel(repository: repo, pubkeyHex: pubkeyHex))
+        // App Store submission build: ろくなな / diVine short-video ViewModel is disabled.
+        // _rokunanaVM     = State(initialValue: RokunanaViewModel(repository: repo, pubkeyHex: pubkeyHex))
         _connectionVM   = State(initialValue: ConnectionViewModel(repository: repo))
     }
 
@@ -111,14 +114,16 @@ struct MainTabView: View {
                 TalkView(viewModel: talkVM)
             }
 
-            // ROKUNANA / diVine short videos (keep alive)
-            tabContent(for: .rokunana) {
-                RokunanaView(
-                    viewModel: rokunanaVM,
-                    onProfileTap: { viewingProfile = ProfileID($0) },
-                    onZap: { zapTarget = $0 }
-                )
-            }
+            // App Store submission build: ろくなな / diVine short-video tab is disabled.
+            //
+            // // ROKUNANA / diVine short videos (keep alive)
+            // tabContent(for: .rokunana) {
+            //     RokunanaView(
+            //         viewModel: rokunanaVM,
+            //         onProfileTap: { viewingProfile = ProfileID($0) },
+            //         onZap: { zapTarget = $0 }
+            //     )
+            // }
 
             // MINIAPP (recreated on demand)
             if activeTab == .miniapp {
@@ -255,13 +260,16 @@ struct MainTabView: View {
 
     private func bottomTabItem(_ tab: BottomTab) -> some View {
         let selected = activeTab == tab
-        let iconColor = (tab == .rokunana && selected) ? Color.white : (selected ? NuruColors.lineGreen : theme.textTertiary)
+        let iconColor = selected ? NuruColors.lineGreen : theme.textTertiary
+        // App Store submission build: ろくなな selected white icon styling is disabled.
+        // let iconColor = (tab == .rokunana && selected) ? Color.white : (selected ? NuruColors.lineGreen : theme.textTertiary)
         return Button {
             if activeTab == tab {
                 switch tab {
                 case .timeline: Task { await timelineVM.refreshRelay() }
                 case .home:     Task { await homeVM.refresh() }
-                case .rokunana: Task { await rokunanaVM.refresh() }
+                // App Store submission build: ろくなな refresh is disabled.
+                // case .rokunana: Task { await rokunanaVM.refresh() }
                 default: break
                 }
             }
@@ -277,7 +285,8 @@ struct MainTabView: View {
                     switch tab {
                     case .home:     HomeIcon(filled: selected)
                     case .talk:     TalkIcon(filled: selected)
-                    case .rokunana: ShortVideoTabIcon(filled: selected)
+                    // App Store submission build: ろくなな tab icon is disabled.
+                    // case .rokunana: ShortVideoTabIcon(filled: selected)
                     case .timeline: TimelineIcon(filled: selected)
                     case .miniapp:  GridIcon(filled: selected)
                     }
@@ -308,13 +317,16 @@ struct ProfileID: Identifiable {
 // MARK: - Bottom Tab Enum
 
 enum BottomTab: CaseIterable {
-    case home, talk, rokunana, timeline, miniapp
+    // App Store submission build: ろくなな tab is disabled.
+    // case rokunana
+    case home, talk, timeline, miniapp
 
     var label: String {
         switch self {
         case .home:     return "ホーム"
         case .talk:     return "トーク"
-        case .rokunana: return "ろくなな"
+        // App Store submission build: ろくなな tab label is disabled.
+        // case .rokunana: return "ろくなな"
         case .timeline: return "タイムライン"
         case .miniapp:  return "ミニアプリ"
         }
@@ -324,7 +336,8 @@ enum BottomTab: CaseIterable {
         switch self {
         case .home:     return NuruIcons.home(filled: true)
         case .talk:     return NuruIcons.talk(filled: true)
-        case .rokunana: return "67"
+        // App Store submission build: ろくなな icon is disabled.
+        // case .rokunana: return "67"
         case .timeline: return NuruIcons.timeline(filled: true)
         case .miniapp:  return NuruIcons.grid(filled: true)
         }
@@ -334,7 +347,8 @@ enum BottomTab: CaseIterable {
         switch self {
         case .home:     return NuruIcons.home(filled: false)
         case .talk:     return NuruIcons.talk(filled: false)
-        case .rokunana: return "67"
+        // App Store submission build: ろくなな icon is disabled.
+        // case .rokunana: return "67"
         case .timeline: return NuruIcons.timeline(filled: false)
         case .miniapp:  return NuruIcons.grid(filled: false)
         }

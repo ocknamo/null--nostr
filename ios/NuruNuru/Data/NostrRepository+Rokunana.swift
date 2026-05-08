@@ -1,3 +1,6 @@
+// App Store submission build: ろくなな / diVine short-video feature is disabled for App Store submission.
+// The original implementation is intentionally commented out via `#if false`.
+#if false
 import Foundation
 import CryptoKit
 import AVFoundation
@@ -131,3 +134,5 @@ enum RokunanaFeedMode: String, CaseIterable, Identifiable {
         }
     }
 }
+
+#endif

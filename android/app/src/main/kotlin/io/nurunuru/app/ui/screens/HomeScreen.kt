@@ -33,6 +33,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import kotlin.math.roundToInt
 import io.nurunuru.app.data.models.UserProfile
+import io.nurunuru.app.data.models.ScoredPost
 import io.nurunuru.app.ui.components.*
 import io.nurunuru.app.ui.icons.NuruIcons
 import io.nurunuru.app.ui.theme.*
@@ -46,7 +47,7 @@ fun HomeScreen(
     repository: io.nurunuru.app.data.NostrRepository,
     onSettingsTap: () -> Unit = {},
     onStartDM: (String) -> Unit = {},
-    onNoteClick: ((String) -> Unit)? = null
+    onNoteClick: ((String, ScoredPost?) -> Unit)? = null
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val profile = uiState.profile
@@ -218,7 +219,8 @@ fun HomeScreen(
                                             onMute = { viewModel.muteUser(post.event.pubkey) },
                                             onReport = { type, content -> viewModel.reportEvent(post.event.id, post.event.pubkey, type, content) },
                                             onBirdwatch = { type, content, url -> viewModel.submitBirdwatch(post.event.id, post.event.pubkey, type, content, url) },
-                                            isOwnPost = post.event.pubkey == viewModel.myPubkeyHex
+                                            isOwnPost = post.event.pubkey == viewModel.myPubkeyHex,
+                                            onReplyMultiTap = { onNoteClick?.invoke(post.event.id, post) }
                                         )
                                     } else {
                                         PostItem(
@@ -235,7 +237,8 @@ fun HomeScreen(
                                             onBookmark = { viewModel.addBookmark(post.event.id) },
                                             isOwnPost = post.event.pubkey == viewModel.myPubkeyHex,
                                             isVerified = if (post.event.pubkey == profile?.pubkey) uiState.isNip05Verified else false,
-                                            onNoteClick = onNoteClick,
+                                            onNoteClick = { id -> onNoteClick?.invoke(id, null) },
+                                            onReplyMultiTap = { onNoteClick?.invoke(post.event.id, post) },
                                             myPubkey = viewModel.myPubkeyHex
                                         )
                                     }

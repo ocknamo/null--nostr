@@ -17,6 +17,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -46,7 +49,8 @@ fun LongFormPostItem(
     onNotInterested: (() -> Unit)? = null,
     isOwnPost: Boolean = false,
     birdwatchNotes: List<io.nurunuru.app.data.models.NostrEvent> = emptyList(),
-    onHashtagClick: ((String) -> Unit)? = null
+    onHashtagClick: ((String) -> Unit)? = null,
+    onReplyMultiTap: (() -> Unit)? = null
 ) {
     val nuruColors = LocalNuruColors.current
     val baseProfile = post.profile
@@ -84,10 +88,40 @@ fun LongFormPostItem(
     val image = post.event.getTagValue("image")
     val summary = post.event.getTagValue("summary") ?: post.event.content.take(200)
 
+    val replyMultiTapModifier = if (onReplyMultiTap != null) {
+        Modifier.pointerInput(post.event.id) {
+            var tapCount = 0
+            var lastTapAt = 0L
+            awaitPointerEventScope {
+                while (true) {
+                    val down = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.pressed } ?: continue
+                    var moved = false
+                    val start = down.position
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if ((change.position - start).getDistance() > 18f) moved = true
+                        if (change.changedToUpIgnoreConsumed() || !change.pressed) break
+                    }
+                    if (!moved) {
+                        val now = System.currentTimeMillis()
+                        tapCount = if (now - lastTapAt <= 1800L) tapCount + 1 else 1
+                        lastTapAt = now
+                        if (tapCount >= 7) {
+                            tapCount = 0
+                            onReplyMultiTap.invoke()
+                        }
+                    }
+                }
+            }
+        }
+    } else Modifier
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .background(nuruColors.bgPrimary)
+            .then(replyMultiTapModifier)
     ) {
         PostIndicators(post = post, onProfileClick = onProfileClick)
 

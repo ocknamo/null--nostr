@@ -29,6 +29,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.dp
 import io.nurunuru.app.data.prefs.AppPreferences
+import io.nurunuru.app.data.models.ScoredPost
 import io.nurunuru.app.ui.components.*
 import io.nurunuru.app.ui.theme.LineGreen
 import io.nurunuru.app.ui.theme.LocalNuruColors
@@ -47,7 +48,7 @@ fun TimelineScreen(
     myPictureUrl: String?,
     myDisplayName: String,
     onStartDM: (String) -> Unit = {},
-    onNoteClick: ((String) -> Unit)? = null
+    onNoteClick: ((String, ScoredPost?) -> Unit)? = null
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val nuruColors = LocalNuruColors.current
@@ -121,7 +122,7 @@ fun TimelineScreen(
                         viewModel.search(tag)
                     },
                     myPubkey = myPubkey,
-                    onReplyLongPress = { eventId -> onNoteClick?.invoke(eventId) },
+                    onReplyLongPress = { eventId -> onNoteClick?.invoke(eventId, null) },
                     onNoteClick = onNoteClick
                 )
             }
@@ -152,7 +153,11 @@ fun TimelineScreen(
             viewModel = homeViewModel,
             repository = repository,
             onDismiss = { viewingPubkey = null },
-            onStartDM = { pk -> viewingPubkey = null; onStartDM(pk) }
+            onStartDM = { pk -> viewingPubkey = null; onStartDM(pk) },
+            onNoteClick = { eventId, post ->
+                viewingPubkey = null
+                onNoteClick?.invoke(eventId, post)
+            }
         )
     }
 
@@ -172,7 +177,8 @@ fun TimelineScreen(
             prefs = prefs,
             myPubkey = myPubkey,
             onClose = { showNotificationsModal = false },
-            onProfileClick = { viewingPubkey = it }
+            onProfileClick = { viewingPubkey = it },
+            onNoteClick = { eventId, post -> showNotificationsModal = false; onNoteClick?.invoke(eventId, post) }
         )
     }
 }
@@ -187,7 +193,7 @@ private fun TimelineContent(
     onHashtagClick: (String) -> Unit,
     myPubkey: String,
     onReplyLongPress: (String) -> Unit = {},
-    onNoteClick: ((String) -> Unit)? = null
+    onNoteClick: ((String, ScoredPost?) -> Unit)? = null
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val nuruColors = LocalNuruColors.current
@@ -286,7 +292,8 @@ private fun TimelineContent(
                                 onNotInterested = notInterestedCallback,
                                 birdwatchNotes = uiState.birdwatchNotes[post.event.id] ?: emptyList(),
                                 isOwnPost = post.event.pubkey == myPubkey,
-                                onHashtagClick = onHashtagClick
+                                onHashtagClick = onHashtagClick,
+                                onReplyMultiTap = { onNoteClick?.invoke(post.event.id, post) ?: onReplyLongPress(post.event.id) }
                             )
                         } else {
                             PostItem(
@@ -304,8 +311,8 @@ private fun TimelineContent(
                                 birdwatchNotes = uiState.birdwatchNotes[post.event.id] ?: emptyList(),
                                 isOwnPost = post.event.pubkey == myPubkey,
                                 onHashtagClick = onHashtagClick,
-                                onNoteClick = onNoteClick,
-                                onLongPressReply = { onReplyLongPress(post.event.id) },
+                                onNoteClick = { id -> onNoteClick?.invoke(id, null) },
+                                onReplyMultiTap = { onNoteClick?.invoke(post.event.id, post) ?: onReplyLongPress(post.event.id) },
                                 myPubkey = myPubkey
                             )
                         }

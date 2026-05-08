@@ -44,7 +44,7 @@ fun PostItem(
     birdwatchNotes: List<io.nurunuru.app.data.models.NostrEvent> = emptyList(),
     onHashtagClick: ((String) -> Unit)? = null,
     onNoteClick: ((String) -> Unit)? = null,
-    onLongPressReply: (() -> Unit)? = null,
+    onReplyMultiTap: (() -> Unit)? = null,
     myPubkey: String = ""
 ) {
     val nuruColors = LocalNuruColors.current
@@ -96,19 +96,30 @@ fun PostItem(
     var showReactionPicker by remember { mutableStateOf(false) }
     var showQuoteRepost by remember { mutableStateOf(false) }
 
-    val replyLongPressModifier = if (onLongPressReply != null) {
+    val replyMultiTapModifier = if (onReplyMultiTap != null) {
         Modifier.pointerInput(post.event.id) {
+            var tapCount = 0
+            var lastTapAt = 0L
             awaitPointerEventScope {
                 while (true) {
                     val down = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.pressed } ?: continue
-                    val longPress = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
-                        while (true) {
-                            val event = awaitPointerEvent(PointerEventPass.Initial)
-                            val change = event.changes.firstOrNull { it.id == down.id } ?: return@withTimeoutOrNull false
-                            if (change.changedToUpIgnoreConsumed() || !change.pressed) return@withTimeoutOrNull false
+                    var moved = false
+                    val start = down.position
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if ((change.position - start).getDistance() > 18f) moved = true
+                        if (change.changedToUpIgnoreConsumed() || !change.pressed) break
+                    }
+                    if (!moved) {
+                        val now = System.currentTimeMillis()
+                        tapCount = if (now - lastTapAt <= 1800L) tapCount + 1 else 1
+                        lastTapAt = now
+                        if (tapCount >= 7) {
+                            tapCount = 0
+                            onReplyMultiTap.invoke()
                         }
                     }
-                    if (longPress == null) onLongPressReply.invoke()
                 }
             }
         }
@@ -118,7 +129,7 @@ fun PostItem(
         modifier = modifier
             .fillMaxWidth()
             .background(nuruColors.bgPrimary)
-            .then(replyLongPressModifier)
+            .then(replyMultiTapModifier)
     ) {
         PostIndicators(post = post, onProfileClick = onProfileClick)
 

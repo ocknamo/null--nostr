@@ -7,10 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A10B00000000000000000002 /* RokunanaVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10B00000000000000000001 /* RokunanaVideo.swift */; };
-		A10B00000000000000000004 /* NostrRepository+Rokunana.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10B00000000000000000003 /* NostrRepository+Rokunana.swift */; };
-		A10B00000000000000000006 /* RokunanaViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10B00000000000000000005 /* RokunanaViewModel.swift */; };
-		A10B00000000000000000008 /* RokunanaView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10B00000000000000000007 /* RokunanaView.swift */; };
 		033CFB0346317657FAD3F619 /* NuruTypography.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C61C47D4F4E738BB43CF7F1 /* NuruTypography.swift */; };
 		0465BFCF5D1A15F8751380C8 /* RecommendationConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = C817C3CC738D3B0C9EC4B905 /* RecommendationConfig.swift */; };
 		058252ACFBABC6D51B8A684A /* AvatarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D601427B6183C685BFB860F8 /* AvatarView.swift */; };
@@ -132,10 +128,6 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		A10B00000000000000000001 /* RokunanaVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RokunanaVideo.swift"; sourceTree = "<group>"; };
-		A10B00000000000000000003 /* NostrRepository+Rokunana.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NostrRepository+Rokunana.swift"; sourceTree = "<group>"; };
-		A10B00000000000000000005 /* RokunanaViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RokunanaViewModel.swift"; sourceTree = "<group>"; };
-		A10B00000000000000000007 /* RokunanaView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RokunanaView.swift"; sourceTree = "<group>"; };
 		00A1662B48F53A7A6B33DA48 /* BadgeSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BadgeSettingsView.swift; sourceTree = "<group>"; };
 		00A34DBB9264E552D862E689 /* RelaySelectPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelaySelectPanel.swift; sourceTree = "<group>"; };
 		04E3A499F94B9F995BE3D683 /* AuthViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthViewModel.swift; sourceTree = "<group>"; };
@@ -276,7 +268,6 @@
 				587954781CE1C7EA4A9F7ABC /* LoginView.swift */,
 				A4DCC08CF81821A4E8539BAF /* MainTabView.swift */,
 				E131A5224D2426C251FD36E8 /* PostDetailView.swift */,
-				A10B00000000000000000007 /* RokunanaView.swift */,
 				8753D349790CACA687603C9A /* SettingsView.swift */,
 				0EE10584032BF81226167376 /* TalkView.swift */,
 				4F08A01D776CE609F6B0AD4F /* TimelineView.swift */,
@@ -295,7 +286,6 @@
 		461D785F72005CAD03921FE2 /* Models */ = {
 			isa = PBXGroup;
 			children = (
-				A10B00000000000000000001 /* RokunanaVideo.swift */,
 				4EFCF343A3F8F1BF6051DEAE /* NostrEvent.swift */,
 				C2506D3AABAB36AE0B1741F7 /* NostrKind.swift */,
 				791E7A65175F14D3E0CA7C5C /* ScoredPost.swift */,
@@ -319,7 +309,6 @@
 				19B6B700C2026B5983717773 /* NostrKeyUtils.swift */,
 				439DB265BB5AE5BAFB988738 /* NostrRepository.swift */,
 				3CC57A529D3985DFDBB153A0 /* NostrRepository+Actions.swift */,
-				A10B00000000000000000003 /* NostrRepository+Rokunana.swift */,
 				3606DF078E71DC476B53189D /* NostrRepository+Backup.swift */,
 				734CFE32F89ACC9BC9844933 /* NostrRepository+Bookmarks.swift */,
 				F075BCE9EA3BC514CFF8E374 /* NostrRepository+LiveStream.swift */,
@@ -471,7 +460,6 @@
 				04E3A499F94B9F995BE3D683 /* AuthViewModel.swift */,
 				0A58EFF33C88080C734B46CE /* ConnectionViewModel.swift */,
 				EE91ED6BEC7257E7906E98C4 /* HomeViewModel.swift */,
-				A10B00000000000000000005 /* RokunanaViewModel.swift */,
 				0DD5E00D3A648FB1F2B4B2CF /* TalkViewModel.swift */,
 				85278312356E15E56D0D234C /* TimelineViewModel.swift */,
 			);
@@ -668,7 +656,6 @@
 				59052E97244BC85E2F7BC463 /* NostrRepository+Scheduler.swift in Sources */,
 				0FE59B18CE38F9EC5D6FEC7D /* NostrRepository+Scrolls.swift in Sources */,
 				45F58E2A62019B8596FBAE52 /* NostrRepository+Talk.swift in Sources */,
-				A10B00000000000000000004 /* NostrRepository+Rokunana.swift in Sources */,
 				7B79B94A934AF11D6195E9C5 /* NostrRepository+Timeline.swift in Sources */,
 				C968FFB0D5A2D1FFBF4A88EC /* NostrRepository.swift in Sources */,
 				5A1153CCA89373575579F1F8 /* NotificationSheet.swift in Sources */,
@@ -683,7 +670,6 @@
 				D9BC0CFF0E7818B350E92D6E /* PostActions.swift in Sources */,
 				1632D7B3A23C3E63864EF7A4 /* PostContent.swift in Sources */,
 				9FC3CEAC9BE3530F8FAA17FD /* PostDetailView.swift in Sources */,
-				A10B00000000000000000008 /* RokunanaView.swift in Sources */,
 				F6D6AF224258DE55B797CA50 /* PostRow.swift in Sources */,
 				CDBA68A64B8518360236DB88 /* PostSheet.swift in Sources */,
 				8C03F027F4D8FC74FC2C4D85 /* ProfileComponents.swift in Sources */,
@@ -698,7 +684,6 @@
 				6F33B6BB67E80E4B85CEB7E3 /* ReportSheet.swift in Sources */,
 				8E8BD575257221F40B6DBE26 /* SchedulerView.swift in Sources */,
 				AB06FFD6732B268CA7DF5BCC /* ScoredPost.swift in Sources */,
-				A10B00000000000000000002 /* RokunanaVideo.swift in Sources */,
 				6DCEB3DC71D44A6361FCB083 /* ScrollEvent.swift in Sources */,
 				5D6038F6ACE1F02791E30FB6 /* ScrollsView.swift in Sources */,
 				CC48F7BEE3B0954DCE0DB624 /* SearchQueryParser.swift in Sources */,
@@ -708,7 +693,6 @@
 				5FEA5B8D0DA393C534CA18AE /* SheetHeader.swift in Sources */,
 				E8CF19409F9EDD093CC61DE2 /* SkeletonLoader.swift in Sources */,
 				E5BC59ECCAF2FBE83134D98D /* TalkView.swift in Sources */,
-				A10B00000000000000000006 /* RokunanaViewModel.swift in Sources */,
 				7976499073D5FFBA6F789AA4 /* TalkViewModel.swift in Sources */,
 				78A6DA5DB070D2EC1CCCEE58 /* TimelineView.swift in Sources */,
 				88393355A270D5AB4BD81C38 /* TimelineViewModel.swift in Sources */,
@@ -748,7 +732,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 66G7S3P755;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -895,7 +879,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 66G7S3P755;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = NuruNuru/Info.plist;

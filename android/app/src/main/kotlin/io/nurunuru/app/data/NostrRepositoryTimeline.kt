@@ -12,6 +12,15 @@ suspend fun NostrRepository.fetchEvents(filter: NostrClient.Filter, timeoutMs: L
     return client.fetchEvents(filter, timeoutMs)
 }
 
+/** Fetch from explicit relays. Used for reply/detail screens where the event may live on NIP-65 read/write relays not in the current pool. */
+suspend fun NostrRepository.fetchEventsFromRelays(
+    relayUrls: List<String>,
+    filter: NostrClient.Filter,
+    timeoutMs: Long = 5_000
+): List<NostrEvent> {
+    return client.fetchEventsFrom(relayUrls.distinct(), filter, timeoutMs)
+}
+
 suspend fun NostrRepository.fetchRecommendedTimeline(limit: Int = 50): List<ScoredPost> =
     withContext(Dispatchers.IO) {
         try {

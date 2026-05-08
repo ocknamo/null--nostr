@@ -41,6 +41,7 @@ import io.nurunuru.app.data.models.NostrEvent
 import io.nurunuru.app.data.models.NostrKind
 import io.nurunuru.app.data.models.NotificationItem
 import io.nurunuru.app.data.models.UserProfile
+import io.nurunuru.app.data.models.ScoredPost
 import io.nurunuru.app.data.prefs.AppPreferences
 import io.nurunuru.app.data.prefs.NotificationSenderScope
 import io.nurunuru.app.data.*
@@ -90,7 +91,8 @@ fun NotificationModal(
     prefs: AppPreferences,
     myPubkey: String,
     onClose: () -> Unit,
-    onProfileClick: (String) -> Unit
+    onProfileClick: (String) -> Unit,
+    onNoteClick: (String, ScoredPost?) -> Unit = { _, _ -> }
 ) {
     val nuruColors = LocalNuruColors.current
     val scope = rememberCoroutineScope()
@@ -345,7 +347,8 @@ fun NotificationModal(
                                         notification = notification,
                                         profile = profiles[notification.pubkey],
                                         originalPost = originalPosts[notification.targetEventId],
-                                        onProfileClick = onProfileClick
+                                        onProfileClick = onProfileClick,
+                                        onNoteClick = onNoteClick
                                     )
                                 }
                             }
@@ -451,7 +454,8 @@ fun NotificationRow(
     notification: NotificationItem,
     profile: UserProfile?,
     originalPost: NostrEvent?,
-    onProfileClick: (String) -> Unit
+    onProfileClick: (String) -> Unit,
+    onNoteClick: (String, ScoredPost?) -> Unit = { _, _ -> }
 ) {
     val nuruColors = LocalNuruColors.current
     val style = styleFor(notification.type)
@@ -459,7 +463,15 @@ fun NotificationRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onProfileClick(notification.pubkey) }
+            .clickable {
+                val targetId = when (notification.type) {
+                    "follow", "badge", "birthday" -> null
+                    else -> notification.targetEventId ?: originalPost?.id
+                }
+                if (!targetId.isNullOrBlank()) {
+                    onNoteClick(targetId, originalPost?.let { ScoredPost(event = it) })
+                } else onProfileClick(notification.pubkey)
+            }
             .padding(horizontal = 16.dp, vertical = 14.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.Top
@@ -472,8 +484,7 @@ fun NotificationRow(
                 modifier = Modifier
                     .size(46.dp)
                     .clip(CircleShape)
-                    .background(nuruColors.bgTertiary)
-                    .clickable { onProfileClick(notification.pubkey) },
+                    .background(nuruColors.bgTertiary),
                 contentScale = ContentScale.Crop
             )
             // タイプアイコンバッジ（右下）

@@ -24,6 +24,9 @@ import io.nurunuru.app.data.addBookmark
 import io.nurunuru.app.data.deleteEvent
 import io.nurunuru.app.data.fetchEvent
 import io.nurunuru.app.data.fetchEvents
+import io.nurunuru.app.data.fetchEventsFromRelays
+import io.nurunuru.app.data.fetchNip65WriteRelays
+import io.nurunuru.app.data.fetchNip65ReadRelays
 import io.nurunuru.app.data.likePost
 import io.nurunuru.app.data.repostPost
 import io.nurunuru.app.data.models.NostrKind
@@ -37,6 +40,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun PostDetailScreen(
     eventId: String,
+    initialPost: ScoredPost? = null,
     repository: NostrRepository,
     myPubkey: String,
     onBack: () -> Unit,
@@ -45,7 +49,7 @@ fun PostDetailScreen(
     val nuruColors = LocalNuruColors.current
 
     val coroutineScope = rememberCoroutineScope()
-    var post by remember { mutableStateOf<ScoredPost?>(null) }
+    var post by remember(eventId) { mutableStateOf(initialPost?.takeIf { it.event.id == eventId }) }
     var replies by remember { mutableStateOf<List<ScoredPost>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var showReplyModal by remember { mutableStateOf(false) }
@@ -106,15 +110,26 @@ fun PostDetailScreen(
 
     LaunchedEffect(eventId) {
         isLoading = true
-        post = repository.fetchEvent(eventId)
+        val fetchedPost = repository.fetchEvent(eventId)
+        if (fetchedPost != null) post = fetchedPost
+        else if (post == null && initialPost?.event?.id == eventId) post = initialPost
         try {
             val replyFilter = NostrClient.Filter(
                 kinds = listOf(NostrKind.TEXT_NOTE),
                 tags = mapOf("e" to listOf(eventId)),
                 limit = 50
             )
-            val replyEvents = repository.fetchEvents(replyFilter, timeoutMs = 5_000)
-            val enriched = repository.enrichPostsDirect(replyEvents)
+            val replyRelays = (post?.event?.pubkey?.let { repository.fetchNip65ReadRelays(it) }.orEmpty() +
+                repository.fetchNip65WriteRelays(myPubkey) +
+                repository.getSavedRelayUrls()).distinct()
+            android.util.Log.d("PostDetailScreen", "PostDetail reply fetch relays=" + replyRelays.size + " event=" + eventId.take(8))
+            val replyEvents = if (replyRelays.isNotEmpty()) {
+                repository.fetchEventsFromRelays(replyRelays, replyFilter, timeoutMs = 7_000)
+            } else {
+                repository.fetchEvents(replyFilter, timeoutMs = 5_000)
+            }
+            android.util.Log.d("PostDetailScreen", "PostDetail reply events=" + replyEvents.size + " event=" + eventId.take(8))
+            val enriched = repository.enrichPostsDirect(replyEvents.distinctBy { it.id })
             replies = enriched
                 .filter { it.event.id != eventId }
                 .sortedBy { it.event.createdAt }
@@ -241,6 +256,7 @@ fun PostDetailScreen(
             displayName = "",
             repository = repository,
             replyToId = post!!.event.id,
+            replyToPubkey = post!!.event.pubkey,
             onDismiss = { showReplyModal = false },
             onSuccess = {
                 showReplyModal = false

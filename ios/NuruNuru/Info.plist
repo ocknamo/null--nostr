@@ -30,19 +30,19 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>2</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSFaceIDUsageDescription</key>
 	<string>秘密鍵の保護に生体認証を使用します</string>
 	<key>NSCameraUsageDescription</key>
-	<string>ろくなな動画の録画とQRコード読み取りのためにカメラを使用します</string>
+	<string>QRコード読み取りのためにカメラを使用します</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>ろくなな動画投稿のためにフォトライブラリから動画を選択します</string>
+	<string>投稿や引用投稿のためにフォトライブラリから画像や動画を選択します</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>投稿や引用投稿で音声入力を行うために音声認識を使用します</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>投稿や引用投稿、ろくなな動画録画で音声を収録するためにマイクを使用します</string>
+	<string>投稿や引用投稿で音声を収録するためにマイクを使用します</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>最寄りのNostrリレーを自動検出するために位置情報を使用します</string>
 	<key>UIAppFonts</key>

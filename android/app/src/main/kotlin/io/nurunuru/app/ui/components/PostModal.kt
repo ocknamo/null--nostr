@@ -74,6 +74,7 @@ fun PostModal(
     displayName: String,
     repository: NostrRepository,
     replyToId: String? = null,
+    replyToPubkey: String? = null,
     onDismiss: () -> Unit,
     onSuccess: () -> Unit
 ) {
@@ -235,6 +236,7 @@ fun PostModal(
 
                 if (replyToId != null) {
                     tags.add(listOf("e", replyToId, "", "reply"))
+                    replyToPubkey?.takeIf { it.isNotBlank() }?.let { tags.add(listOf("p", it)) }
                 }
                 if (showCWInput && contentWarning.isNotBlank()) {
                     tags.add(listOf("content-warning", contentWarning))
@@ -251,7 +253,15 @@ fun PostModal(
                 val hashtags = Regex("#([\\w\\u3040-\\u309F\\u30A0-\\u30FF\\u4E00-\\u9FFF\\uFF00-\\uFFEF]+)").findAll(finalContent).map { it.groupValues[1] }.distinct()
                 hashtags.forEach { tags.add(listOf("t", it.lowercase())) }
 
-                val targetRelayList = if (selectedRelays.size != allRelays.size) selectedRelays.toList() else null
+                val replyReadRelays = if (replyToPubkey != null) {
+                    withContext(Dispatchers.IO) { repository.fetchNip65ReadRelays(replyToPubkey) }
+                } else emptyList()
+                val baseTargetRelays = if (selectedRelays.size != allRelays.size) selectedRelays.toList() else allRelays
+                val targetRelayList = if (replyReadRelays.isNotEmpty()) {
+                    (baseTargetRelays + replyReadRelays).distinct()
+                } else if (selectedRelays.size != allRelays.size) {
+                    selectedRelays.toList()
+                } else null
                 val success = repository.publishNote(
                     content = finalContent,
                     replyToId = replyToId,

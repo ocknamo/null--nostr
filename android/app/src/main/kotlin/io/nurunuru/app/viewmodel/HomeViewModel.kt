@@ -184,8 +184,16 @@ class HomeViewModel(
     fun muteUser(pubkey: String) {
         viewModelScope.launch {
             try {
-                repository.muteUser(pubkey)
-                refresh()
+                val success = repository.muteUser(pubkey)
+                if (success) {
+                    _uiState.update { state ->
+                        state.copy(
+                            posts = state.posts.filter { it.event.pubkey != pubkey },
+                            likedPosts = state.likedPosts.filter { it.event.pubkey != pubkey },
+                            bookmarkedPosts = state.bookmarkedPosts.filter { it.event.pubkey != pubkey }
+                        )
+                    }
+                }
             } catch (e: Exception) { /* Ignore */ }
         }
     }

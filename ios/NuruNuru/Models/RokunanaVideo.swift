@@ -1,3 +1,6 @@
+// App Store submission build: ろくなな / diVine short-video feature is disabled for App Store submission.
+// The original implementation is intentionally commented out via `#if false`.
+#if false
 import Foundation
 
 /// diVine / OpenVine compatible NIP-71 short video event.
@@ -203,3 +206,5 @@ enum RokunanaRelays {
     /// Read/write targets for the dedicated tab. Keep the production relay first.
     static let readWrite = [primary]
 }
+
+#endif

@@ -423,6 +423,24 @@ suspend fun NostrRepository.fetchEvent(eventId: String): ScoredPost? {
         ids = listOf(eventId),
         limit = 1
     )
-    val events = client.fetchEvents(filter, timeoutMs = 4_000)
-    return enrichPosts(events).firstOrNull()
+
+    // まず現在接続中のリレーを試す。
+    val direct = client.fetchEvents(filter, timeoutMs = 4_000)
+    if (direct.isNotEmpty()) return enrichPosts(direct).firstOrNull()
+
+    // 投稿詳細・通知から開く投稿は、現在の接続プールに無い NIP-65 Read/Write リレーや
+    // デフォルト/検索リレーにしか存在しない場合があるため、明示的に広めに探索する。
+    val relayCandidates = (
+        prefs.nip65Relays.map { it.url } +
+        prefs.relays.toList() +
+        io.nurunuru.app.data.models.DEFAULT_RELAYS +
+        listOf(NostrClient.SEARCH_RELAY)
+    ).distinct()
+    android.util.Log.d("NostrRepository", "fetchEvent wide relayCandidates=" + relayCandidates.size + " id=" + eventId.take(8))
+    val relayEvents = if (relayCandidates.isNotEmpty()) {
+        client.fetchEventsFrom(relayCandidates, filter, timeoutMs = 7_000)
+    } else emptyList()
+    android.util.Log.d("NostrRepository", "fetchEvent wide result=" + relayEvents.size + " id=" + eventId.take(8))
+
+    return enrichPosts(relayEvents.distinctBy { it.id }).firstOrNull()
 }

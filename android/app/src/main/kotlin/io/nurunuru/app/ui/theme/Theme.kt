@@ -89,11 +89,13 @@ val LocalNuruColors = staticCompositionLocalOf {
 
 @Composable
 fun NuruNuruTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    darkTheme: Boolean = true,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
-    val nuruColors = if (darkTheme) {
+    // Android版は常にダークモードに統一する。
+    // 端末のライトテーマ設定に引きずられて一部画面だけ白背景になるのを防ぐ。
+    val colorScheme = DarkColorScheme
+    val nuruColors = if (true) {
         NuruColors(
             lineGreen = LineGreen,
             zapColor = ColorZap,

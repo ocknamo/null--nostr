@@ -23,6 +23,11 @@ targets:
       - path: NuruNuru
         excludes:
           - "Info.plist"
+          # App Store submission build: ろくなな / diVine short-video feature is disabled.
+          - "Views/Screens/RokunanaView.swift"
+          - "ViewModels/RokunanaViewModel.swift"
+          - "Models/RokunanaVideo.swift"
+          - "Data/NostrRepository+Rokunana.swift"
     info:
       path: NuruNuru/Info.plist
       properties:
@@ -41,10 +46,10 @@ targets:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
         NSFaceIDUsageDescription: 秘密鍵の保護に生体認証を使用します
-        NSCameraUsageDescription: ろくなな動画の録画とQRコード読み取りのためにカメラを使用します
+        NSCameraUsageDescription: QRコード読み取りのためにカメラを使用します
         NSSpeechRecognitionUsageDescription: 投稿や引用投稿で音声入力を行うために音声認識を使用します
-        NSMicrophoneUsageDescription: 投稿や引用投稿、ろくなな動画録画で音声を収録するためにマイクを使用します
-        NSPhotoLibraryUsageDescription: ろくなな動画投稿のためにフォトライブラリから動画を選択します
+        NSMicrophoneUsageDescription: 投稿や引用投稿で音声を収録するためにマイクを使用します
+        NSPhotoLibraryUsageDescription: 投稿や引用投稿のためにフォトライブラリから画像や動画を選択します
         NSLocationWhenInUseUsageDescription: 最寄りのNostrリレーを自動検出するために位置情報を使用します
         LSRequiresIPhoneOS: true
         UISupportedInterfaceOrientations:
@@ -61,7 +66,7 @@ targets:
         SWIFT_VERSION: "5.9"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
         MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "1"
+        CURRENT_PROJECT_VERSION: "2"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: "66G7S3P755"
         ENABLE_HARDENED_RUNTIME: YES

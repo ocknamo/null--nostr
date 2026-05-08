@@ -65,9 +65,10 @@ class NuruNuruApp : Application() {
         if (prefs.isExternalSigner && pubkey != null) {
             try {
                 val signer = ExternalSigner.apply { setCurrentUser(pubkey) }
+                val startupRelays = prefs.nip65Relays.map { it.url }.ifEmpty { prefs.relays.toList() }
                 prewarmedNostrClient = NostrClient(
                     context = this,
-                    relays = prefs.relays.toList(),
+                    relays = startupRelays,
                     signer = signer
                 ).also { it.connect() }
                 Log.d("NuruNuruApp", "Pre-warmed NostrClient for external signer")

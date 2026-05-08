@@ -1,3 +1,6 @@
+// App Store submission build: ろくなな / diVine short-video feature is disabled for App Store submission.
+// The original implementation is intentionally commented out via `#if false`.
+#if false
 import Foundation
 import Observation
 import AVFoundation
@@ -235,3 +238,5 @@ enum RokunanaPublishError: LocalizedError {
         }
     }
 }
+
+#endif

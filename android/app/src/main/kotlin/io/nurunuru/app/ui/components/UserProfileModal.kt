@@ -23,6 +23,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -45,7 +48,8 @@ fun UserProfileModal(
     viewModel: HomeViewModel,
     repository: io.nurunuru.app.data.NostrRepository,
     onDismiss: () -> Unit,
-    onStartDM: (String) -> Unit
+    onStartDM: (String) -> Unit,
+    onNoteClick: ((String, ScoredPost?) -> Unit)? = null
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val displayedPubkey = uiState.viewingPubkey ?: pubkey
@@ -254,27 +258,32 @@ fun UserProfileModal(
                             .distinctBy { it.event.id }
 
                         items(displayPosts, key = { (if (uiState.searchResults.isNotEmpty()) "search_" else "") + it.event.id }) { post ->
-                            if (post.event.kind == 30023) {
-                                LongFormPostItem(
-                                    post = post,
-                                    onLike = { emoji, tags -> viewModel.likePost(post.event.id, emoji, tags) },
-                                    onRepost = { viewModel.repostPost(post.event.id) },
-                                    onProfileClick = { /* Stay or navigate? */ },
-                                    repository = repository
-                                )
-                            } else {
-                                PostItem(
-                                    post = post,
-                                    onLike = { emoji, tags -> viewModel.likePost(post.event.id, emoji, tags) },
-                                    onRepost = { viewModel.repostPost(post.event.id) },
-                                    onProfileClick = { viewModel.loadProfile(it) },
-                                    repository = repository,
-                                    onDelete = { /* N/A */ },
-                                    onMute = { viewModel.muteUser(post.event.pubkey) },
-                                    onBookmark = { viewModel.toggleBookmark(post.event.id, post.isBookmarked) },
-                                    isOwnPost = post.event.pubkey == viewModel.myPubkeyHex,
-                                    myPubkey = viewModel.myPubkeyHex
-                                )
+                            Box(modifier = Modifier.openDetailOnSevenTaps { onNoteClick?.invoke(post.event.id, post) }) {
+                                if (post.event.kind == 30023) {
+                                    LongFormPostItem(
+                                        post = post,
+                                        onLike = { emoji, tags -> viewModel.likePost(post.event.id, emoji, tags) },
+                                        onRepost = { viewModel.repostPost(post.event.id) },
+                                        onProfileClick = { /* Stay or navigate? */ },
+                                        repository = repository,
+                                        onReplyMultiTap = { onNoteClick?.invoke(post.event.id, post) }
+                                    )
+                                } else {
+                                    PostItem(
+                                        post = post,
+                                        onLike = { emoji, tags -> viewModel.likePost(post.event.id, emoji, tags) },
+                                        onRepost = { viewModel.repostPost(post.event.id) },
+                                        onProfileClick = { viewModel.loadProfile(it) },
+                                        repository = repository,
+                                        onDelete = { /* N/A */ },
+                                        onMute = { viewModel.muteUser(post.event.pubkey) },
+                                        onBookmark = { viewModel.toggleBookmark(post.event.id, post.isBookmarked) },
+                                        isOwnPost = post.event.pubkey == viewModel.myPubkeyHex,
+                                        onNoteClick = { id -> onNoteClick?.invoke(id, null) },
+                                        onReplyMultiTap = { onNoteClick?.invoke(post.event.id, post) },
+                                        myPubkey = viewModel.myPubkeyHex
+                                    )
+                                }
                             }
                         }
                     }
@@ -384,6 +393,34 @@ fun BirthdayAnimationOverlay(name: String) {
                         Text("🎂", fontSize = 20.sp)
                     }
                     Text(text = name, fontSize = 14.sp, color = Color.Gray)
+                }
+            }
+        }
+    }
+}
+
+
+private fun Modifier.openDetailOnSevenTaps(onOpen: () -> Unit): Modifier = this.pointerInput(onOpen) {
+    var tapCount = 0
+    var lastTapAt = 0L
+    awaitPointerEventScope {
+        while (true) {
+            val down = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.pressed } ?: continue
+            val start = down.position
+            var moved = false
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                if ((change.position - start).getDistance() > 18f) moved = true
+                if (change.changedToUpIgnoreConsumed() || !change.pressed) break
+            }
+            if (!moved) {
+                val now = System.currentTimeMillis()
+                tapCount = if (now - lastTapAt <= 1800L) tapCount + 1 else 1
+                lastTapAt = now
+                if (tapCount >= 7) {
+                    tapCount = 0
+                    onOpen()
                 }
             }
         }

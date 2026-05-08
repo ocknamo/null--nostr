@@ -97,7 +97,16 @@ suspend fun NostrRepository.publishNote(
                 return null
             }
             android.util.Log.d("NostrRepository", "Ext publishNote: signed (${signedJson.length} chars), publishing...")
-            withContext(Dispatchers.IO) { rustClient.publishRawEvent(signedJson) }
+            withContext(Dispatchers.IO) {
+                // 外部署名（Amber等）では signed raw event を送るため、targetRelays が指定されている場合は
+                // 先に送信先リレーを接続プールへ追加してから publishRawEvent する。
+                // これにより返信時も相手の NIP-65 Read リレーへ確実に配送される。
+                targetRelays.orEmpty().forEach { relay ->
+                    try { rustClient.addRelay(relay) }
+                    catch (e: Exception) { android.util.Log.w("NostrRepository", "Ext publishNote addRelay failed: " + relay + " / " + e.message) }
+                }
+                rustClient.publishRawEvent(signedJson)
+            }
             android.util.Log.d("NostrRepository", "Ext publishNote OK")
             try { json.decodeFromString<NostrEvent>(signedJson) } catch (_: Exception) { null }
         } catch (e: Exception) {
@@ -185,6 +194,10 @@ suspend fun NostrRepository.publishBirdwatchLabel(eventId: String, authorPubkey:
 }
 
 suspend fun NostrRepository.fetchMuteList(pubkeyHex: String): MuteListData {
+    // ローカルで直近に追加した非公開ミュートを先に読む。
+    // リレー上の kind:10000 が古い/取得失敗/復号失敗でも、ミュートリスト画面には即時反映する。
+    val cachedLocal = getCachedMuteList(pubkeyHex)
+
     val filter = NostrClient.Filter(
         kinds = listOf(NostrKind.MUTE_LIST),
         authors = listOf(pubkeyHex),
@@ -209,7 +222,7 @@ suspend fun NostrRepository.fetchMuteList(pubkeyHex: String): MuteListData {
         } else emptyList()
 
         val privatePubkeys = privateTags.filter { it.firstOrNull() == "p" }.mapNotNull { it.getOrNull(1) }
-        val muteData = MuteListData(
+        val relayMuteData = MuteListData(
             pubkeys = (privatePubkeys + publicPubkeys).distinct(),
             eventIds = (privateTags.filter { it.firstOrNull() == "e" }.mapNotNull { it.getOrNull(1) } + event.getTagValues("e")).distinct(),
             hashtags = (privateTags.filter { it.firstOrNull() == "t" }.mapNotNull { it.getOrNull(1) } + event.getTagValues("t")).distinct(),
@@ -217,11 +230,25 @@ suspend fun NostrRepository.fetchMuteList(pubkeyHex: String): MuteListData {
             privatePubkeys = privatePubkeys.distinct(),
             publicPubkeys = publicPubkeys.distinct()
         )
-        cache.setCachedMuteList(pubkeyHex, json.encodeToString(MuteListData.serializer(), muteData))
-        return muteData
+
+        val merged = if (cachedLocal != null) {
+            MuteListData(
+                pubkeys = (cachedLocal.pubkeys + relayMuteData.pubkeys).distinct(),
+                eventIds = (cachedLocal.eventIds + relayMuteData.eventIds).distinct(),
+                hashtags = (cachedLocal.hashtags + relayMuteData.hashtags).distinct(),
+                words = (cachedLocal.words + relayMuteData.words).distinct(),
+                privatePubkeys = (cachedLocal.privatePubkeys + relayMuteData.privatePubkeys).distinct(),
+                publicPubkeys = (cachedLocal.publicPubkeys + relayMuteData.publicPubkeys).distinct()
+            )
+        } else relayMuteData
+
+        cache.setCachedMuteList(pubkeyHex, json.encodeToString(MuteListData.serializer(), merged))
+        android.util.Log.d("NostrRepository", "fetchMuteList relay=" + relayMuteData.privatePubkeys.size + "/" + relayMuteData.publicPubkeys.size + " cached=" + (cachedLocal?.privatePubkeys?.size ?: 0) + "/" + (cachedLocal?.publicPubkeys?.size ?: 0) + " merged=" + merged.privatePubkeys.size + "/" + merged.publicPubkeys.size)
+        return merged
     }
 
-    return getCachedMuteList(pubkeyHex) ?: MuteListData()
+    android.util.Log.d("NostrRepository", "fetchMuteList cacheOnly=" + (cachedLocal?.privatePubkeys?.size ?: 0) + "/" + (cachedLocal?.publicPubkeys?.size ?: 0))
+    return cachedLocal ?: MuteListData()
 }
 
 suspend fun NostrRepository.fetchNip65WriteRelays(pubkeyHex: String): List<String> {
@@ -230,22 +257,63 @@ suspend fun NostrRepository.fetchNip65WriteRelays(pubkeyHex: String): List<Strin
     } catch (_: Exception) { emptyList() }
 }
 
+suspend fun NostrRepository.fetchNip65ReadRelays(pubkeyHex: String): List<String> {
+    return try {
+        OutboxModel(client).fetchUserRelayList(pubkeyHex).read
+    } catch (_: Exception) { emptyList() }
+}
+
+/**
+ * ログインユーザーの NIP-65 kind:10002 リレーリストを読み込み、保存済みリレーへ反映する。
+ * リレーリストが存在するユーザーではデフォルトリレーへ戻さず、そのリストを優先する。
+ */
+suspend fun NostrRepository.syncLoggedInUserRelayList(pubkeyHex: String): Boolean {
+    return try {
+        val relayList = OutboxModel(client).fetchUserRelayList(pubkeyHex)
+        if (relayList.all.isEmpty()) return false
+
+        val nip65 = relayList.all
+            .distinctBy { it.url }
+            .map { io.nurunuru.app.data.models.Nip65Relay(it.url, it.read, it.write) }
+        if (nip65.isEmpty()) return false
+
+        prefs.nip65Relays = nip65
+        prefs.relays = nip65.map { it.url }.toSet()
+        prefs.mainRelay = nip65.firstOrNull { it.write }?.url ?: nip65.first().url
+        android.util.Log.d("NostrRepository", "Synced login user's NIP-65 relays: " + nip65.size)
+        true
+    } catch (e: Exception) {
+        android.util.Log.w("NostrRepository", "syncLoggedInUserRelayList failed: " + e.message)
+        false
+    }
+}
+
 /**
  * NIP-65 kind 10002 から最寄りリレーを取得し、mainRelay に保存する。
  */
 suspend fun NostrRepository.syncNip65Relays(pubkeyHex: String) {
-    val writeRelays = fetchNip65WriteRelays(pubkeyHex)
-    val main = writeRelays.firstOrNull() ?: return
-    if (main != prefs.mainRelay) {
-        prefs.mainRelay = main
-        android.util.Log.d("NostrRepository", "NIP-65 main relay synced: $main")
+    syncLoggedInUserRelayList(pubkeyHex)
+}
+
+private suspend fun NostrRepository.ensureWriteRelaysForReplaceablePublish() {
+    val rustClient = client.getRustClient() ?: return
+    val writeRelays = prefs.nip65Relays
+        .filter { it.write }
+        .map { it.url }
+        .ifEmpty { prefs.relays.toList() }
+        .distinct()
+    android.util.Log.d("NostrRepository", "ensureWriteRelaysForReplaceablePublish relays=" + writeRelays.size)
+    withContext(Dispatchers.IO) {
+        writeRelays.forEach { relay ->
+            try { rustClient.addRelay(relay) }
+            catch (e: Exception) { android.util.Log.w("NostrRepository", "add write relay for replaceable publish failed: " + relay + " / " + e.message) }
+        }
     }
 }
 
 suspend fun NostrRepository.removeFromMuteList(pubkeyHex: String, type: String, value: String): Boolean {
     val signer = client.getSigner()
-    val filter = NostrClient.Filter(kinds = listOf(NostrKind.MUTE_LIST), authors = listOf(pubkeyHex), limit = 1)
-    val latest = client.fetchEvents(filter, timeoutMs = 4_000).maxByOrNull { it.createdAt } ?: return true
+    val cached = getCachedMuteList(pubkeyHex) ?: MuteListData()
 
     val tagType = when (type) {
         "pubkey", "privatePubkey", "publicPubkey" -> "p"
@@ -257,79 +325,89 @@ suspend fun NostrRepository.removeFromMuteList(pubkeyHex: String, type: String, 
     val removePrivate = type != "publicPubkey"
     val removePublic = type == "pubkey" || type == "publicPubkey"
 
-    val privateTags = if (latest.content.isNotBlank() && signer != null) {
-        try {
-            val decrypted = signer.nip44Decrypt(pubkeyHex, latest.content)
-            if (decrypted != null) kotlinx.serialization.json.Json.decodeFromString<List<List<String>>>(decrypted) else emptyList()
-        } catch (_: Exception) { emptyList() }
-    } else emptyList()
-    val publicTags = latest.tags
+    val cachedPrivateTags = mutableListOf<List<String>>()
+    cached.privatePubkeys.forEach { cachedPrivateTags.add(listOf("p", it)) }
+    cached.eventIds.forEach { cachedPrivateTags.add(listOf("e", it)) }
+    cached.hashtags.forEach { cachedPrivateTags.add(listOf("t", it)) }
+    cached.words.forEach { cachedPrivateTags.add(listOf("word", it)) }
+    val cachedPublicTags = cached.publicPubkeys.map { listOf("p", it) }
 
-    val newPrivateTags = if (removePrivate) privateTags.filter { !(it.firstOrNull() == tagType && it.getOrNull(1) == value) } else privateTags
-    val newPublicTags = if (removePublic) publicTags.filter { !(it.firstOrNull() == tagType && it.getOrNull(1) == value) } else publicTags
-    if (newPrivateTags.size == privateTags.size && newPublicTags.size == publicTags.size) return true
+    val newPrivateTags = if (removePrivate) cachedPrivateTags.filter { !(it.firstOrNull() == tagType && it.getOrNull(1) == value) } else cachedPrivateTags
+    val newPublicTags = if (removePublic) cachedPublicTags.filter { !(it.firstOrNull() == tagType && it.getOrNull(1) == value) } else cachedPublicTags
+
+    val newPrivatePubkeys = newPrivateTags.filter { it.firstOrNull() == "p" }.mapNotNull { it.getOrNull(1) }.distinct()
+    val newPublicPubkeys = newPublicTags.filter { it.firstOrNull() == "p" }.mapNotNull { it.getOrNull(1) }.distinct()
+    val data = MuteListData(
+        pubkeys = (newPrivatePubkeys + newPublicPubkeys).distinct(),
+        eventIds = newPrivateTags.filter { it.firstOrNull() == "e" }.mapNotNull { it.getOrNull(1) }.distinct(),
+        hashtags = newPrivateTags.filter { it.firstOrNull() == "t" }.mapNotNull { it.getOrNull(1) }.distinct(),
+        words = newPrivateTags.filter { it.firstOrNull() == "word" }.mapNotNull { it.getOrNull(1) }.distinct(),
+        privatePubkeys = newPrivatePubkeys,
+        publicPubkeys = newPublicPubkeys
+    )
+    cache.setCachedMuteList(pubkeyHex, json.encodeToString(MuteListData.serializer(), data))
 
     val encryptedContent = if (newPrivateTags.isNotEmpty()) {
-        if (signer == null) return false
-        try { signer.nip44Encrypt(pubkeyHex, kotlinx.serialization.json.Json.encodeToString(newPrivateTags)) ?: return false }
-        catch (_: Exception) { return false }
+        if (signer == null) return true
+        try { signer.nip44Encrypt(pubkeyHex, kotlinx.serialization.json.Json.encodeToString(newPrivateTags)) ?: return true }
+        catch (_: Exception) { return true }
     } else ""
 
-    val success = publishNewEvent(NostrKind.MUTE_LIST, encryptedContent, newPublicTags) != null
-    if (success) {
-        val data = MuteListData(
-            pubkeys = (newPrivateTags.filter { it.firstOrNull() == "p" }.mapNotNull { it.getOrNull(1) } + newPublicTags.filter { it.firstOrNull() == "p" }.mapNotNull { it.getOrNull(1) }).distinct(),
-            eventIds = (newPrivateTags.filter { it.firstOrNull() == "e" }.mapNotNull { it.getOrNull(1) } + newPublicTags.filter { it.firstOrNull() == "e" }.mapNotNull { it.getOrNull(1) }).distinct(),
-            hashtags = (newPrivateTags.filter { it.firstOrNull() == "t" }.mapNotNull { it.getOrNull(1) } + newPublicTags.filter { it.firstOrNull() == "t" }.mapNotNull { it.getOrNull(1) }).distinct(),
-            words = (newPrivateTags.filter { it.firstOrNull() == "word" }.mapNotNull { it.getOrNull(1) } + newPublicTags.filter { it.firstOrNull() == "word" }.mapNotNull { it.getOrNull(1) }).distinct(),
-            privatePubkeys = newPrivateTags.filter { it.firstOrNull() == "p" }.mapNotNull { it.getOrNull(1) }.distinct(),
-            publicPubkeys = newPublicTags.filter { it.firstOrNull() == "p" }.mapNotNull { it.getOrNull(1) }.distinct()
-        )
-        cache.setCachedMuteList(pubkeyHex, json.encodeToString(MuteListData.serializer(), data))
-    }
-    return success
+    ensureWriteRelaysForReplaceablePublish()
+    val published = publishNewEvent(NostrKind.MUTE_LIST, encryptedContent, newPublicTags) != null
+    android.util.Log.d("NostrRepository", "removeFromMuteList local=true publish=" + published + " value=" + value.take(8) + " remaining=" + newPrivatePubkeys.size + "/" + newPublicPubkeys.size)
+    return true
 }
 
 suspend fun NostrRepository.muteUser(pubkeyHex: String): Boolean {
-    // iOS と同じく、投稿メニューの「ミュート」は必ず非公開ミュートにする。
-    // NIP-44 が利用できない場合に公開タグへフォールバックしない。
     val myPubkey = myPubkeyHex.ifBlank { prefs.publicKeyHex ?: return false }
-    val signer = client.getSigner() ?: return false
-    val filter = NostrClient.Filter(kinds = listOf(NostrKind.MUTE_LIST), authors = listOf(myPubkey), limit = 1)
-    val latest = client.fetchEvents(filter, timeoutMs = 4_000).maxByOrNull { it.createdAt }
+    val signer = client.getSigner()
 
-    val existingPrivateTags = if (latest != null && latest.content.isNotBlank()) {
-        try {
-            val decrypted = signer.nip44Decrypt(myPubkey, latest.content)
-            if (decrypted != null) kotlinx.serialization.json.Json.decodeFromString<List<List<String>>>(decrypted) else emptyList()
-        } catch (_: Exception) { emptyList() }
-    } else {
-        emptyList()
+    // Use merged local cache as the source of truth for app UI. Do not start from latest relay event,
+    // otherwise rapid consecutive mutes are overwritten by a stale kind:10000 from the relay.
+    val cached = getCachedMuteList(myPubkey) ?: MuteListData()
+    val existingPrivatePubkeys = cached.privatePubkeys.ifEmpty { cached.pubkeys }.distinct()
+    val publicPubkeys = cached.publicPubkeys.distinct()
+    val allPrivatePubkeys = (existingPrivatePubkeys + pubkeyHex).distinct()
+
+    val privateTags = mutableListOf<List<String>>()
+    allPrivatePubkeys.forEach { privateTags.add(listOf("p", it)) }
+    cached.eventIds.forEach { privateTags.add(listOf("e", it)) }
+    cached.hashtags.forEach { privateTags.add(listOf("t", it)) }
+    cached.words.forEach { privateTags.add(listOf("word", it)) }
+    val publicTags = publicPubkeys.map { listOf("p", it) }
+
+    val localMuteData = MuteListData(
+        pubkeys = (allPrivatePubkeys + publicPubkeys).distinct(),
+        eventIds = cached.eventIds.distinct(),
+        hashtags = cached.hashtags.distinct(),
+        words = cached.words.distinct(),
+        privatePubkeys = allPrivatePubkeys,
+        publicPubkeys = publicPubkeys
+    )
+    cache.setCachedMuteList(myPubkey, json.encodeToString(MuteListData.serializer(), localMuteData))
+
+    if (signer == null) {
+        android.util.Log.w("NostrRepository", "muteUser local-only: signer unavailable target=" + pubkeyHex.take(8) + " total=" + allPrivatePubkeys.size)
+        return true
     }
-    val publicTags = latest?.tags ?: emptyList()
-    val allPrivateTags = existingPrivateTags.toMutableList()
-    if (allPrivateTags.any { it.firstOrNull() == "p" && it.getOrNull(1) == pubkeyHex }) return true
-    allPrivateTags.add(listOf("p", pubkeyHex))
 
     val encryptedContent = try {
-        signer.nip44Encrypt(myPubkey, kotlinx.serialization.json.Json.encodeToString(allPrivateTags)) ?: return false
-    } catch (_: Exception) { return false }
-
-    val success = publishNewEvent(NostrKind.MUTE_LIST, encryptedContent, publicTags) != null
-    if (success) {
-        val privatePubkeys = allPrivateTags.filter { it.firstOrNull() == "p" }.mapNotNull { it.getOrNull(1) }.distinct()
-        val publicPubkeys = publicTags.filter { it.firstOrNull() == "p" }.mapNotNull { it.getOrNull(1) }.distinct()
-        cache.setCachedMuteList(myPubkey, json.encodeToString(MuteListData.serializer(), MuteListData(
-            pubkeys = (privatePubkeys + publicPubkeys).distinct(),
-            eventIds = (allPrivateTags.filter { it.firstOrNull() == "e" }.mapNotNull { it.getOrNull(1) } + publicTags.filter { it.firstOrNull() == "e" }.mapNotNull { it.getOrNull(1) }).distinct(),
-            hashtags = (allPrivateTags.filter { it.firstOrNull() == "t" }.mapNotNull { it.getOrNull(1) } + publicTags.filter { it.firstOrNull() == "t" }.mapNotNull { it.getOrNull(1) }).distinct(),
-            words = (allPrivateTags.filter { it.firstOrNull() == "word" }.mapNotNull { it.getOrNull(1) } + publicTags.filter { it.firstOrNull() == "word" }.mapNotNull { it.getOrNull(1) }).distinct(),
-            privatePubkeys = privatePubkeys,
-            publicPubkeys = publicPubkeys
-        )))
+        signer.nip44Encrypt(myPubkey, kotlinx.serialization.json.Json.encodeToString(privateTags)) ?: run {
+            android.util.Log.w("NostrRepository", "muteUser local-only: encrypt returned null target=" + pubkeyHex.take(8))
+            return true
+        }
+    } catch (e: Exception) {
+        android.util.Log.w("NostrRepository", "muteUser local-only: encrypt failed " + e.message)
+        return true
     }
-    return success
+
+    ensureWriteRelaysForReplaceablePublish()
+    val published = publishNewEvent(NostrKind.MUTE_LIST, encryptedContent, publicTags) != null
+    android.util.Log.d("NostrRepository", "muteUser private local=true publish=" + published + " target=" + pubkeyHex.take(8) + " total=" + allPrivatePubkeys.size)
+    return true
 }
+
 
 suspend fun NostrRepository.followUser(myPubkeyHex: String, targetPubkeyHex: String): Boolean {
     return try {

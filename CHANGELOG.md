@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.6] - 2026-05-09
+
+### Fixed (Android)
+- ログインユーザーの NIP-65 リレーリスト同期を改善し、既定リレーに戻ってしまう問題を修正
+- ミュートリストをローカルキャッシュ優先で即時反映し、連続ミュート時の上書きを防止
+- 返信・引用・通知から投稿詳細を開く際の初期表示とリレー配送を改善
+- システムバー色と下部ナビゲーション余白を調整
+
+### Changed (iOS)
+- App Store 提出向けにろくなな短尺動画機能をビルド対象から除外し、権限説明文を更新
+
 ## [1.4.3] - 2026-03-26
 
 ### Fixed (Android)
