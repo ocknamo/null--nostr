@@ -19,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -355,10 +356,11 @@ fun EmojiSettings(
                                     OutlinedTextField(
                                         value = emojiSetSearch,
                                         onValueChange = { emojiSetSearch = it },
-                                        placeholder = { Text("検索...", fontSize = 14.sp) },
-                                        modifier = Modifier.weight(1f).height(48.dp),
+                                        placeholder = { Text("検索...", fontSize = 14.sp, lineHeight = 20.sp) },
+                                        modifier = Modifier.weight(1f).heightIn(min = 56.dp),
                                         shape = RoundedCornerShape(12.dp),
                                         singleLine = true,
+                                        textStyle = TextStyle(fontSize = 14.sp, lineHeight = 20.sp),
                                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                                         keyboardActions = KeyboardActions(onSearch = { searchEmojiSets() }),
                                         colors = OutlinedTextFieldDefaults.colors(

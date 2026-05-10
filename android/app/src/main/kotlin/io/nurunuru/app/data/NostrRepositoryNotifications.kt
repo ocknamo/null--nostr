@@ -417,6 +417,41 @@ private suspend fun NostrRepository.fetchNotificationEventsFromRelays(
     allEvents.values.toList()
 }
 
+
+/** Fetch a specific event by ID, trying hinted relays before the wider fallback. */
+suspend fun NostrRepository.fetchEventFromRelays(eventId: String, relayHints: List<String>): ScoredPost? {
+    val hints = relayHints.filter { it.startsWith("wss://") || it.startsWith("ws://") }.distinct()
+    if (hints.isNotEmpty()) {
+        val filter = NostrClient.Filter(ids = listOf(eventId), limit = 1)
+        val events = client.fetchEventsFrom(hints, filter, timeoutMs = 5_000)
+        if (events.isNotEmpty()) return enrichPosts(events.distinctBy { it.id }).firstOrNull()
+    }
+    return fetchEvent(eventId)
+}
+
+/** Fetch an addressable event (naddr) using kind:author:d-tag and optional relay hints. */
+suspend fun NostrRepository.fetchAddressableEvent(pointer: String, relayHints: List<String> = emptyList()): ScoredPost? {
+    val parts = pointer.split(":", limit = 3)
+    if (parts.size != 3) return null
+    val kind = parts[0].toIntOrNull() ?: return null
+    val author = parts[1]
+    val dTag = parts[2]
+    val filter = NostrClient.Filter(kinds = listOf(kind), authors = listOf(author), tags = mapOf("d" to listOf(dTag)), limit = 1)
+
+    val hints = relayHints.filter { it.startsWith("wss://") || it.startsWith("ws://") }.distinct()
+    val hinted = if (hints.isNotEmpty()) client.fetchEventsFrom(hints, filter, timeoutMs = 5_000) else emptyList()
+    if (hinted.isNotEmpty()) return enrichPosts(hinted.distinctBy { it.id }).firstOrNull()
+
+    val relayCandidates = (
+        prefs.nip65Relays.map { it.url } +
+        prefs.relays.toList() +
+        io.nurunuru.app.data.models.DEFAULT_RELAYS +
+        listOf(NostrClient.SEARCH_RELAY)
+    ).distinct()
+    val events = client.fetchEventsFrom(relayCandidates, filter, timeoutMs = 7_000)
+    return enrichPosts(events.distinctBy { it.id }).firstOrNull()
+}
+
 /** Fetch a specific event by ID. */
 suspend fun NostrRepository.fetchEvent(eventId: String): ScoredPost? {
     val filter = NostrClient.Filter(

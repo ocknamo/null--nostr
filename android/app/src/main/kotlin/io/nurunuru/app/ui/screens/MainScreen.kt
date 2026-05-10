@@ -63,7 +63,7 @@ fun MainScreen(
     val context = LocalContext.current
     val view = LocalView.current
     val nuruColors = LocalNuruColors.current
-    var activeTab by remember { mutableStateOf(BottomTab.TIMELINE) }
+    var activeTab by remember { mutableStateOf(BottomTab.HOME) }
     var isExternalAppOpen by remember { mutableStateOf(false) }
     var showAppSettings by remember { mutableStateOf(false) }
     var selectedNoteEventId by remember { mutableStateOf<String?>(null) }

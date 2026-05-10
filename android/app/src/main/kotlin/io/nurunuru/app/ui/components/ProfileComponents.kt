@@ -373,7 +373,7 @@ fun ProfileAbout(about: String) {
     val nuruColors = LocalNuruColors.current
     val annotated = remember(about) {
         buildAnnotatedString {
-            val regex = Regex("(https?://[^\\s]+|nostr:(?:note1|nevent1|npub1|nprofile1|naddr1)[a-z0-9]{58,})")
+            val regex = Regex("(https?://[^\\s]+|nostr:(?:note1|nevent1|npub1|nprofile1|naddr1)[a-z0-9]+)")
             var lastIdx = 0
             regex.findAll(about).forEach { match ->
                 append(about.substring(lastIdx, match.range.first))

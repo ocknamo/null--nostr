@@ -2,7 +2,16 @@ package io.nurunuru.app.data
 
 import rust.nostr.sdk.*
 
-data class NostrLink(val type: String, val id: String)
+private fun normalizeRelayUrlForNip19(url: String): String {
+    val raw = url.removePrefix("RelayUrl(").removeSuffix(")")
+    return when {
+        raw.startsWith("wss://") || raw.startsWith("ws://") -> raw
+        raw.isNotBlank() -> "wss://$raw"
+        else -> raw
+    }
+}
+
+data class NostrLink(val type: String, val id: String, val relays: List<String> = emptyList())
 
 /**
  * Utility functions for Nostr key operations.
@@ -88,15 +97,20 @@ object NostrKeyUtils {
                 input.startsWith("note1") -> NostrLink("note", EventId.parse(input).toHex())
                 input.startsWith("nevent1") -> {
                     val nip19 = Nip19Event.fromBech32(input)
-                    NostrLink("nevent", nip19.eventId().toHex())
+                    NostrLink("nevent", nip19.eventId().toHex(), nip19.relays().map { normalizeRelayUrlForNip19(it.toString()) })
                 }
                 input.startsWith("nprofile1") -> {
                     val nip19 = Nip19Profile.fromBech32(input)
                     NostrLink("nprofile", nip19.publicKey().toHex())
                 }
                 input.startsWith("naddr1") -> {
-                    val coord = Coordinate.parse(input)
-                    NostrLink("naddr", coord.identifier())
+                    val nip19 = Nip19Coordinate.fromBech32(input)
+                    val coord = nip19.coordinate()
+                    NostrLink(
+                        "naddr",
+                        "${coord.kind().asU16()}:${coord.publicKey().toHex()}:${coord.identifier()}",
+                        nip19.relays().map { normalizeRelayUrlForNip19(it.toString()) }
+                    )
                 }
                 else -> null
             }

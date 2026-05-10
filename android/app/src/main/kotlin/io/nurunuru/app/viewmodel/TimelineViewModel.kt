@@ -553,7 +553,9 @@ class TimelineViewModel(
                 // 3. Check for specific event (note, nevent, or 64-char hex)
                 val isHex64 = trimmedQuery.length == 64 && trimmedQuery.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }
                 if (trimmedQuery.startsWith("note") || trimmedQuery.startsWith("nevent") || isHex64) {
-                    val event = repository.fetchEvent(trimmedQuery)
+                    val eventId = if (isHex64) trimmedQuery.lowercase()
+                        else NostrKeyUtils.parseNostrLink(trimmedQuery)?.id
+                    val event = eventId?.let { repository.fetchEvent(it) }
                     if (event != null) {
                         _uiState.update { it.copy(searchResults = listOf(event), isSearching = false) }
                         return@launch

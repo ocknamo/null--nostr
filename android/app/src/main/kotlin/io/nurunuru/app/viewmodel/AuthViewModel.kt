@@ -189,6 +189,16 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             val recommendationEngine = io.nurunuru.app.data.RecommendationEngine(getApplication())
             val repository = NostrRepository(client, prefs, cache, recommendationEngine)
 
+            val relayList = relays ?: targetRelays.map { Triple(it, true, true) }
+            // Persist the selected relay set before publishing so the just-created
+            // account immediately uses the same NIP-65 relays after login.
+            prefs.nip65Relays = relayList.map { (url, read, write) ->
+                io.nurunuru.app.data.models.Nip65Relay(url, read, write)
+            }
+            prefs.mainRelay = relayList.firstOrNull { it.second && it.third }?.first
+                ?: relayList.firstOrNull()?.first
+                ?: "wss://yabu.me"
+
             val profile = UserProfile(
                 pubkey = signer.getPublicKeyHex(),
                 name = name,
@@ -208,8 +218,17 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 return@withContext false
             }
 
-            val relayList = relays ?: targetRelays.map { Triple(it, true, true) }
-            repository.updateRelayList(relayList)
+            delay(500)
+            val relayPublished = repository.updateRelayList(relayList) || run {
+                android.util.Log.w("AuthViewModel", "Initial kind10002 relay publish failed; retrying once")
+                delay(1000)
+                repository.updateRelayList(relayList)
+            }
+            if (!relayPublished) {
+                android.util.Log.e("AuthViewModel", "Initial kind10002 relay publish failed")
+                client.disconnect()
+                return@withContext false
+            }
 
             delay(1000)
             client.disconnect()
@@ -241,12 +260,16 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun completeRegistration(pubKeyHex: String) {
+        // 秘密鍵は既に SecureKeyManager に保存済み。
+        // 「はじめる」タップ時はログイン状態を先に反映し、LoginScreen/新規登録画面へ
+        // 一瞬戻ることなく MainScreen(ホーム) へ直接切り替える。
+        prefs.publicKeyHex = pubKeyHex
+        prefs.isExternalSigner = false
+        _authState.value = AuthState.LoggedIn(pubKeyHex, isExternal = false, hasInternalKey = true)
+
+        // リレー同期は遷移後にバックグラウンドで継続する。
         viewModelScope.launch(Dispatchers.IO) {
-            // 秘密鍵は既に SecureKeyManager に保存済み
-            prefs.publicKeyHex = pubKeyHex
-            prefs.isExternalSigner = false
             syncRelayListOnLogin(pubKeyHex, io.nurunuru.app.data.InternalSigner(keyManager))
-            _authState.value = AuthState.LoggedIn(pubKeyHex, isExternal = false, hasInternalKey = true)
         }
     }
 

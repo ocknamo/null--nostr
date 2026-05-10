@@ -268,7 +268,7 @@ fun PostContent(
     val inlineContent = mutableMapOf<String, InlineTextContent>()
 
     val parts = mutableListOf<ContentPart>()
-    val regex = Regex("(https?://[^\\s]+|nostr:(?:note1|nevent1|npub1|nprofile1|naddr1)[a-z0-9]{58,}|#\\w+|:\\w+:)")
+    val regex = Regex("(https?://[^\\s]+|nostr:(?:note1|nevent1|npub1|nprofile1|naddr1)[a-z0-9]+|#\\w+|:\\w+:)")
     var lastIdx = 0
 
     regex.findAll(cleanContent).forEach { match ->
@@ -432,12 +432,19 @@ fun EmbeddedNostrContent(
         val parsed = io.nurunuru.app.data.NostrKeyUtils.parseNostrLink(bech32)
         if (parsed != null) {
             when (parsed.type) {
-                "note", "nevent" -> note = repository.fetchEvent(parsed.id)
+                "note" -> note = repository.fetchEvent(parsed.id)
+                "nevent" -> note = repository.fetchEventFromRelays(parsed.id, parsed.relays)
+                "naddr" -> note = repository.fetchAddressableEvent(parsed.id, parsed.relays)
                 "npub", "nprofile" -> {
                     profilePubkey = parsed.id
                     profileData = repository.fetchProfile(parsed.id)
                 }
             }
+            if ((parsed.type == "note" || parsed.type == "nevent" || parsed.type == "naddr") && note == null) {
+                android.util.Log.w("EmbeddedNostrContent", "preview fetch failed type=" + parsed.type + " id=" + parsed.id.take(24) + " relays=" + parsed.relays)
+            }
+        } else {
+            android.util.Log.w("EmbeddedNostrContent", "failed to parse nostr link: " + bech32.take(24))
         }
         isLoading = false
     }

@@ -266,13 +266,15 @@ private suspend fun NostrRepository.fetchFollowTimelineLegacy(pubkeyHex: String,
 /** Search for notes by text (NIP-50) using dedicated search relay. */
 suspend fun NostrRepository.searchNotes(query: String, limit: Int = 30): List<ScoredPost> {
     val filter = NostrClient.Filter(
-        kinds = listOf(NostrKind.TEXT_NOTE, NostrKind.VIDEO_LOOP),
+        // search.nos.today/searchnos returns results for a bare NIP-50 search filter.
+        // Kind filtering is applied client-side so relays that ignore combined
+        // {search,kinds} filters still work.
         search = query,
         limit = limit
     )
     val events = client.fetchEventsFrom(
         listOf(NostrClient.SEARCH_RELAY), filter, timeoutMs = 6_000
-    )
+    ).filter { it.kind == NostrKind.TEXT_NOTE || it.kind == NostrKind.VIDEO_LOOP }
     return enrichPosts(events)
 }
 
@@ -301,7 +303,9 @@ suspend fun NostrRepository.advancedSearch(
 
     val rawEvents = if (parsed.textQuery.isNotEmpty()) {
         val filter = NostrClient.Filter(
-            kinds   = listOf(NostrKind.TEXT_NOTE, NostrKind.VIDEO_LOOP),
+            // Keep the relay-side NIP-50 filter broad for searchnos compatibility;
+            // structured filters are still included, and kind/media/exclude checks
+            // are enforced below on the client.
             search  = parsed.textQuery,
             authors = fromHex.takeIf { it.isNotEmpty() },
             tags    = tagFilters,
@@ -325,6 +329,7 @@ suspend fun NostrRepository.advancedSearch(
     // クライアント側後処理フィルタ
     val filtered = rawEvents.filter { event ->
         val c = event.content
+        (event.kind == NostrKind.TEXT_NOTE || event.kind == NostrKind.VIDEO_LOOP) &&
         parsed.excludeWords.none  { w -> c.contains(w, ignoreCase = true) } &&
         parsed.exactPhrases.all   { p -> c.contains(p) } &&
         when (parsed.mediaFilter) {

@@ -2,6 +2,7 @@ package io.nurunuru.app.ui.screens
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -22,6 +23,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
@@ -189,14 +191,23 @@ fun HomeScreen(
                             }
                         }
                     } else if (displayPosts.isEmpty()) {
-                        Box(
-                            Modifier.fillMaxSize().padding(top = contentTopPadding),
-                            contentAlignment = Alignment.Center
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(top = contentTopPadding, bottom = 160.dp)
                         ) {
-                            EmptyState(
-                                icon = if (page == 0) Icons.Default.EditNote else Icons.Default.FavoriteBorder,
-                                text = if (page == 0) "投稿がありません" else "いいねがありません"
-                            )
+                            item {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 240.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    EmptyState(
+                                        icon = if (page == 0) Icons.Default.EditNote else Icons.Default.FavoriteBorder,
+                                        text = if (page == 0) "投稿がありません" else "いいねがありません"
+                                    )
+                                }
+                            }
                         }
                     } else {
                         LazyColumn(
@@ -255,6 +266,12 @@ fun HomeScreen(
                         .onGloballyPositioned { profileHeightPx.floatValue = it.size.height.toFloat() }
                         .offset { IntOffset(0, profileOffsetPx.floatValue.roundToInt()) }
                         .background(Color.Black)
+                        .pointerInput(profileHeightPx.floatValue) {
+                            detectVerticalDragGestures { change, dragAmount ->
+                                profileOffsetPx.floatValue = (profileOffsetPx.floatValue + dragAmount)
+                                    .coerceIn(-profileHeightPx.floatValue, 0f)
+                            }
+                        }
                 ) {
                     if (profile == null) ProfileSkeleton()
                     else ProfileHeader(

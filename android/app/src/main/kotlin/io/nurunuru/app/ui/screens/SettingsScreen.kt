@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -177,8 +178,7 @@ fun SettingsScreen(
             onBack = { selectedApp = null },
             onMlsCacheCleared = onMlsCacheCleared
         )
-        return
-    }
+    } else {
 
     // 外部ミニアプリ 編集・削除 BottomSheet
     editingApp?.let { target ->
@@ -560,6 +560,7 @@ fun SettingsScreen(
         )
     }
 }
+}
 
 @Composable
 private fun SecuritySettingsSection(authViewModel: AuthViewModel, prefs: AppPreferences, pubkeyHex: String) {
@@ -791,6 +792,8 @@ private fun MiniAppDetailView(
         "scrolls" -> "スクロール"
         else -> app.name
     }
+
+    BackHandler(onBack = onBack)
 
     // 外部アプリはトップバーなしでフルスクリーンWebViewで表示
     if (app.type == "external" && app.url != null) {
@@ -1125,7 +1128,11 @@ private fun RelaySettingsViewContent(prefs: AppPreferences, repository: NostrRep
     }
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .imePadding()
+            .padding(horizontal = 16.dp),
+        contentPadding = PaddingValues(top = 16.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {

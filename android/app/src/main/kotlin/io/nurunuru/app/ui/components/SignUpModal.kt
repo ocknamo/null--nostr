@@ -41,6 +41,7 @@ import io.nurunuru.app.data.GeohashUtils
 import io.nurunuru.app.data.RelayDiscovery
 import io.nurunuru.app.data.models.Nip65Relay
 import io.nurunuru.app.data.models.UserProfile
+import io.nurunuru.app.data.prefs.AppPreferences
 import io.nurunuru.app.ui.theme.LineGreen
 import io.nurunuru.app.ui.theme.LocalNuruColors
 import io.nurunuru.app.viewmodel.AuthViewModel
@@ -52,56 +53,67 @@ fun SignUpModal(
     onClose: () -> Unit,
     onSuccess: (String) -> Unit
 ) {
-    var step by remember { mutableStateOf("welcome") } // welcome, backup, relay, profile, success
+    var step by remember { mutableStateOf("welcome") } // welcome, backup, relay, profile, success, completing
     var generatedAccount by remember { mutableStateOf<GeneratedAccount?>(null) }
     var selectedRelays by remember { mutableStateOf<List<Nip65Relay>?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
 
     val nuruColors = LocalNuruColors.current
+    val signUpScope = rememberCoroutineScope()
 
-    Dialog(
-        onDismissRequest = onClose,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+    // This is intentionally a normal opaque full-screen composable, not Dialog.
+    // Dialog is a separate window and can reveal LoginScreen for a frame while
+    // it is dismissed or while AuthState switches to MainScreen.
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = nuruColors.bgPrimary
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.6f))
-                .clickable { onClose() },
-            contentAlignment = Alignment.Center
-        ) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth(0.9f)
-                    .clip(RoundedCornerShape(24.dp))
-                    .clickable(enabled = false) {},
-                colors = CardDefaults.cardColors(containerColor = nuruColors.bgPrimary),
-                shape = RoundedCornerShape(24.dp)
+        if (step == "completing") {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
             ) {
-                Column {
-                    // Progress bar
-                    val progress = when(step) {
-                        "welcome" -> 0.2f
-                        "backup" -> 0.4f
-                        "relay" -> 0.6f
-                        "profile" -> 0.8f
-                        else -> 1f
-                    }
-                    Box(modifier = Modifier.fillMaxWidth().height(4.dp).background(nuruColors.bgSecondary)) {
-                        Box(modifier = Modifier.fillMaxWidth(progress).fillMaxHeight().background(LineGreen))
-                    }
+                CircularProgressIndicator(color = LineGreen)
+                Spacer(Modifier.height(16.dp))
+                Text("ホームを開いています...", color = nuruColors.textSecondary, fontSize = 14.sp)
+            }
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(24.dp)),
+                    colors = CardDefaults.cardColors(containerColor = nuruColors.bgPrimary),
+                    shape = RoundedCornerShape(24.dp)
+                ) {
+                    Column {
+                        val progress = when (step) {
+                            "welcome" -> 0.2f
+                            "backup" -> 0.4f
+                            "relay" -> 0.6f
+                            "profile" -> 0.8f
+                            else -> 1f
+                        }
+                        Box(modifier = Modifier.fillMaxWidth().height(4.dp).background(nuruColors.bgSecondary)) {
+                            Box(modifier = Modifier.fillMaxWidth(progress).fillMaxHeight().background(LineGreen))
+                        }
 
-                    Column(
-                        modifier = Modifier
-                            .padding(24.dp)
-                            .verticalScroll(rememberScrollState()),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(20.dp)
-                    ) {
-                        when (step) {
-                            "welcome" -> {
-                                WelcomeStep(
+                        Column(
+                            modifier = Modifier
+                                .padding(24.dp)
+                                .verticalScroll(rememberScrollState()),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(20.dp)
+                        ) {
+                            when (step) {
+                                "welcome" -> WelcomeStep(
                                     onNext = {
                                         isLoading = true
                                         error = ""
@@ -118,60 +130,63 @@ fun SignUpModal(
                                     isLoading = isLoading,
                                     error = error
                                 )
-                            }
-                            "backup" -> BackupStep(
-                                account = generatedAccount!!,
-                                onNext = { step = "relay" }
-                            )
-                            "relay" -> RelayStep(
-                                onRelaysSelected = { relays ->
-                                    selectedRelays = relays
-                                    step = "profile"
-                                }
-                            )
-                            "profile" -> {
-                                val coroutineScope = rememberCoroutineScope()
-                                val context = LocalContext.current
-                                ProfileStep(
-                                    onFinish = { name, about, picture, banner, nip05, lud16, website, birthday ->
-                                        isLoading = true
-                                        coroutineScope.launch {
-                                            // Publish metadata and relay list
-                                            val internalSigner = io.nurunuru.app.data.InternalSigner(viewModel.keyManager)
-                                            val relayTriples: List<Triple<String, Boolean, Boolean>>? = selectedRelays?.map { Triple(it.url, it.read, it.write) }
-                                            val publishedProfile = viewModel.publishInitialMetadata(
-                                                signer = internalSigner,
-                                                name = name,
-                                                about = about,
-                                                picture = picture,
-                                                banner = banner,
-                                                nip05 = nip05,
-                                                lud16 = lud16,
-                                                website = website,
-                                                birthday = birthday,
-                                                relays = relayTriples
-                                            )
-                                            if (!publishedProfile) {
-                                                error = "プロフィール(kind0)のリレー送信に失敗しました。通信状況とリレー設定を確認してください。"
+                                "backup" -> BackupStep(
+                                    account = generatedAccount!!,
+                                    onNext = { step = "relay" }
+                                )
+                                "relay" -> RelayStep(
+                                    onRelaysSelected = { relays ->
+                                        selectedRelays = relays
+                                        step = "profile"
+                                    }
+                                )
+                                "profile" -> {
+                                    val coroutineScope = rememberCoroutineScope()
+                                    val internalSigner = remember { io.nurunuru.app.data.InternalSigner(viewModel.keyManager) }
+                                    ProfileStep(
+                                        uploadSigner = internalSigner,
+                                        onFinish = { name, about, picture, banner, nip05, lud16, website, birthday ->
+                                            isLoading = true
+                                            coroutineScope.launch {
+                                                val relayTriples: List<Triple<String, Boolean, Boolean>>? =
+                                                    selectedRelays?.map { Triple(it.url, it.read, it.write) }
+                                                val publishedProfile = viewModel.publishInitialMetadata(
+                                                    signer = internalSigner,
+                                                    name = name,
+                                                    about = about,
+                                                    picture = picture,
+                                                    banner = banner,
+                                                    nip05 = nip05,
+                                                    lud16 = lud16,
+                                                    website = website,
+                                                    birthday = birthday,
+                                                    relays = relayTriples
+                                                )
+                                                if (!publishedProfile) {
+                                                    error = "プロフィール(kind0)のリレー送信に失敗しました。通信状況とリレー設定を確認してください。"
+                                                    isLoading = false
+                                                    return@launch
+                                                }
+                                                step = "success"
                                                 isLoading = false
-                                                return@launch
                                             }
-                                            // iOS と同じく、公開鍵コピー画面を表示してから登録完了にする。
-                                            // ここで LoggedIn に遷移すると LoginScreen が切り替わり、success 画面がスキップされる。
-                                            step = "success"
-                                            isLoading = false
+                                        },
+                                        isLoading = isLoading
+                                    )
+                                }
+                                "success" -> SuccessStep(
+                                    npub = generatedAccount?.npub ?: "",
+                                    onComplete = {
+                                        val pubkey = generatedAccount!!.pubkeyHex
+                                        step = "completing"
+                                        signUpScope.launch {
+                                            kotlinx.coroutines.yield()
+                                            onSuccess(pubkey)
+                                            viewModel.completeRegistration(pubkey)
                                         }
-                                    },
-                                    isLoading = isLoading
+                                    }
                                 )
                             }
-                            "success" -> SuccessStep(
-                                npub = generatedAccount?.npub ?: "",
-                                onComplete = {
-                                    viewModel.completeRegistration(generatedAccount!!.pubkeyHex)
-                                    onSuccess(generatedAccount!!.pubkeyHex)
-                                }
-                            )
                         }
                     }
                 }
@@ -291,10 +306,14 @@ fun BackupStep(
 @Composable
 fun RelayStep(onRelaysSelected: (List<Nip65Relay>) -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val prefs = remember(context) { AppPreferences(context.applicationContext) }
     val nuruColors = LocalNuruColors.current
     var selectionMode by remember { mutableStateOf("manual") } // auto, manual
+    var selectedLat by remember { mutableDoubleStateOf(35.6762) }
+    var selectedLon by remember { mutableDoubleStateOf(139.6503) }
+    var selectedRegionId by remember { mutableStateOf<String?>("tokyo") }
     var recommendedRelays by remember { mutableStateOf<List<Nip65Relay>>(
-        RelayDiscovery.generateRelayListByLocation(35.6762, 139.6503).combined // Default to Tokyo
+        RelayDiscovery.generateRelayListByLocation(selectedLat, selectedLon).combined // Default to Tokyo
     ) }
     var regionName by remember { mutableStateOf("東京") }
     var isLoading by remember { mutableStateOf(false) }
@@ -338,8 +357,11 @@ fun RelayStep(onRelaysSelected: (List<Nip65Relay>) -> Unit) {
                 // In a real app, we would use FusedLocationProvider here.
                 // For this synchronization task, we'll simulate the detection once granted.
                 isLoading = true
+                selectedLat = 35.6762
+                selectedLon = 139.6503
+                selectedRegionId = null
                 regionName = "東京 (GPS推定)"
-                recommendedRelays = RelayDiscovery.generateRelayListByLocation(35.6762, 139.6503).combined
+                recommendedRelays = RelayDiscovery.generateRelayListByLocation(selectedLat, selectedLon).combined
                 isLoading = false
             } else {
                 selectionMode = "manual"
@@ -353,8 +375,11 @@ fun RelayStep(onRelaysSelected: (List<Nip65Relay>) -> Unit) {
 
                 if (hasFine || hasCoarse) {
                     isLoading = true
+                    selectedLat = 35.6762
+                    selectedLon = 139.6503
+                    selectedRegionId = null
                     regionName = "東京 (GPS推定)"
-                    recommendedRelays = RelayDiscovery.generateRelayListByLocation(35.6762, 139.6503).combined
+                    recommendedRelays = RelayDiscovery.generateRelayListByLocation(selectedLat, selectedLon).combined
                     isLoading = false
                 } else {
                     permissionLauncher.launch(arrayOf(
@@ -383,6 +408,9 @@ fun RelayStep(onRelaysSelected: (List<Nip65Relay>) -> Unit) {
                             text = { Text(region.name) },
                             onClick = {
                                 regionName = region.name
+                                selectedLat = region.lat
+                                selectedLon = region.lon
+                                selectedRegionId = region.id
                                 recommendedRelays = RelayDiscovery.generateRelayListByLocation(region.lat, region.lon).combined
                                 expanded = false
                             }
@@ -420,7 +448,17 @@ fun RelayStep(onRelaysSelected: (List<Nip65Relay>) -> Unit) {
     }
 
     Button(
-        onClick = { onRelaysSelected(recommendedRelays) },
+        onClick = {
+            prefs.userLat = selectedLat
+            prefs.userLon = selectedLon
+            prefs.userGeohash = GeohashUtils.encodeGeohash(selectedLat, selectedLon)
+            prefs.selectedRegionId = selectedRegionId
+            prefs.nip65Relays = recommendedRelays
+            prefs.mainRelay = recommendedRelays.firstOrNull { it.read && it.write }?.url
+                ?: recommendedRelays.firstOrNull()?.url
+                ?: "wss://yabu.me"
+            onRelaysSelected(recommendedRelays)
+        },
         modifier = Modifier.fillMaxWidth().height(56.dp),
         colors = ButtonDefaults.buttonColors(containerColor = LineGreen),
         shape = RoundedCornerShape(16.dp),
@@ -432,6 +470,7 @@ fun RelayStep(onRelaysSelected: (List<Nip65Relay>) -> Unit) {
 
 @Composable
 fun ProfileStep(
+    uploadSigner: io.nurunuru.app.data.AppSigner? = null,
     onFinish: (String, String, String, String, String, String, String, String) -> Unit,
     isLoading: Boolean
 ) {
@@ -461,7 +500,7 @@ fun ProfileStep(
                             (context.contentResolver.getType(it) ?: "image/jpeg")
                     }
                     if (bytes != null) {
-                        val url = io.nurunuru.app.data.ImageUploadUtils.uploadToNostrBuild(bytes, mimeType, null)
+                        val url = uploadSignupImage(bytes, mimeType, uploadSigner)
                         if (url != null) picture = url
                         else Toast.makeText(context, "画像のアップロードに失敗しました", Toast.LENGTH_SHORT).show()
                     }
@@ -485,7 +524,7 @@ fun ProfileStep(
                             (context.contentResolver.getType(it) ?: "image/jpeg")
                     }
                     if (bytes != null) {
-                        val url = io.nurunuru.app.data.ImageUploadUtils.uploadToNostrBuild(bytes, mimeType, null)
+                        val url = uploadSignupImage(bytes, mimeType, uploadSigner)
                         if (url != null) banner = url
                         else Toast.makeText(context, "画像のアップロードに失敗しました", Toast.LENGTH_SHORT).show()
                     }
@@ -722,4 +761,18 @@ private fun IconBox(icon: ImageVector, containerColor: Color, iconColor: Color) 
             tint = iconColor
         )
     }
+}
+
+
+private suspend fun uploadSignupImage(
+    bytes: ByteArray,
+    mimeType: String,
+    signer: io.nurunuru.app.data.AppSigner?
+): String? {
+    // nostr.build increasingly expects NIP-98 auth. During signup we already have
+    // the freshly generated key in SecureKeyManager, so sign the upload request and
+    // gracefully fall back to the other supported image hosts.
+    return io.nurunuru.app.data.ImageUploadUtils.uploadToNostrBuild(bytes, mimeType, signer)
+        ?: io.nurunuru.app.data.ImageUploadUtils.uploadToYabuMe(bytes, mimeType, signer)
+        ?: io.nurunuru.app.data.ImageUploadUtils.uploadToBlossom(bytes, mimeType, signer)
 }

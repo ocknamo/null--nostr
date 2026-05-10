@@ -3,6 +3,7 @@ package io.nurunuru.app.ui.screens
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -49,6 +50,7 @@ fun LoginScreen(
     var showSignUp by remember { mutableStateOf(false) }
     var showNsecLogin by remember { mutableStateOf(false) }
     var showOtherMethods by remember { mutableStateOf(false) }
+    var isCompletingSignUp by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
     var showTermsDialog by remember { mutableStateOf(false) }
@@ -73,8 +75,9 @@ fun LoginScreen(
     val isLoading = authState is AuthState.Checking
     val errorMsg = (authState as? AuthState.Error)?.message
 
-    // Match Web version's initial loading state
-    if (isLoading && !showNsecLogin && !showSignUp) {
+    // Match Web version's initial loading state. During signup completion,
+    // keep the login/signup UI covered until MainActivity switches to MainScreen.
+    if ((isLoading && !showNsecLogin && !showSignUp) || isCompletingSignUp) {
         Box(
             modifier = Modifier.fillMaxSize().background(nuruColors.bgPrimary),
             contentAlignment = Alignment.Center
@@ -112,6 +115,19 @@ fun LoginScreen(
                 )
             }
         }
+        return
+    }
+
+    if (showSignUp) {
+        SignUpModal(
+            viewModel = viewModel,
+            onClose = { if (!isCompletingSignUp) showSignUp = false },
+            onSuccess = {
+                isCompletingSignUp = true
+                // Keep SignUpModal visible as an opaque full-screen screen until
+                // AuthState.LoggedIn replaces LoginScreen with MainScreen.
+            }
+        )
         return
     }
 
@@ -374,17 +390,30 @@ fun LoginScreen(
                 }
             }
 
-            // Footer
-            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            // Footer links
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "利用規約",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = nuruColors.textTertiary,
+                        modifier = Modifier.clickable { uriHandler.openUri("https://tami1a84.github.io/null--nostr/terms.html") }
+                    )
+                    Text(
+                        text = "プライバシーポリシー",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = nuruColors.textTertiary,
+                        modifier = Modifier.clickable { uriHandler.openUri("https://tami1a84.github.io/null--nostr/privacy.html") }
+                    )
+                }
                 Text(
-                    text = "Powered by Nostr",
+                    text = "公式サイト",
                     style = MaterialTheme.typography.bodySmall,
-                    color = nuruColors.textTertiary
-                )
-                Text(
-                    text = "秘密鍵はデバイス外に送信されません",
-                    fontSize = 10.sp,
-                    color = nuruColors.textTertiary.copy(alpha = 0.7f)
+                    color = nuruColors.textTertiary.copy(alpha = 0.85f),
+                    modifier = Modifier.clickable { uriHandler.openUri("https://tami1a84.github.io/null--nostr/") }
                 )
             }
         }
@@ -406,16 +435,6 @@ fun LoginScreen(
         )
     }
 
-    if (showSignUp) {
-        SignUpModal(
-            viewModel = viewModel,
-            onClose = { showSignUp = false },
-            onSuccess = { pubkey ->
-                showSignUp = false
-                // Logged in via completeRegistration in Modal
-            }
-        )
-    }
 }
 
 @Composable

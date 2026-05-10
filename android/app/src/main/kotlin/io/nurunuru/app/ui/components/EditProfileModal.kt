@@ -36,7 +36,6 @@ fun EditProfileModal(
     onSave: (UserProfile) -> Unit,
     viewModel: HomeViewModel
 ) {
-    val uiState by viewModel.uiState.collectAsState()
     var name by remember { mutableStateOf(profile.name ?: "") }
     var about by remember { mutableStateOf(profile.about ?: "") }
     var picture by remember { mutableStateOf(profile.picture ?: "") }
@@ -115,27 +114,6 @@ fun EditProfileModal(
 
             Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 ProfileEditField("名前", name, { name = it }, "表示名")
-
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("アップロード先", style = MaterialTheme.typography.labelMedium, color = TextSecondary)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("nostr.build", "https://blossom.nostr.build").forEach { server ->
-                            FilterChip(
-                                selected = uiState.uploadServer == server,
-                                onClick = { viewModel.setUploadServer(server) },
-                                label = { Text(if (server == "nostr.build") "nostr.build" else "Blossom", fontSize = 12.sp) },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = LineGreen,
-                                    selectedLabelColor = Color.White,
-                                    containerColor = BgSecondary,
-                                    labelColor = TextSecondary
-                                ),
-                                border = null,
-                                shape = RoundedCornerShape(16.dp)
-                            )
-                        }
-                    }
-                }
 
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("アイコン画像", style = MaterialTheme.typography.labelMedium, color = TextSecondary)

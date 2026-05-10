@@ -115,16 +115,34 @@ class HomeViewModel(
      */
     private suspend fun fetchAndApply(pubkeyHex: String, isRefresh: Boolean) {
         try {
-            val (profile, posts, likedPosts, followList, badgeUrls) = coroutineScope {
-                val profileJob = async { repository.fetchProfile(pubkeyHex) }
-                val postsJob   = async { repository.fetchUserNotes(pubkeyHex, 50) }
-                val likesJob   = async { repository.fetchUserLikes(pubkeyHex, 50) }
-                val followJob  = async { repository.fetchFollowList(pubkeyHex) }
-                val badgesJob  = async {
-                    repository.fetchProfileBadgesInfo(pubkeyHex)
-                        .map { it.image }.filter { it.isNotEmpty() }
+            val result = supervisorScope {
+                val profileJob = async {
+                    runCatching { repository.fetchProfile(pubkeyHex) }
+                        .onFailure { android.util.Log.w("HomeViewModel", "fetchProfile failed: " + it.message) }
+                        .getOrNull()
                 }
-                awaitAll(profileJob, postsJob, likesJob, followJob, badgesJob)
+                val postsJob = async {
+                    runCatching { repository.fetchUserNotes(pubkeyHex, 50) }
+                        .onFailure { android.util.Log.w("HomeViewModel", "fetchUserNotes failed: " + it.message) }
+                        .getOrElse { emptyList() }
+                }
+                val likesJob = async {
+                    runCatching { repository.fetchUserLikes(pubkeyHex, 50) }
+                        .onFailure { android.util.Log.w("HomeViewModel", "fetchUserLikes failed: " + it.message) }
+                        .getOrElse { emptyList() }
+                }
+                val followJob = async {
+                    runCatching { repository.fetchFollowList(pubkeyHex) }
+                        .onFailure { android.util.Log.w("HomeViewModel", "fetchFollowList failed: " + it.message) }
+                        .getOrElse { emptyList() }
+                }
+                val badgesJob = async {
+                    runCatching {
+                        repository.fetchProfileBadgesInfo(pubkeyHex)
+                            .map { it.image }.filter { it.isNotEmpty() }
+                    }.onFailure { android.util.Log.w("HomeViewModel", "fetchProfileBadges failed: " + it.message) }
+                     .getOrElse { emptyList() }
+                }
                 FetchResult(
                     profile    = profileJob.await(),
                     posts      = postsJob.await(),
@@ -134,30 +152,30 @@ class HomeViewModel(
                 )
             }
 
-            val enrichedPosts = posts.filterDeleted()
-                .map { if (it.event.pubkey == pubkeyHex) it.copy(badges = badgeUrls) else it }
-            val enrichedLikes = likedPosts.filterDeleted()
-                .map { if (it.event.pubkey == pubkeyHex) it.copy(badges = badgeUrls) else it }
+            val enrichedPosts = result.posts.filterDeleted()
+                .map { if (it.event.pubkey == pubkeyHex) it.copy(badges = result.badgeUrls) else it }
+            val enrichedLikes = result.likedPosts.filterDeleted()
+                .map { if (it.event.pubkey == pubkeyHex) it.copy(badges = result.badgeUrls) else it }
 
-            val myFollowList = if (pubkeyHex == myPubkeyHex) followList
-                               else repository.fetchFollowList(myPubkeyHex)
+            val myFollowList = if (pubkeyHex == myPubkeyHex) result.followList
+                               else runCatching { repository.fetchFollowList(myPubkeyHex) }.getOrElse { emptyList() }
             val isFollowing = pubkeyHex != myPubkeyHex && myFollowList.contains(pubkeyHex)
 
-            _uiState.update {
-                it.copy(
-                    profile = profile,
+            _uiState.update { current ->
+                current.copy(
+                    profile = result.profile ?: current.profile ?: UserProfile(pubkey = pubkeyHex),
                     posts = enrichedPosts,
                     likedPosts = enrichedLikes,
-                    followCount = followList.size,
-                    followList = followList,
-                    badges = badgeUrls,
+                    followCount = result.followList.size,
+                    followList = result.followList,
+                    badges = result.badgeUrls,
                     isFollowing = isFollowing,
                     isLoading = false,
                     isRefreshing = false
                 )
             }
 
-            val nip05 = profile?.nip05
+            val nip05 = result.profile?.nip05
             if (nip05 != null) {
                 viewModelScope.launch {
                     val verified = Nip05Utils.verifyNip05(nip05, pubkeyHex)
@@ -170,6 +188,7 @@ class HomeViewModel(
             _uiState.update {
                 it.copy(
                     error = if (!isRefresh) "プロフィールの読み込みに失敗しました" else null,
+                    profile = it.profile ?: UserProfile(pubkey = pubkeyHex),
                     isLoading = false,
                     isRefreshing = false
                 )
