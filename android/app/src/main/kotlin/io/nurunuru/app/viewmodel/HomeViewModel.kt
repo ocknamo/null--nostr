@@ -164,11 +164,11 @@ class HomeViewModel(
             _uiState.update { current ->
                 current.copy(
                     profile = result.profile ?: current.profile ?: UserProfile(pubkey = pubkeyHex),
-                    posts = enrichedPosts,
-                    likedPosts = enrichedLikes,
-                    followCount = result.followList.size,
-                    followList = result.followList,
-                    badges = result.badgeUrls,
+                    posts = if (enrichedPosts.isNotEmpty() || current.posts.isEmpty()) enrichedPosts else current.posts,
+                    likedPosts = if (enrichedLikes.isNotEmpty() || current.likedPosts.isEmpty()) enrichedLikes else current.likedPosts,
+                    followCount = if (result.followList.isNotEmpty() || current.followList.isEmpty()) result.followList.size else current.followCount,
+                    followList = if (result.followList.isNotEmpty() || current.followList.isEmpty()) result.followList else current.followList,
+                    badges = if (result.badgeUrls.isNotEmpty() || current.badges.isEmpty()) result.badgeUrls else current.badges,
                     isFollowing = isFollowing,
                     isLoading = false,
                     isRefreshing = false
@@ -242,6 +242,7 @@ class HomeViewModel(
                     val reactionEventId = post.myLikeEventId ?: return@launch
                     val success = repository.deleteEvent(reactionEventId)
                     if (success) {
+                        repository.removeCachedUserLikedPost(myPubkeyHex, eventId)
                         _uiState.update { state ->
                             val updatePost = { p: ScoredPost ->
                                 if (p.event.id == eventId) p.copy(
@@ -258,6 +259,7 @@ class HomeViewModel(
                 val authorPubkey = post?.event?.pubkey ?: ""
                 val newEventId = repository.likePost(eventId, authorPubkey, emoji, customTags)
                 if (newEventId != null) {
+                    post?.let { repository.cacheUserLikedPost(myPubkeyHex, it.copy(isLiked = true, myLikeEventId = newEventId)) }
                     _uiState.update { state ->
                         val updatePost = { p: ScoredPost ->
                             if (p.event.id == eventId) p.copy(

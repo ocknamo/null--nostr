@@ -118,17 +118,18 @@ final class TimelineViewModel {
         guard !didStartInitialLoad else { return }
         didStartInitialLoad = true
 
-        // ── Step 1: リレーデータ取得 + NIP-65 sync をバックグラウンドで並列実行 ──
-        // Android 同様: syncNip65Relays は Dispatchers.IO の launch で UI をブロックしない。
         Task {
-            // リレー URL をまず取得（ドロップダウン表示用）
-            savedRelayUrls = await repository.getSavedRelayUrls()
-            for url in savedRelayUrls.prefix(3) {
-                Task { await repository.prefetchRelayTimeline(url) }
-            }
+            // First paint first. Relay dropdown/NIP-65/prefetch run only after
+            // fast posts are visible, otherwise they compete with the hot path.
+            await loadFreshData()
 
-            // NIP-65 sync + prefetch をバックグラウンドで実行（メインフローをブロックしない）
             Task {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                savedRelayUrls = await repository.getSavedRelayUrls()
+                for url in savedRelayUrls.prefix(3) {
+                    Task { await repository.prefetchRelayTimeline(url) }
+                }
+
                 await repository.syncNip65Relays()
                 savedRelayUrls = await repository.getSavedRelayUrls()
                 for url in savedRelayUrls.prefix(3) {
@@ -136,9 +137,6 @@ final class TimelineViewModel {
                 }
                 AppLogger.log("Timeline", "NIP-65 sync complete — relays: \(savedRelayUrls)")
             }
-
-            // リレーからの最新データ取得を並列で即時開始
-            await loadFreshData()
         }
     }
 
@@ -154,48 +152,89 @@ final class TimelineViewModel {
     private func loadFreshData() async {
         AppLogger.log("Timeline", "loadFreshData start")
 
-        // ── Step 1: フォローリストを最優先で取得 ──
-        let freshFollows = await repository.fetchFollowList(pubkey: pubkeyHex)
-        if !freshFollows.isEmpty {
-            followList = freshFollows
+        // ── Step 1: cached follow list で即 following fast fetch を開始 ──
+        // Fresh follow-list fetch used to cost several seconds before following
+        // posts could load. Use the cached list for first paint, then refresh the
+        // list in the background and re-run fast following if it changed.
+        let initialFollowList = followList
+        AppLogger.log("Timeline", "Using cached follow list for first paint: \(initialFollowList.count) follows")
+        if !initialFollowList.isEmpty {
+            Task { await repository.prefetchProfilesAndBadges(pubkeys: initialFollowList) }
         }
-        AppLogger.log("Timeline", "Follow list loaded: \(followList.count) follows")
-        await restartFollowingLiveTimeline()
 
-        // フォロー表示を優先しつつ、リレー取得は並列で先行開始
-        async let globalTask: [ScoredPost] = repository.fetchGlobalTimeline()
+        // フォロー表示を優先しつつ、リレー取得は fast path で並列先行開始。
+        async let globalTask: [ScoredPost] = repository.fetchGlobalTimelineFast()
 
-        // ── Step 2: フォロータイムラインを最優先で取得 ──
+        // ── Step 2: フォロータイムラインを最優先で取得（fast path） ──
         let freshFollowing: [ScoredPost]
-        if followList.isEmpty {
+        if initialFollowList.isEmpty {
             freshFollowing = []
         } else {
-            freshFollowing = await repository.fetchFollowingTimeline(authors: followList)
+            freshFollowing = await repository.fetchFollowingTimelineFast(authors: initialFollowList)
         }
         if !freshFollowing.isEmpty || followingPosts.isEmpty {
             followingPosts = freshFollowing
         }
         isFollowingLoading = false
-        AppLogger.log("Timeline", "Following posts loaded: \(freshFollowing.count)")
+        AppLogger.log("Timeline", "Following fast posts loaded: \(freshFollowing.count)")
+        if !followList.isEmpty { await restartFollowingLiveTimeline() }
 
-        // ── Step 3: グローバルタイムライン結果を反映 ──
+        // ── Step 3: グローバルタイムライン fast 結果を反映 ──
         let freshGlobal = await globalTask
         if !freshGlobal.isEmpty || relayPosts.isEmpty {
             relayPosts = freshGlobal
         }
         isRelayLoading = false
-        AppLogger.log("Timeline", "Relay posts loaded: \(freshGlobal.count)")
+        AppLogger.log("Timeline", "Relay fast posts loaded: \(freshGlobal.count)")
 
-        // キャッシュ表示分に欠損がある場合のみ追加 enrich（不要な再取得を避ける）
-        if hasMissingProfiles(in: followingPosts) {
-            await enrichProfiles(for: .following)
-        }
-        if hasMissingProfiles(in: relayPosts) {
-            await enrichProfiles(for: .relay)
-        }
-
-        // ライブポーリング開始（初回データ取得完了後）
         startLivePolling()
+
+        Task { [weak self, initialFollowList] in
+            guard let self else { return }
+            let freshFollows = await repository.refreshFollowList(pubkey: pubkeyHex)
+            guard !freshFollows.isEmpty, freshFollows != initialFollowList else { return }
+            followList = freshFollows
+            AppLogger.log("Timeline", "Fresh follow list applied: \(freshFollows.count) follows")
+            Task { await repository.prefetchProfilesAndBadges(pubkeys: freshFollows) }
+            await restartFollowingLiveTimeline()
+            let refreshed = await repository.fetchFollowingTimelineFast(authors: freshFollows)
+            if !refreshed.isEmpty {
+                followingPosts = refreshed
+                isFollowingLoading = false
+                AppLogger.log("Timeline", "Following fast posts refreshed after follow-list update: \(refreshed.count)")
+                let snapshot = refreshed
+                Task { [weak self, snapshot] in
+                    guard let self else { return }
+                    let enriched = await repository.enrichTimelinePosts(snapshot)
+                    if self.samePostIds(self.followingPosts, snapshot), !enriched.isEmpty {
+                        self.followingPosts = enriched
+                        AppLogger.log("Timeline", "Following enrich applied after follow refresh: \(enriched.count)")
+                    }
+                }
+            }
+        }
+
+        let followingSnapshot = followingPosts
+        let relaySnapshot = relayPosts
+        Task { [weak self, followingSnapshot, relaySnapshot] in
+            guard let self else { return }
+            async let enrichedFollowingTask = repository.enrichTimelinePosts(followingSnapshot)
+            async let enrichedRelayTask = repository.enrichTimelinePosts(relaySnapshot)
+            let (enrichedFollowing, enrichedRelay) = await (enrichedFollowingTask, enrichedRelayTask)
+            if self.samePostIds(self.followingPosts, followingSnapshot), !enrichedFollowing.isEmpty {
+                self.followingPosts = enrichedFollowing
+                AppLogger.log("Timeline", "Following enrich applied: \(enrichedFollowing.count)")
+            }
+            if self.samePostIds(self.relayPosts, relaySnapshot), !enrichedRelay.isEmpty {
+                self.relayPosts = enrichedRelay
+                AppLogger.log("Timeline", "Relay enrich applied: \(enrichedRelay.count)")
+            }
+        }
+    }
+
+    private func samePostIds(_ lhs: [ScoredPost], _ rhs: [ScoredPost]) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        return zip(lhs, rhs).allSatisfy { $0.event.id == $1.event.id }
     }
 
     private func restartFollowingLiveTimeline() async {
@@ -313,12 +352,9 @@ final class TimelineViewModel {
     func switchFeed(_ feed: FeedType) {
         feedType = feed
         if feed == .relay {
-            hasNewRelayPosts      = false
-            // ピルカウントをアクティブフィードに合わせて更新
             pendingLivePostsCount = pendingRelayPosts.count
         }
         if feed == .following {
-            hasNewFollowingPosts  = false
             pendingLivePostsCount = pendingFollowingPosts.count
         }
     }
@@ -373,11 +409,21 @@ final class TimelineViewModel {
         post.isLiked   = !wasLiked
         post.likeCount += wasLiked ? -1 : 1
         triggerUpdate()
+        if wasLiked {
+            NotificationCenter.default.post(name: .nuruHomeUnlikedPost, object: nil, userInfo: ["eventId": post.event.id])
+        } else {
+            NotificationCenter.default.post(name: .nuruHomeLikedPost, object: nil, userInfo: ["event": post.event])
+        }
         do {
             try await repository.publishReaction(to: post.event.id, authorPubkey: post.event.pubkey)
         } catch {
             post.isLiked   = wasLiked
             post.likeCount += wasLiked ? 1 : -1
+            if wasLiked {
+                NotificationCenter.default.post(name: .nuruHomeLikedPost, object: nil, userInfo: ["event": post.event])
+            } else {
+                NotificationCenter.default.post(name: .nuruHomeUnlikedPost, object: nil, userInfo: ["eventId": post.event.id])
+            }
             triggerUpdate()
         }
     }

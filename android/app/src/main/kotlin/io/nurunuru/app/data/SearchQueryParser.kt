@@ -45,7 +45,7 @@ object SearchQueryParser {
 
     // 各オペレータの正規表現
     private val exactRegex   = Regex(""""([^"]+)"""")
-    private val hashtagRegex = Regex("""(?<!\S)#(\w+)""")
+    private val hashtagRegex = Regex("""(?<!\S)#([\p{L}\p{N}_\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\uFF00-\uFFEF]+)""")
     private val fromRegex    = Regex("""from:(\S+)""")
     private val sinceRegex   = Regex("""since:(\d{4}-\d{2}-\d{2})""")
     private val untilRegex   = Regex("""until:(\d{4}-\d{2}-\d{2})""")

@@ -634,6 +634,11 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
     func fetchFollowTimeline(authors: [String], limit: UInt32) throws  -> [String]
     
     /**
+     * Fast follow timeline for first paint. No engagement/profile/quote enrich.
+     */
+    func fetchFollowTimelineFast(authors: [String], limit: UInt32, timeoutSecs: UInt32) throws  -> [String]
+    
+    /**
      * Connect to relays and fetch the global timeline (Kind 1 text notes,
      * no author filter). Returns up to `limit` events as serialised JSON
      * strings, newest-first.
@@ -643,6 +648,11 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * Call `connect()` first so the relays are ready.
      */
     func fetchGlobalTimeline(limit: UInt32) throws  -> [String]
+    
+    /**
+     * Fast global timeline for first paint. Returns raw displayable events only.
+     */
+    func fetchGlobalTimelineFast(limit: UInt32, timeoutSecs: UInt32) throws  -> [String]
     
     /**
      * Fetch a user profile (kind 0 metadata). Returns `None` if not found.
@@ -1274,6 +1284,19 @@ open func fetchFollowTimeline(authors: [String], limit: UInt32)throws  -> [Strin
 }
     
     /**
+     * Fast follow timeline for first paint. No engagement/profile/quote enrich.
+     */
+open func fetchFollowTimelineFast(authors: [String], limit: UInt32, timeoutSecs: UInt32)throws  -> [String]  {
+    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeNuruNuruFfiError_lift) {
+    uniffi_uniffi_nurunuru_fn_method_nurunuruclient_fetch_follow_timeline_fast(self.uniffiClonePointer(),
+        FfiConverterSequenceString.lower(authors),
+        FfiConverterUInt32.lower(limit),
+        FfiConverterUInt32.lower(timeoutSecs),$0
+    )
+})
+}
+    
+    /**
      * Connect to relays and fetch the global timeline (Kind 1 text notes,
      * no author filter). Returns up to `limit` events as serialised JSON
      * strings, newest-first.
@@ -1286,6 +1309,18 @@ open func fetchGlobalTimeline(limit: UInt32)throws  -> [String]  {
     return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeNuruNuruFfiError_lift) {
     uniffi_uniffi_nurunuru_fn_method_nurunuruclient_fetch_global_timeline(self.uniffiClonePointer(),
         FfiConverterUInt32.lower(limit),$0
+    )
+})
+}
+    
+    /**
+     * Fast global timeline for first paint. Returns raw displayable events only.
+     */
+open func fetchGlobalTimelineFast(limit: UInt32, timeoutSecs: UInt32)throws  -> [String]  {
+    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeNuruNuruFfiError_lift) {
+    uniffi_uniffi_nurunuru_fn_method_nurunuruclient_fetch_global_timeline_fast(self.uniffiClonePointer(),
+        FfiConverterUInt32.lower(limit),
+        FfiConverterUInt32.lower(timeoutSecs),$0
     )
 })
 }
@@ -3368,7 +3403,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_follow_timeline() != 38806) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_follow_timeline_fast() != 32831) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_global_timeline() != 34592) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_global_timeline_fast() != 9225) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_profile() != 36544) {

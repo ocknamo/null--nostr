@@ -99,10 +99,11 @@ fun NotificationModal(
     val listState = rememberLazyListState()
     val pullRefreshState = rememberPullToRefreshState()
 
-    var notifications by remember { mutableStateOf<List<NotificationItem>>(emptyList()) }
-    var profiles by remember { mutableStateOf<Map<String, UserProfile>>(emptyMap()) }
-    var originalPosts by remember { mutableStateOf<Map<String, NostrEvent>>(emptyMap()) }
-    var loading by remember { mutableStateOf(true) }
+    val cachedInitial = remember(myPubkey) { repository.getCachedNotifications(myPubkey) }
+    var notifications by remember { mutableStateOf(cachedInitial?.items ?: emptyList()) }
+    var profiles by remember { mutableStateOf(cachedInitial?.profiles ?: emptyMap()) }
+    var originalPosts by remember { mutableStateOf(cachedInitial?.originalPosts ?: emptyMap()) }
+    var loading by remember { mutableStateOf(cachedInitial == null) }
     var pendingNew by remember { mutableStateOf<List<NotificationItem>>(emptyList()) }
     var showKindSettings by remember { mutableStateOf(false) }
     var enabledKinds by remember { mutableStateOf(prefs.notificationEnabledKinds) }
@@ -126,7 +127,7 @@ fun NotificationModal(
     // 初回フェッチ + ライブポーリング（10秒ごと）
     LaunchedEffect(Unit) {
         try {
-            val result = repository.fetchNotifications(myPubkey)
+            val result = repository.fetchNotifications(myPubkey, skipCache = cachedInitial != null)
             notifications = result.items
             profiles = result.profiles
             originalPosts = result.originalPosts

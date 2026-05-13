@@ -36,6 +36,7 @@ data class TimelineUiState(
     val recentSearches: List<String> = emptyList(),
     val hasNewRecommendations: Boolean = false,
     val hasNewFollowing: Boolean = false,
+    val hasNewNotifications: Boolean = false,
     val followList: List<String> = emptyList(),
     val birdwatchNotes: Map<String, List<io.nurunuru.app.data.models.NostrEvent>> = emptyMap(),
     val savedRelayUrls: List<String> = emptyList(),
@@ -91,9 +92,15 @@ class TimelineViewModel(
         viewModelScope.launch {
             loadRecentSearches()
 
-            // Parallel load to speed up initial state
-            val followListJob = launch { loadFollowList() }
-            val globalJob = launch { loadGlobalTimeline() }
+            // Cache-first follow list is loaded synchronously for first paint; relay refresh runs later.
+            loadFollowList(cacheOnly = true)
+            val initialFollows = _uiState.value.followList
+            if (initialFollows.isNotEmpty()) {
+                launch(Dispatchers.IO) { repository.prefetchProfilesAndBadges(initialFollows) }
+            }
+
+            // Fast first-paint timelines: raw posts + cached profiles only.
+            launch { loadGlobalTimelineFast() }
 
             // バックグラウンドで設定をプリフェッチ（UIをブロックしない・すべて並列実行）
             launch(Dispatchers.IO) {
@@ -144,11 +151,23 @@ class TimelineViewModel(
                 }
             }
 
-            followListJob.join()
-            // Refresh following timeline from relay (keeps cached posts visible during fetch)
-            loadFollowingTimeline()
+            // Fast following with cached follows, then refresh follow list in the background.
+            if (initialFollows.isNotEmpty()) loadFollowingTimelineFast(initialFollows)
+            else _uiState.update { it.copy(isFollowingLoading = false) }
 
-            // Start live streaming once the initial data is loaded.
+            launch {
+                loadFollowList(cacheOnly = false)
+                val freshFollows = _uiState.value.followList
+                if (freshFollows.isNotEmpty() && freshFollows != initialFollows) {
+                    repository.prefetchProfilesAndBadges(freshFollows)
+                    loadFollowingTimelineFast(freshFollows)
+                }
+                launch { loadGlobalTimeline() }
+                launch { loadFollowingTimeline() }
+            }
+
+            startNotificationPolling()
+            // Start live streaming once first-paint data is ready.
             startLiveStreaming()
         }
     }
@@ -240,6 +259,8 @@ class TimelineViewModel(
                                 state.copy(
                                     pendingGlobalPosts = (buffered + state.pendingGlobalPosts).deduped(),
                                     pendingFollowingPosts = (newFollow + state.pendingFollowingPosts).deduped(),
+                                    hasNewRecommendations = state.hasNewRecommendations ||
+                                        (state.feedType != FeedType.GLOBAL && buffered.isNotEmpty()),
                                     hasNewFollowing = state.hasNewFollowing ||
                                         (state.feedType != FeedType.FOLLOWING && newFollow.isNotEmpty())
                                 )
@@ -272,16 +293,78 @@ class TimelineViewModel(
         _uiState.update { it.copy(recentSearches = repository.getRecentSearches()) }
     }
 
-    private suspend fun loadFollowList() {
-        // Pattern A: Use cached follow list if available
+    private suspend fun loadFollowList(cacheOnly: Boolean = false) {
         repository.getCachedFollowList(pubkeyHex)?.let { cached ->
-            _uiState.update { it.copy(followList = cached) }
+            if (cached.isNotEmpty()) _uiState.update { it.copy(followList = cached) }
         }
+        if (cacheOnly) return
         try {
-            val follows = repository.fetchFollowList(pubkeyHex)
-            _uiState.update { it.copy(followList = follows) }
-        } catch (e: Exception) { /* Ignore */ }
+            val follows = repository.refreshFollowList(pubkeyHex)
+            if (follows.isNotEmpty()) _uiState.update { it.copy(followList = follows) }
+        } catch (e: Exception) { /* Keep stale cache */ }
     }
+
+    private fun startNotificationPolling() {
+        viewModelScope.launch(Dispatchers.IO) {
+            var knownLatest = repository.getCachedNotifications(pubkeyHex)?.items?.maxOfOrNull { it.createdAt } ?: 0L
+            while (isActive) {
+                delay(30_000)
+                runCatching { repository.fetchNotifications(pubkeyHex, limit = 30, skipCache = true) }
+                    .onSuccess { result ->
+                        val latest = result.items.maxOfOrNull { it.createdAt } ?: 0L
+                        if (latest > knownLatest && knownLatest > 0L) {
+                            _uiState.update { it.copy(hasNewNotifications = true) }
+                        }
+                        knownLatest = maxOf(knownLatest, latest)
+                    }
+            }
+        }
+    }
+
+    fun markNotificationsSeen() {
+        _uiState.update { it.copy(hasNewNotifications = false) }
+    }
+
+    private fun loadGlobalTimelineFast() {
+        viewModelScope.launch {
+            runCatching { repository.fetchGlobalTimelineFast(50).deduped() }
+                .onSuccess { posts ->
+                    if (posts.isNotEmpty()) {
+                        seenEventIds.addAll(posts.map { it.event.id })
+                        _uiState.update { it.copy(globalPosts = posts, isGlobalLoading = false) }
+                        val snapshot = posts
+                        launch(Dispatchers.IO) {
+                            val enriched = repository.enrichTimelinePosts(snapshot).deduped()
+                            if (sameIds(_uiState.value.globalPosts, snapshot) && enriched.isNotEmpty()) {
+                                _uiState.update { st -> st.copy(globalPosts = enriched) }
+                            }
+                        }
+                    } else _uiState.update { it.copy(isGlobalLoading = false) }
+                }
+                .onFailure { _uiState.update { it.copy(isGlobalLoading = false) } }
+        }
+    }
+
+    private suspend fun loadFollowingTimelineFast(authors: List<String>) {
+        runCatching { repository.fetchFollowingTimelineFast(authors, 50).deduped() }
+            .onSuccess { posts ->
+                if (posts.isNotEmpty() || _uiState.value.followingPosts.isEmpty()) {
+                    seenEventIds.addAll(posts.map { it.event.id })
+                    _uiState.update { it.copy(followingPosts = posts, isFollowingLoading = false) }
+                    val snapshot = posts
+                    viewModelScope.launch(Dispatchers.IO) {
+                        val enriched = repository.enrichTimelinePosts(snapshot).deduped()
+                        if (sameIds(_uiState.value.followingPosts, snapshot) && enriched.isNotEmpty()) {
+                            _uiState.update { st -> st.copy(followingPosts = enriched) }
+                        }
+                    }
+                } else _uiState.update { it.copy(isFollowingLoading = false) }
+            }
+            .onFailure { _uiState.update { it.copy(isFollowingLoading = false) } }
+    }
+
+    private fun sameIds(a: List<ScoredPost>, b: List<ScoredPost>): Boolean =
+        a.size == b.size && a.zip(b).all { it.first.event.id == it.second.event.id }
 
     private var globalLoadJob: kotlinx.coroutines.Job? = null
     fun loadGlobalTimeline(isRefresh: Boolean = false) {
@@ -301,7 +384,7 @@ class TimelineViewModel(
                         globalPosts = posts,
                         isGlobalLoading = false,
                         isGlobalRefreshing = false,
-                        hasNewRecommendations = state.feedType != FeedType.GLOBAL
+                        hasNewRecommendations = false
                     )
                 }
                 fetchBirdwatchForPosts(posts)
@@ -354,7 +437,7 @@ class TimelineViewModel(
                         followingPosts = posts,
                         isFollowingLoading = false,
                         isFollowingRefreshing = false,
-                        hasNewFollowing = state.feedType != FeedType.FOLLOWING && posts.isNotEmpty()
+                        hasNewFollowing = false
                     )
                 }
                 // Persist to cache (encode and write on IO thread)
@@ -404,7 +487,8 @@ class TimelineViewModel(
                     "Relay live pill tapped: prepending ${added.size} posts")
                 state.copy(
                     relayPosts = (added + state.relayPosts).deduped(),
-                    pendingRelayPosts = emptyList()
+                    pendingRelayPosts = emptyList(),
+                    hasNewRecommendations = false
                 )
             }
             reEnrichMissingProfiles(added)
@@ -677,7 +761,10 @@ class TimelineViewModel(
                         android.util.Log.d("TimelineViewModel",
                             "Relay live pill ready: ${buffered.size} posts pending")
                         _uiState.update { state ->
-                            state.copy(pendingRelayPosts = (buffered + state.pendingRelayPosts).deduped())
+                            state.copy(
+                                pendingRelayPosts = (buffered + state.pendingRelayPosts).deduped(),
+                                hasNewRecommendations = state.hasNewRecommendations || state.feedType != FeedType.GLOBAL
+                            )
                         }
                     }
             } catch (e: Exception) {
@@ -695,13 +782,17 @@ class TimelineViewModel(
             if (post?.isLiked == true) {
                 val reactionEventId = post.myLikeEventId ?: return@launch
                 val success = repository.deleteEvent(reactionEventId)
-                if (success) updatePostInteraction(eventId, isLike = true, undo = true)
+                if (success) {
+                    repository.removeCachedUserLikedPost(pubkeyHex, eventId)
+                    updatePostInteraction(eventId, isLike = true, undo = true)
+                }
                 return@launch
             }
             val authorPubkey = post?.event?.pubkey ?: ""
             val newEventId = repository.likePost(eventId, authorPubkey, emoji, customTags)
             if (newEventId != null) {
                 updatePostInteraction(eventId, isLike = true, newEventId = newEventId)
+                post?.let { repository.cacheUserLikedPost(pubkeyHex, it.copy(isLiked = true, myLikeEventId = newEventId)) }
                 if (authorPubkey.isNotEmpty()) repository.recordEngagement("like", authorPubkey)
             }
         }

@@ -808,6 +808,7 @@ struct PostImageGrid: View {
     var onImageTap: ((Int) -> Void)? = nil
 
     @State private var showAll = false
+    @State private var currentIndex = 0
 
     private let maxVisible = 4
 
@@ -844,89 +845,55 @@ struct PostImageGrid: View {
                 .frame(maxWidth: .infinity)
                 .clipped()
 
-            } else if images.count == 3 && !showAll {
-                // 3 images: left full-height + right 2-stacked
-                // GeometryReaderで列幅を固定し、横方向オーバーフローを防ぐ。
+            } else {
+                // Multiple images: LINE-style horizontal pager.
+                // Previously this used a 2-column grid, so posts with 2+ uploaded images
+                // could not be switched by horizontal swipe in the timeline. Keep all
+                // images in one carousel and pass the currently visible index to the
+                // fullscreen viewer on tap.
                 GeometryReader { geo in
-                    let totalWidth = max(0, geo.size.width)
-                    let colWidth = max(0, (totalWidth - 4) / 2)
+                    let width = max(0, geo.size.width)
+                    let height = min(320, max(220, width * 0.72))
 
-                    HStack(spacing: 4) {
-                        asyncImage(url: images[0], height: 240, maxHeight: nil)
-                            .frame(width: colWidth, height: 240)
-                            .clipShape(RoundedRectangle(cornerRadius: NuruSpacing.radiusSm))
-                            .onTapGesture { onImageTap?(0) }
+                    ZStack(alignment: .bottomTrailing) {
+                        TabView(selection: $currentIndex) {
+                            ForEach(images.indices, id: \.self) { idx in
+                                CachedAsyncImage(url: URL(string: images[idx]), authorPubkey: authorPubkey, contentMode: .fill) {
+                                    RoundedRectangle(cornerRadius: NuruSpacing.radiusLg)
+                                        .fill(Color(white: 0.12))
+                                        .overlay(ProgressView().tint(.white).scaleEffect(0.6))
+                                }
+                                .frame(width: width, height: height)
+                                .clipped()
+                                .clipShape(RoundedRectangle(cornerRadius: NuruSpacing.radiusLg, style: .continuous))
+                                .contentShape(Rectangle())
+                                .onTapGesture { onImageTap?(idx) }
+                                .tag(idx)
+                            }
+                        }
+                        .tabViewStyle(.page(indexDisplayMode: .never))
+                        .frame(width: width, height: height)
+                        .clipShape(RoundedRectangle(cornerRadius: NuruSpacing.radiusLg, style: .continuous))
+                        .onChange(of: images.count) { _, count in
+                            if count > 0 { currentIndex = min(currentIndex, count - 1) }
+                        }
 
-                        VStack(spacing: 4) {
-                            asyncImage(url: images[1], height: 118, maxHeight: nil)
-                                .frame(width: colWidth, height: 118)
-                                .clipShape(RoundedRectangle(cornerRadius: NuruSpacing.radiusSm))
-                                .onTapGesture { onImageTap?(1) }
-                            asyncImage(url: images[2], height: 118, maxHeight: nil)
-                                .frame(width: colWidth, height: 118)
-                                .clipShape(RoundedRectangle(cornerRadius: NuruSpacing.radiusSm))
-                                .onTapGesture { onImageTap?(2) }
+                        if images.count > 1 {
+                            Text("\(currentIndex + 1) / \(images.count)")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.black.opacity(0.55))
+                                .clipShape(Capsule())
+                                .padding(8)
+                                .allowsHitTesting(false)
                         }
                     }
-                    .frame(width: totalWidth, height: 240, alignment: .leading)
+                    .frame(width: width, height: height)
                 }
                 .frame(height: 240)
 
-            } else {
-                // 2 or 4+ images: 2-column grid
-                // 列幅を明示計算して、画像サイズに依存した横はみ出しを防止。
-                let rows = (display.count + 1) / 2
-                GeometryReader { geo in
-                    let totalWidth = max(0, geo.size.width)
-                    let cellWidth = max(0, (totalWidth - 4) / 2)
-
-                    VStack(spacing: 4) {
-                        ForEach(0..<rows, id: \.self) { r in
-                            HStack(spacing: 4) {
-                                ForEach(0..<2, id: \.self) { c in
-                                    let idx = r * 2 + c
-                                    if idx < display.count {
-                                        ZStack {
-                                            asyncImage(url: display[idx], height: 120, maxHeight: nil)
-                                                .frame(width: cellWidth, height: 120)
-                                                .clipShape(RoundedRectangle(cornerRadius: NuruSpacing.radiusSm))
-
-                                            // "+N" overlay on last visible cell
-                                            if idx == maxVisible - 1 && hiddenCount > 0 {
-                                                RoundedRectangle(cornerRadius: NuruSpacing.radiusSm)
-                                                    .fill(Color.black.opacity(0.6))
-                                                    .frame(width: cellWidth, height: 120)
-                                                Text("+\(hiddenCount)")
-                                                    .font(.system(size: 20, weight: .bold))
-                                                    .foregroundStyle(.white)
-                                            }
-                                        }
-                                        .frame(width: cellWidth, height: 120)
-                                        .contentShape(Rectangle())
-                                        .onTapGesture {
-                                            if idx == maxVisible - 1 && hiddenCount > 0 {
-                                                showAll = true
-                                            } else {
-                                                onImageTap?(idx)
-                                            }
-                                        }
-                                    } else {
-                                        Color.clear
-                                            .frame(width: cellWidth, height: 120)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    .frame(width: totalWidth, alignment: .leading)
-                }
-                .frame(height: CGFloat(rows * 120 + max(0, rows - 1) * 4))
-
-                if showAll {
-                    Button("閉じる") { showAll = false }
-                        .font(NuruFont.labelSmall())
-                        .foregroundStyle(NuruColors.lineGreen)
-                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

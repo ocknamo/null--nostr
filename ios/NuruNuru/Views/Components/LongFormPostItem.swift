@@ -176,15 +176,24 @@ struct LongFormPostItem: View {
     private var articleCard: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let image, !image.isEmpty {
-                AsyncImage(url: URL(string: image)) { phase in
-                    if case .success(let img) = phase {
-                        img.resizable().scaledToFill()
-                    } else {
-                        Rectangle().fill(theme.bgSecondary)
+                // Keep the card width constrained by the parent while still giving
+                // AsyncImage a concrete drawing area. GeometryReader inside a Button
+                // label can occasionally resolve to an unusable width on first layout,
+                // leaving the loaded image invisible on device.
+                Rectangle()
+                    .fill(theme.bgSecondary)
+                    .overlay {
+                        AsyncImage(url: URL(string: image)) { phase in
+                            if case .success(let img) = phase {
+                                img.resizable().scaledToFill()
+                            } else {
+                                Color.clear
+                            }
+                        }
                     }
-                }
-                .frame(height: 140)
-                .clipped()
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 140)
+                    .clipped()
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -206,6 +215,7 @@ struct LongFormPostItem: View {
             }
             .padding(12)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(theme.bgSecondary)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(
@@ -235,15 +245,20 @@ struct ArticleReaderView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     // Cover image
                     if let image, !image.isEmpty {
-                        AsyncImage(url: URL(string: image)) { phase in
-                            if case .success(let img) = phase {
-                                img.resizable().scaledToFill()
-                            } else {
-                                Rectangle().fill(theme.bgSecondary)
+                        Rectangle()
+                            .fill(theme.bgSecondary)
+                            .overlay {
+                                AsyncImage(url: URL(string: image)) { phase in
+                                    if case .success(let img) = phase {
+                                        img.resizable().scaledToFill()
+                                    } else {
+                                        Color.clear
+                                    }
+                                }
                             }
-                        }
-                        .frame(height: 240)
-                        .clipped()
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 240)
+                            .clipped()
                     }
 
                     VStack(alignment: .leading, spacing: 0) {
@@ -292,6 +307,7 @@ struct ArticleReaderView: View {
                     }
                     .padding(20)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .background(theme.bgPrimary)
             .navigationBarTitleDisplayMode(.inline)

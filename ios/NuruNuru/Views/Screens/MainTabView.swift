@@ -13,8 +13,9 @@ struct MainTabView: View {
     @State private var activeTab:          BottomTab  = .timeline
     @State private var showPostSheet:      Bool       = false
     @State private var showNotifications:  Bool       = false
-    @State private var showSearch:         Bool       = false
-    @State private var searchInitialQuery: String     = ""
+    @State private var searchRoute:        SearchSheetRoute? = nil
+    @State private var hasNewNotifications: Bool      = false
+    @State private var notificationPollTask: Task<Void, Never>? = nil
     @State private var viewingProfile:     ProfileID? = nil
     @State private var zapTarget:          ScoredPost? = nil
     @State private var hideBottomNavForExternalMiniApp: Bool = false
@@ -70,24 +71,16 @@ struct MainTabView: View {
                     viewModel:           timelineVM,
                     onPostTap:           { showPostSheet     = true },
                     onProfileTap:        { viewingProfile    = ProfileID($0) },
-                    onNotificationBell:  { showNotifications = true },
+                    onNotificationBell:  { showNotifications = true; hasNewNotifications = false },
+                    hasNewNotifications: hasNewNotifications,
                     onSearchTap:         {
-                        searchInitialQuery = ""
-                        showSearch        = true
+                        searchRoute = SearchSheetRoute(query: "")
                     },
                     onHashtagTap: { tag in
-                        // Present the search sheet on the next run loop after updating
-                        // the initial query. With a Bool sheet, SwiftUI can build the
-                        // sheet content from the previous state snapshot, which made the
-                        // first hashtag tap open an empty search and only the second tap
-                        // run the #tag search.
-                        searchInitialQuery = "#\(tag)"
-                        if showSearch {
-                            showSearch = false
-                        }
-                        DispatchQueue.main.async {
-                            showSearch = true
-                        }
+                        // Use an item-driven sheet so the first presentation is built
+                        // with the #tag query already captured. A Bool sheet can render
+                        // from the previous state snapshot and require a second tap.
+                        searchRoute = SearchSheetRoute(query: "#\(tag)")
                     }
                 )
             }
@@ -153,7 +146,7 @@ struct MainTabView: View {
             PostSheet(
                 repository:  repository,
                 myPubkeyHex: pubkeyHex,
-                myProfile:   homeVM.profile,
+                myProfile:   homeVM.profile ?? repository.getCachedProfile(pubkey: pubkeyHex),
                 onDismiss:   { showPostSheet = false },
                 onSuccess:   {
                     showPostSheet = false
@@ -177,16 +170,16 @@ struct MainTabView: View {
             )
         }
         // SearchSheet
-        .sheet(isPresented: $showSearch) {
+        .sheet(item: $searchRoute) { route in
             SearchSheet(
                 repository:   repository,
                 myPubkeyHex:  pubkeyHex,
                 onProfileTap: { pubkey in
-                    showSearch     = false
+                    searchRoute    = nil
                     viewingProfile = ProfileID(pubkey)
                 },
-                initialQuery: searchInitialQuery,
-                onDismiss: { showSearch = false; searchInitialQuery = "" }
+                initialQuery: route.query,
+                onDismiss: { searchRoute = nil }
             )
         }
         // ZapSheet
@@ -220,12 +213,43 @@ struct MainTabView: View {
         .task {
             timelineVM.startInitialLoadIfNeeded()
             await repository.connect()
-            await repository.drainMlsRetryQueue(trigger: "mainTabTask", maxItems: 3)
+            startNotificationDotPollingIfNeeded()
+        }
+        .onChange(of: showNotifications) { _, showing in
+            if !showing { markNotificationsSeen() }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active {
-                Task { await repository.drainMlsRetryQueue(trigger: "foreground", maxItems: 4) }
+            // Keep timeline foreground path clean. MLS retry draining is triggered
+            // from Talk-specific actions instead of every app foreground event.
+            _ = phase
+        }
+    }
+
+
+    private func startNotificationDotPollingIfNeeded() {
+        guard notificationPollTask == nil else { return }
+        notificationPollTask = Task {
+            var lastSeen = UserDefaults.standard.integer(forKey: "nuru_last_seen_notification_created_at")
+            while !Task.isCancelled {
+                let result = await repository.fetchNotificationsWithContext(pubkey: pubkeyHex, skipCache: false)
+                let newest = Int(result.items.map(\.createdAt).max() ?? 0)
+                if lastSeen == 0 {
+                    lastSeen = newest
+                    UserDefaults.standard.set(lastSeen, forKey: "nuru_last_seen_notification_created_at")
+                } else if newest > lastSeen {
+                    await MainActor.run { hasNewNotifications = true }
+                }
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
             }
+        }
+    }
+
+    private func markNotificationsSeen() {
+        Task {
+            let result = await repository.fetchNotificationsWithContext(pubkey: pubkeyHex, skipCache: false)
+            let newest = Int(result.items.map(\.createdAt).max() ?? 0)
+            UserDefaults.standard.set(newest, forKey: "nuru_last_seen_notification_created_at")
+            hasNewNotifications = false
         }
     }
 
@@ -534,3 +558,9 @@ struct AppSettingsView: View {
     }
 }
 
+
+
+private struct SearchSheetRoute: Identifiable, Equatable {
+    let id = UUID()
+    let query: String
+}

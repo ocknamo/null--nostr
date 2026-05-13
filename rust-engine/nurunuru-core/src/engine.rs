@@ -404,6 +404,34 @@ impl NuruNuruEngine {
         Ok(all_events)
     }
 
+    /// Fast timeline fetch for first paint. Fetches only displayable note/repost
+    /// events with a short timeout; UI layers enrich metadata after rendering.
+    pub async fn fetch_timeline_fast(
+        &self,
+        authors: Option<&[PublicKey]>,
+        since: Option<Timestamp>,
+        limit: usize,
+        timeout: Duration,
+    ) -> Result<Vec<Event>> {
+        let tl_filters = filters::timeline_filters(authors, since, None, limit, (limit / 3).max(1));
+        let mut all_events = Vec::new();
+        let mut handles = Vec::new();
+        for filter in tl_filters {
+            let client = self.client.clone();
+            handles.push(tokio::spawn(async move { client.fetch_events(filter, timeout).await }));
+        }
+        for handle in handles {
+            if let Ok(Ok(events)) = handle.await {
+                all_events.extend(events.into_iter());
+            }
+        }
+        let mut seen = HashSet::new();
+        all_events.retain(|e| seen.insert(e.id));
+        all_events.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        all_events.truncate(limit);
+        Ok(all_events)
+    }
+
     /// Fetch engagement data (reactions, reposts, replies, zaps) for events.
     pub async fn fetch_engagement_data(
         &self,
@@ -926,16 +954,19 @@ impl NuruNuruEngine {
         relay_urls: Vec<String>,
         timeout_secs: u64,
     ) -> Result<Vec<Event>> {
-        // Ensure all target relays are connected
+        // Ensure target relays are known and start connection attempts concurrently.
+        // One bad relay must not serialize/hold the whole fetch path.
+        let mut connect_tasks = Vec::new();
         for url in &relay_urls {
             if let Ok(relay_url) = RelayUrl::parse(url) {
-                let _ = self.client.add_relay(relay_url.clone()).await;
-                let _ = self.client.connect_relay(relay_url).await;
+                let client = self.client.clone();
+                connect_tasks.push(tokio::spawn(async move {
+                    let _ = client.add_relay(relay_url.clone()).await;
+                    let _ = tokio::time::timeout(Duration::from_millis(900), client.connect_relay(relay_url)).await;
+                }));
             }
         }
-
-        // Small grace period for WebSocket handshake
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        for task in connect_tasks { let _ = task.await; }
 
         let urls: Vec<RelayUrl> = relay_urls
             .iter()

@@ -140,6 +140,25 @@ final class NostrCache {
         return Date() < until
     }
 
+    // MARK: - Event Cache
+
+    func getCachedEvent(eventId: String) -> NostrEvent? {
+        readNoTTL(key: "event_\(eventId)").flatMap {
+            guard let data = $0.data(using: .utf8) else { return nil }
+            return try? decoder.decode(NostrEvent.self, from: data)
+        }
+    }
+
+    func setCachedEvent(_ event: NostrEvent) {
+        guard let data = try? encoder.encode(event),
+              let json = String(data: data, encoding: .utf8) else { return }
+        persist(key: "event_\(event.id)", value: json, ttl: timelineTtl)
+    }
+
+    func setCachedEvents(_ events: [NostrEvent]) {
+        for event in events { setCachedEvent(event) }
+    }
+
     // MARK: - Timeline Cache
 
     /// タイムラインキャッシュ取得（TTLスキップ — 古いポストを見せても問題なし）。
@@ -155,6 +174,7 @@ final class NostrCache {
     func setCachedTimeline(_ events: [NostrEvent], key: String = "global") {
         lock.lock(); defer { lock.unlock() }
         timelineLRU.set(key, events)
+        setCachedEvents(events)
         guard timelineEnabled else { return }
         guard let data = try? encoder.encode(events),
               let json = String(data: data, encoding: .utf8) else { return }
@@ -163,7 +183,16 @@ final class NostrCache {
 
     // MARK: - Follow List Cache
 
+    /// Follow list cache is stale-safe: an old follow list is much better UX than
+    /// an empty following timeline. Freshness is handled by refreshFollowList().
     func getCachedFollowList(pubkey: String) -> [String]? {
+        readNoTTL(key: "follow_\(pubkey)").flatMap {
+            guard let data = $0.data(using: .utf8) else { return nil }
+            return try? decoder.decode([String].self, from: data)
+        }
+    }
+
+    func getFreshCachedFollowList(pubkey: String) -> [String]? {
         readRaw(key: "follow_\(pubkey)").flatMap {
             guard let data = $0.data(using: .utf8) else { return nil }
             return try? decoder.decode([String].self, from: data)
@@ -175,6 +204,22 @@ final class NostrCache {
         guard let data = try? encoder.encode(list),
               let json = String(data: data, encoding: .utf8) else { return }
         persist(key: "follow_\(pubkey)", value: json, ttl: followListTtl)
+    }
+
+    func getCachedUserNotes(pubkey: String) -> [NostrEvent]? {
+        getCachedTimeline(key: "usernotes_\(pubkey)")
+    }
+
+    func setCachedUserNotes(pubkey: String, events: [NostrEvent]) {
+        setCachedTimeline(events, key: "usernotes_\(pubkey)")
+    }
+
+    func getCachedLikedEvents(pubkey: String) -> [NostrEvent]? {
+        getCachedTimeline(key: "liked_\(pubkey)")
+    }
+
+    func setCachedLikedEvents(pubkey: String, events: [NostrEvent]) {
+        setCachedTimeline(events, key: "liked_\(pubkey)")
     }
 
     // MARK: - Mute List Cache
@@ -211,7 +256,7 @@ final class NostrCache {
     /// Android: `cache.getCachedNotifications()` に対応。
     func getCachedNotificationResult() -> CachedNotificationResult? {
         guard notificationEnabled else { return nil }
-        guard let raw = readRaw(key: notificationCacheKey),
+        guard let raw = readNoTTL(key: notificationCacheKey),
               let data = raw.data(using: .utf8),
               let result = try? decoder.decode(CachedNotificationResult.self, from: data) else { return nil }
         return result
@@ -269,6 +314,39 @@ final class NostrCache {
         guard let data = try? encoder.encode(items),
               let json = String(data: data, encoding: .utf8) else { return }
         persist(key: "badge_items_\(pubkey)", value: json, ttl: badgeTtl)
+    }
+
+
+    // MARK: - Emoji Cache (NIP-30)
+
+    func getCachedEmojiSets(pubkey: String) -> [EmojiSet]? {
+        guard emojiEnabled else { return nil }
+        guard let raw = readNoTTL(key: "emoji_sets_\(pubkey)"),
+              let data = raw.data(using: .utf8),
+              let items = try? decoder.decode([EmojiSet].self, from: data) else { return nil }
+        return items
+    }
+
+    func setCachedEmojiSets(pubkey: String, sets: [EmojiSet]) {
+        guard emojiEnabled else { return }
+        guard let data = try? encoder.encode(sets),
+              let json = String(data: data, encoding: .utf8) else { return }
+        persist(key: "emoji_sets_\(pubkey)", value: json, ttl: emojiTtl)
+    }
+
+    func getCachedFavoriteEmojis(pubkey: String) -> [CustomEmoji]? {
+        guard emojiEnabled else { return nil }
+        guard let raw = readNoTTL(key: "emoji_favs_\(pubkey)"),
+              let data = raw.data(using: .utf8),
+              let items = try? decoder.decode([CustomEmoji].self, from: data) else { return nil }
+        return items
+    }
+
+    func setCachedFavoriteEmojis(pubkey: String, emojis: [CustomEmoji]) {
+        guard emojiEnabled else { return }
+        guard let data = try? encoder.encode(emojis),
+              let json = String(data: data, encoding: .utf8) else { return }
+        persist(key: "emoji_favs_\(pubkey)", value: json, ttl: emojiTtl)
     }
 
     // MARK: - Deleted Event IDs (NIP-09)

@@ -40,6 +40,7 @@ fun TimelineHeader(
     onFeedTypeChange: (FeedType) -> Unit,
     showRecommendedDot: Boolean = false,
     showFollowingDot: Boolean = false,
+    showNotificationsDot: Boolean = false,
     onSearchClick: () -> Unit,
     onNotificationsClick: () -> Unit,
     savedRelayUrls: List<String> = emptyList(),
@@ -164,16 +165,27 @@ fun TimelineHeader(
                         modifier = Modifier.size(20.dp)
                     )
                 }
-                IconButton(
-                    onClick = onNotificationsClick,
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    Icon(
-                        imageVector = NuruIcons.Notifications,
-                        contentDescription = "通知",
-                        tint = nuruColors.textSecondary,
-                        modifier = Modifier.size(20.dp)
-                    )
+                Box(contentAlignment = Alignment.TopEnd) {
+                    IconButton(
+                        onClick = onNotificationsClick,
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Icon(
+                            imageVector = NuruIcons.Notifications,
+                            contentDescription = "通知",
+                            tint = nuruColors.textSecondary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    if (showNotificationsDot) {
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .offset(x = (-6).dp, y = 6.dp)
+                                .background(LineGreen, CircleShape)
+                                .border(2.dp, Color.Black, CircleShape)
+                        )
+                    }
                 }
             }
         }

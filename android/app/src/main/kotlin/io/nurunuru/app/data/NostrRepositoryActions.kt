@@ -108,7 +108,7 @@ suspend fun NostrRepository.publishNote(
                 rustClient.publishRawEvent(signedJson)
             }
             android.util.Log.d("NostrRepository", "Ext publishNote OK")
-            try { json.decodeFromString<NostrEvent>(signedJson) } catch (_: Exception) { null }
+            try { json.decodeFromString<NostrEvent>(signedJson).also { ev -> cacheUserNotePost(ev.pubkey.ifBlank { myPubkeyHex }, ScoredPost(event = ev, profile = getCachedProfile(ev.pubkey.ifBlank { myPubkeyHex }))) } } catch (_: Exception) { null }
         } catch (e: Exception) {
             android.util.Log.e("NostrRepository", "Ext publishNote failed: ${e.message}")
             null
@@ -130,7 +130,16 @@ suspend fun NostrRepository.publishNote(
                 rustClient.queryLocal(listOf(prefs.publicKeyHex ?: ""), 1u)
                     .firstOrNull()
                     ?.let { try { Json.decodeFromString<NostrEvent>(it) } catch (_: Exception) { null } }
-            }
+            }?.also { ev ->
+                cacheUserNotePost(ev.pubkey.ifBlank { myPubkeyHex }, ScoredPost(event = ev, profile = getCachedProfile(ev.pubkey.ifBlank { myPubkeyHex })))
+            } ?: NostrEvent(
+                id = eventId,
+                pubkey = myPubkeyHex,
+                createdAt = System.currentTimeMillis() / 1000,
+                kind = kind,
+                tags = tags,
+                content = content
+            ).also { ev -> cacheUserNotePost(myPubkeyHex, ScoredPost(event = ev, profile = getCachedProfile(myPubkeyHex))) }
         } catch (e: Exception) {
             android.util.Log.e("NostrRepository", "Rust publishNote failed: ${e.message}")
             null
@@ -141,7 +150,7 @@ suspend fun NostrRepository.publishNote(
     return try {
         val eventId = withContext(Dispatchers.IO) { rustClient.publishEvent(kind.toUInt(), content, tags) }
         android.util.Log.d("NostrRepository", "Rust publishEvent(kind=$kind) OK id=$eventId tags=${tags.size}")
-        NostrEvent(id = eventId, kind = kind, tags = tags, content = content)
+        NostrEvent(id = eventId, pubkey = myPubkeyHex, createdAt = System.currentTimeMillis() / 1000, kind = kind, tags = tags, content = content).also { ev -> cache.setCachedEvent(ev) }
     } catch (e: Exception) {
         android.util.Log.e("NostrRepository", "Rust publishEvent(kind=$kind) failed: ${e.message}")
         null

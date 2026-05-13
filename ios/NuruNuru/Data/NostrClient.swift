@@ -59,12 +59,21 @@ actor NostrClient {
         self.authEventSigner = authEventSigner
     }
 
-    fileprivate static let noisyRelays: Set<String> = ["relay.nostr.band", "relay.nostr.wirednet.jp"]
+    fileprivate static let noisyRelays: Set<String> = ["relay.nostr.band", "relay.nostr.wirednet.jp", "relay.0xchat.com", "realy.westernbtc.com"]
     /// Relays that are reachable only opportunistically. They are not auto-reconnected
     /// after failures, and failures place them in a long local cooldown to avoid
     /// creating load for relay operators. Users can still explicitly select them later.
-    fileprivate static let operatorFriendlyCooldownRelays: Set<String> = ["relay.nostr.wirednet.jp"]
+    fileprivate static let operatorFriendlyCooldownRelays: Set<String> = ["relay.nostr.wirednet.jp", "relay.0xchat.com", "realy.westernbtc.com"]
     fileprivate static let excludedRelays: Set<String> = ["wss://relay.nostr.band"]
+
+    fileprivate static func canonicalRelayUrl(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard var comp = URLComponents(string: trimmed) else { return trimmed }
+        comp.scheme = comp.scheme?.lowercased()
+        comp.host = comp.host?.lowercased()
+        if comp.path == "/" { comp.path = "" }
+        return comp.string ?? trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
 
     var isEmpty: Bool { connections.isEmpty }
 
@@ -74,16 +83,19 @@ actor NostrClient {
     /// Already-connected relays are skipped; failed/disconnected ones are reconnected.
     /// Connections are established in parallel for faster startup.
     func connect(relayUrls: [String]) async {
-        let relayUrls = relayUrls.filter { url in
+        var seenRelayUrls = Set<String>()
+        let relayUrls = relayUrls.compactMap { rawUrl -> String? in
+            let url = Self.canonicalRelayUrl(rawUrl)
             guard !Self.excludedRelays.contains(url),
                   let comp = URLComponents(string: url),
                   let scheme = comp.scheme?.lowercased(),
                   (scheme == "wss" || scheme == "ws"),
                   comp.host?.isEmpty == false else {
-                AppLogger.log("Relay", "Skipping invalid relay URL: \(url)")
-                return false
+                AppLogger.log("Relay", "Skipping invalid relay URL: \(rawUrl)")
+                return nil
             }
-            return true
+            guard seenRelayUrls.insert(url).inserted else { return nil }
+            return url
         }
         AppLogger.log("Relay", "Connecting to \(relayUrls.count) relays: \(relayUrls.joined(separator: ", "))")
 
@@ -100,7 +112,7 @@ actor NostrClient {
             }
             guard let url = URL(string: urlStr) else { continue }
             let conn = SingleRelayClient(relayURL: url)
-            connections[urlStr] = conn
+            connections[conn.canonicalURLString] = conn
             toConnect.append(conn)
         }
 
@@ -201,6 +213,7 @@ actor NostrClient {
         filters: [NostrFilter],
         timeoutSeconds: Double = 8.0
     ) async -> [NostrEvent] {
+        let relayUrl = Self.canonicalRelayUrl(relayUrl)
         guard !Self.excludedRelays.contains(relayUrl) else { return [] }
         if let conn = connections[relayUrl] {
             var state = await conn.connectionState
@@ -233,7 +246,7 @@ actor NostrClient {
             return []
         }
         let conn = SingleRelayClient(relayURL: url)
-        connections[relayUrl] = conn
+        connections[conn.canonicalURLString] = conn
         await conn.connect()
         let state = await conn.connectionState
         guard state == .connected else { return [] }
@@ -370,7 +383,8 @@ actor NostrClient {
             throw ClientError.invalidMessage
         }
 
-        let targetRelays = (relays.isEmpty ? Array(connections.keys) : relays).filter { !Self.excludedRelays.contains($0) }
+        let targetRelays = (relays.isEmpty ? Array(connections.keys) : relays.map(Self.canonicalRelayUrl))
+            .filter { !Self.excludedRelays.contains($0) }
         guard !targetRelays.isEmpty else { throw ClientError.notConnected }
 
         // Publish targets must match the requested relay list, not only the existing
@@ -395,7 +409,7 @@ actor NostrClient {
                 continue
             }
             let conn = SingleRelayClient(relayURL: url)
-            connections[relay] = conn
+            connections[conn.canonicalURLString] = conn
             connectedTargets.append((relay, conn))
         }
         guard !connectedTargets.isEmpty else { throw ClientError.notConnected }
@@ -556,6 +570,7 @@ private actor SingleRelayClient {
     // MARK: - Properties
 
     let relayURL: URL
+    let canonicalURLString: String
     private var webSocketTask:    URLSessionWebSocketTask?
     private var wsDelegate:       WebSocketDelegate?
     private var urlSession:       URLSession?
@@ -587,6 +602,14 @@ private actor SingleRelayClient {
 
     init(relayURL: URL) {
         self.relayURL = relayURL
+        if var comp = URLComponents(url: relayURL, resolvingAgainstBaseURL: false) {
+            comp.scheme = comp.scheme?.lowercased()
+            comp.host = comp.host?.lowercased()
+            if comp.path == "/" { comp.path = "" }
+            self.canonicalURLString = comp.string ?? relayURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        } else {
+            self.canonicalURLString = relayURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        }
     }
 
     // MARK: - Connection
@@ -839,8 +862,11 @@ private actor SingleRelayClient {
                         }
                     case "AUTH":
                         guard arr.count >= 2, let challenge = arr[1] as? String else { continue }
+                        let isNewChallenge = (lastAuthChallenge != challenge)
                         lastAuthChallenge = challenge
-                        AppLogger.log("Relay", "AUTH challenge relay=\(relayURL.host ?? relayURL.absoluteString)")
+                        if isNewChallenge {
+                            AppLogger.log("Relay", "AUTH challenge relay=\(relayURL.host ?? relayURL.absoluteString)")
+                        }
                     case "NOTICE":
                         break
                     default:

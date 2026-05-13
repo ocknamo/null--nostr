@@ -99,14 +99,14 @@ struct MlsMessage: Identifiable, Codable {
 }
 
 /// NIP-30 custom emoji entry.
-struct CustomEmoji: Identifiable {
+struct CustomEmoji: Identifiable, Codable {
     let shortcode: String
     let url:       String
     var id:        String { shortcode }
 }
 
 /// NIP-30 custom emoji set (kind 30030).
-struct EmojiSet: Identifiable {
+struct EmojiSet: Identifiable, Codable {
     let id:     String
     let name:   String
     var emojis: [CustomEmoji]

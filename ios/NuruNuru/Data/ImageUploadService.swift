@@ -63,8 +63,10 @@ struct ImageUploadService {
 
     private let signer: InternalSigner?
 
-    /// タイムアウト（Android と同じ 30s）。
-    private let timeoutInterval: TimeInterval = 30
+    /// タイムアウト。Android OkHttp 実装に合わせ、画像アップロード中の
+    /// 読み書きが 30 秒を超えても即タイムアウトしないよう余裕を持たせる。
+    private let requestTimeoutInterval: TimeInterval = 60
+    private let resourceTimeoutInterval: TimeInterval = 90
 
     init(signer: InternalSigner?) {
         self.signer = signer
@@ -185,15 +187,19 @@ struct ImageUploadService {
     /// NIP-98 認証ヘッダー付き（Kind 24242 相当）。
     /// Android: `ImageUploadUtils.uploadToBlossom()` に対応。
     private func uploadToBlossom(data: Data, mimeType: String, baseUrl: String) async throws -> String {
-        let normalized = baseUrl.hasSuffix("/") ? String(baseUrl.dropLast()) : baseUrl
+        let trimmed = baseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        let withScheme = (trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://"))
+            ? trimmed
+            : "https://\(trimmed)"
+        let normalized = withScheme.hasSuffix("/") ? String(withScheme.dropLast()) : withScheme
         let endpoint   = "\(normalized)/upload"
-        guard URL(string: endpoint) != nil else { throw ImageUploadError.invalidUrl(endpoint) }
+        guard let uploadUrl = URL(string: endpoint) else { throw ImageUploadError.invalidUrl(endpoint) }
 
-        var request = URLRequest(url: URL(string: endpoint)!)
+        var request = URLRequest(url: uploadUrl)
         request.httpMethod = "PUT"
         request.setValue(mimeType, forHTTPHeaderField: "Content-Type")
         request.httpBody   = data
-        request.timeoutInterval = timeoutInterval
+        request.timeoutInterval = requestTimeoutInterval
         try addBlossomAuth(to: &request, data: data)
 
         let (resp, http) = try await urlSession.data(for: request)
@@ -277,7 +283,7 @@ struct ImageUploadService {
         guard let url = URL(string: endpoint) else { throw ImageUploadError.invalidUrl(endpoint) }
         var request  = URLRequest(url: url)
         request.httpMethod      = "POST"
-        request.timeoutInterval = timeoutInterval
+        request.timeoutInterval = requestTimeoutInterval
 
         let boundary = "NuruNuru-\(UUID().uuidString)"
         request.setValue("multipart/form-data; boundary=\(boundary)",
@@ -298,8 +304,8 @@ struct ImageUploadService {
 
     private var urlSession: URLSession {
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest  = timeoutInterval
-        config.timeoutIntervalForResource = timeoutInterval
+        config.timeoutIntervalForRequest  = requestTimeoutInterval
+        config.timeoutIntervalForResource = resourceTimeoutInterval
         return URLSession(configuration: config)
     }
 }
@@ -320,11 +326,11 @@ extension ImageUploadService {
     ) async -> [String] {
         var urls: [String?] = Array(repeating: nil, count: images.count)
         let total = images.count
+        var completed = 0
 
         await withTaskGroup(of: (Int, String?).self) { group in
             for (i, image) in images.enumerated() {
                 group.addTask {
-                    await onProgress(i + 1, total)
                     // iOS カメラの HEIC/HEIF 画像は jpegData() で nil を返す場合がある。
                     // UIImage を再描画して確実に JPEG に変換する。
                     let rawData: Data
@@ -368,6 +374,8 @@ extension ImageUploadService {
             }
             for await (i, url) in group {
                 urls[i] = url
+                completed += 1
+                onProgress(completed, total)
             }
         }
         return urls.compactMap { $0 }

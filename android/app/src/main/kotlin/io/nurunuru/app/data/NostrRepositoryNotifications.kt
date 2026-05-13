@@ -14,6 +14,12 @@ import java.util.concurrent.TimeUnit
 
 // ─── Notifications ────────────────────────────────────────────────────────────
 
+
+fun NostrRepository.getCachedNotifications(pubkeyHex: String): NotificationResult? {
+    val raw = cache.getCachedNotifications(pubkeyHex) ?: return null
+    return try { json.decodeFromString<NotificationResult>(raw) } catch (_: Exception) { null }
+}
+
 /** Fetch notifications (reactions + zaps targeting the user). Cache-first, 1-day window. */
 suspend fun NostrRepository.fetchNotifications(pubkeyHex: String, limit: Int = 50, skipCache: Boolean = false): NotificationResult {
     // キャッシュヒット時は即返す（skipCache=true のときはスキップ）
@@ -313,7 +319,10 @@ suspend fun NostrRepository.fetchNotifications(pubkeyHex: String, limit: Int = 5
         val postsFilter = NostrClient.Filter(
             ids = targetEventIds.take(50).toList()
         )
-        val posts = client.fetchEvents(postsFilter, timeoutMs = 4_000)
+        val cachedIds = targetEventIds.mapNotNull { id -> cache.getCachedEvent(id)?.also { originalPosts[id] = it } }.map { it.id }.toSet()
+        val missingIds = targetEventIds.filter { it !in cachedIds }.take(50)
+        val posts = if (missingIds.isNotEmpty()) client.fetchEvents(NostrClient.Filter(ids = missingIds), timeoutMs = 3_000) else emptyList()
+        cache.setCachedEvents(posts)
         posts.forEach { originalPosts[it.id] = it }
     }
 
@@ -420,11 +429,15 @@ private suspend fun NostrRepository.fetchNotificationEventsFromRelays(
 
 /** Fetch a specific event by ID, trying hinted relays before the wider fallback. */
 suspend fun NostrRepository.fetchEventFromRelays(eventId: String, relayHints: List<String>): ScoredPost? {
+    cache.getCachedEvent(eventId)?.let { return enrichPosts(listOf(it)).firstOrNull() }
     val hints = relayHints.filter { it.startsWith("wss://") || it.startsWith("ws://") }.distinct()
     if (hints.isNotEmpty()) {
         val filter = NostrClient.Filter(ids = listOf(eventId), limit = 1)
-        val events = client.fetchEventsFrom(hints, filter, timeoutMs = 5_000)
-        if (events.isNotEmpty()) return enrichPosts(events.distinctBy { it.id }).firstOrNull()
+        val events = client.fetchEventsFrom(hints, filter, timeoutMs = 3_000)
+        if (events.isNotEmpty()) {
+            cache.setCachedEvents(events)
+            return enrichPosts(events.distinctBy { it.id }).firstOrNull()
+        }
     }
     return fetchEvent(eventId)
 }
@@ -439,8 +452,8 @@ suspend fun NostrRepository.fetchAddressableEvent(pointer: String, relayHints: L
     val filter = NostrClient.Filter(kinds = listOf(kind), authors = listOf(author), tags = mapOf("d" to listOf(dTag)), limit = 1)
 
     val hints = relayHints.filter { it.startsWith("wss://") || it.startsWith("ws://") }.distinct()
-    val hinted = if (hints.isNotEmpty()) client.fetchEventsFrom(hints, filter, timeoutMs = 5_000) else emptyList()
-    if (hinted.isNotEmpty()) return enrichPosts(hinted.distinctBy { it.id }).firstOrNull()
+    val hinted = if (hints.isNotEmpty()) client.fetchEventsFrom(hints, filter, timeoutMs = 3_000) else emptyList()
+    if (hinted.isNotEmpty()) { cache.setCachedEvents(hinted); return enrichPosts(hinted.distinctBy { it.id }).firstOrNull() }
 
     val relayCandidates = (
         prefs.nip65Relays.map { it.url } +
@@ -448,20 +461,22 @@ suspend fun NostrRepository.fetchAddressableEvent(pointer: String, relayHints: L
         io.nurunuru.app.data.models.DEFAULT_RELAYS +
         listOf(NostrClient.SEARCH_RELAY)
     ).distinct()
-    val events = client.fetchEventsFrom(relayCandidates, filter, timeoutMs = 7_000)
+    val events = client.fetchEventsFrom(relayCandidates, filter, timeoutMs = 5_000)
+    cache.setCachedEvents(events)
     return enrichPosts(events.distinctBy { it.id }).firstOrNull()
 }
 
 /** Fetch a specific event by ID. */
 suspend fun NostrRepository.fetchEvent(eventId: String): ScoredPost? {
+    cache.getCachedEvent(eventId)?.let { return enrichPosts(listOf(it)).firstOrNull() }
     val filter = NostrClient.Filter(
         ids = listOf(eventId),
         limit = 1
     )
 
     // まず現在接続中のリレーを試す。
-    val direct = client.fetchEvents(filter, timeoutMs = 4_000)
-    if (direct.isNotEmpty()) return enrichPosts(direct).firstOrNull()
+    val direct = client.fetchEvents(filter, timeoutMs = 2_500)
+    if (direct.isNotEmpty()) { cache.setCachedEvents(direct); return enrichPosts(direct).firstOrNull() }
 
     // 投稿詳細・通知から開く投稿は、現在の接続プールに無い NIP-65 Read/Write リレーや
     // デフォルト/検索リレーにしか存在しない場合があるため、明示的に広めに探索する。
@@ -473,9 +488,10 @@ suspend fun NostrRepository.fetchEvent(eventId: String): ScoredPost? {
     ).distinct()
     android.util.Log.d("NostrRepository", "fetchEvent wide relayCandidates=" + relayCandidates.size + " id=" + eventId.take(8))
     val relayEvents = if (relayCandidates.isNotEmpty()) {
-        client.fetchEventsFrom(relayCandidates, filter, timeoutMs = 7_000)
+        client.fetchEventsFrom(relayCandidates, filter, timeoutMs = 5_000)
     } else emptyList()
     android.util.Log.d("NostrRepository", "fetchEvent wide result=" + relayEvents.size + " id=" + eventId.take(8))
+    cache.setCachedEvents(relayEvents)
 
     return enrichPosts(relayEvents.distinctBy { it.id }).firstOrNull()
 }

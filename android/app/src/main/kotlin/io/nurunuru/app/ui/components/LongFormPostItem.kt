@@ -16,6 +16,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
@@ -179,14 +180,22 @@ fun LongFormPostItem(
                     color = nuruColors.bgSecondary,
                     border = androidx.compose.foundation.BorderStroke(1.dp, nuruColors.border)
                 ) {
-                    Column {
+                    Column(modifier = Modifier.fillMaxWidth()) {
                         if (image != null) {
-                            AsyncImage(
-                                model = image,
-                                contentDescription = null,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxWidth().height(140.dp)
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(140.dp)
+                                    .clipToBounds()
+                                    .background(nuruColors.bgSecondary)
+                            ) {
+                                AsyncImage(
+                                    model = image,
+                                    contentDescription = null,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.matchParentSize()
+                                )
+                            }
                         }
                         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             if (title != null) {
@@ -390,12 +399,20 @@ fun ArticleReaderModal(
                     .verticalScroll(rememberScrollState())
             ) {
                 if (image != null) {
-                    AsyncImage(
-                        model = image,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxWidth().height(240.dp)
-                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(240.dp)
+                            .clipToBounds()
+                            .background(nuruColors.bgSecondary)
+                    ) {
+                        AsyncImage(
+                            model = image,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.matchParentSize()
+                        )
+                    }
                 }
 
                 Column(modifier = Modifier.padding(20.dp)) {

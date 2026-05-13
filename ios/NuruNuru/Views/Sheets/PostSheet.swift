@@ -56,8 +56,10 @@ struct PostSheet: View {
 
     private var remaining: Int { UI.postMaxLength - text.count }
     private var canPost:   Bool {
-        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        && remaining >= 0 && !isPosting && !isUploading
+        (
+            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !selectedImages.isEmpty
+        ) && remaining >= 0 && !isPosting && !isUploading
     }
 
     /// Whether relay config differs from defaults (show green dot indicator).
@@ -284,10 +286,10 @@ struct PostSheet: View {
             }
             fieldFocused = true
             Task {
+                await loadComposerWarmCaches()
                 let relays = await repository.getSavedRelayUrls()
                 allRelays = relays
                 selectedRelays = Set(relays)
-                await loadMentionCandidates()
             }
         }
         .onDisappear { stopSTT() }
@@ -349,17 +351,32 @@ struct PostSheet: View {
         }
     }
 
-    private func loadMentionCandidates() async {
-        guard followedMentionUsers.isEmpty else { return }
-        let follows = await repository.fetchFollowList(pubkey: myPubkeyHex)
-        let profiles = await repository.fetchProfiles(pubkeys: follows)
-        let profileMap = Dictionary(uniqueKeysWithValues: profiles.map { ($0.pubkey, $0) })
-        let candidates = follows.map { pubkey -> MentionCandidate in
-            MentionCandidate(profile: profileMap[pubkey] ?? UserProfile(pubkey: pubkey))
+    private func loadComposerWarmCaches() async {
+        await loadMentionCandidates(cacheOnlyFirst: true)
+        Task { await loadMentionCandidates(cacheOnlyFirst: false) }
+    }
+
+    private func loadMentionCandidates(cacheOnlyFirst: Bool = false) async {
+        let follows = cacheOnlyFirst
+            ? (repository.getCachedFollowList(pubkey: myPubkeyHex) ?? [])
+            : await repository.fetchFollowList(pubkey: myPubkeyHex)
+        let candidates: [MentionCandidate]
+        if cacheOnlyFirst {
+            candidates = follows.map { pubkey in
+                MentionCandidate(profile: repository.getCachedProfile(pubkey: pubkey) ?? UserProfile(pubkey: pubkey))
+            }
+        } else {
+            let profiles = await repository.fetchProfiles(pubkeys: follows)
+            let profileMap = Dictionary(uniqueKeysWithValues: profiles.map { ($0.pubkey, $0) })
+            candidates = follows.map { pubkey in
+                MentionCandidate(profile: profileMap[pubkey] ?? repository.getCachedProfile(pubkey: pubkey) ?? UserProfile(pubkey: pubkey))
+            }
         }
         await MainActor.run {
-            followedMentionUsers = candidates.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
-            updateMentionSuggestions(for: text)
+            if !candidates.isEmpty || followedMentionUsers.isEmpty {
+                followedMentionUsers = candidates.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+                updateMentionSuggestions(for: text)
+            }
         }
     }
 
@@ -801,10 +818,14 @@ struct PostSheet: View {
         // - @name@domain (NIP-05) → resolve and convert to nostr:npub...
         // - @username → followed users only (exact profile name/display-name match)
         content = await normalizeTypedMentions(in: content)
-        guard content.count <= UI.postMaxLength else {
-            errorMessage = "メンション展開後の投稿は\(UI.postMaxLength)文字以内で入力してください"
-            isPosting = false
-            return
+        // Android と同じく、画像 URL は 140 文字制限の対象外として扱う。
+        // 本文のみ UI の remaining/canPost で制限済み。
+        if selectedImages.isEmpty {
+            guard content.count <= UI.postMaxLength else {
+                errorMessage = "メンション展開後の投稿は\(UI.postMaxLength)文字以内で入力してください"
+                isPosting = false
+                return
+            }
         }
 
         // Build custom emoji + mention tags.
@@ -820,7 +841,7 @@ struct PostSheet: View {
             ? Array(selectedRelays) : nil
 
         do {
-            try await repository.publishNote(
+            let event = try await repository.publishNote(
                 content:        content,
                 replyToId:      replyToId,
                 contentWarning: showCWInput && !contentWarning.isEmpty ? contentWarning : nil,
@@ -828,6 +849,7 @@ struct PostSheet: View {
                 targetRelays:   targetRelayList,
                 nip70Protected: nip70Protected
             )
+            NotificationCenter.default.post(name: .nuruHomePublishedPost, object: nil, userInfo: ["event": event])
             onSuccess()
         } catch {
             errorMessage = "投稿に失敗しました: \(error.localizedDescription)"

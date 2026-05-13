@@ -35,6 +35,21 @@ extension NostrRepository {
 
     // MARK: - Global timeline
 
+    /// First-paint global timeline: raw posts + cached profiles only.
+    func fetchGlobalTimelineFast(limit: Int = 50, timeoutSeconds: Double = 2.5) async -> [ScoredPost] {
+        let since  = Int64(Date().addingTimeInterval(-3600).timeIntervalSince1970)
+        let kinds  = [NostrKind.textNote, NostrKind.longForm, NostrKind.repost]
+        let filter = NostrFilter(kinds: kinds, since: since, limit: limit)
+        let rawEvents = await fetchEvents(filters: [filter], timeoutSeconds: timeoutSeconds)
+            .filter { kinds.contains($0.kind) }
+            .sorted { $0.createdAt > $1.createdAt }
+        var posts = unwrapRepostEvents(rawEvents)
+        posts = await filterMutedPosts(posts)
+        cache.setCachedTimeline(posts.map(\.event), key: "global")
+        applyCachedProfiles(to: &posts)
+        return posts
+    }
+
     /// グローバルタイムライン（kind 1、直近1時間）を取得し、エンゲージメントカウントを付与して返す。
     ///
     /// タイムライン取得は pure Swift 実装のみを使用する。
@@ -81,6 +96,28 @@ extension NostrRepository {
     }
 
     // MARK: - Following timeline
+
+    /// First-paint following timeline: raw posts + cached profiles only.
+    func fetchFollowingTimelineFast(authors: [String], limit: Int = 50, timeoutSeconds: Double = 2.5) async -> [ScoredPost] {
+        guard !authors.isEmpty else { return [] }
+        let since  = Int64(Date().addingTimeInterval(-86400 * 2).timeIntervalSince1970)
+        let kinds  = [NostrKind.textNote, NostrKind.longForm, NostrKind.repost]
+        let filter = NostrFilter(authors: authors, kinds: kinds, since: since, limit: limit)
+        let rawEvents = await fetchEvents(filters: [filter], timeoutSeconds: timeoutSeconds)
+            .filter { kinds.contains($0.kind) }
+            .sorted { $0.createdAt > $1.createdAt }
+        var posts = unwrapRepostEvents(rawEvents)
+        posts = await filterMutedPosts(posts)
+        cache.setCachedTimeline(posts.map(\.event), key: "following")
+        applyCachedProfiles(to: &posts)
+        return posts
+    }
+
+    func enrichTimelinePosts(_ posts: [ScoredPost]) async -> [ScoredPost] {
+        var copy = posts
+        await enrichPosts(&copy)
+        return copy
+    }
 
     /// フォロー中ユーザーのタイムライン（kind 1、直近48時間）を取得し、エンゲージメントカウントを付与して返す。
     ///
@@ -394,8 +431,15 @@ extension NostrRepository {
         }
         guard !missingIds.isEmpty else { return }
 
-        let filter = NostrFilter(ids: missingIds, limit: missingIds.count)
-        var allQuotedEvents = await fetchEvents(filters: [filter], timeoutSeconds: fast ? 2.5 : 4.0)
+        var allQuotedEvents = missingIds.compactMap { cache.getCachedEvent(eventId: $0) }
+        let cachedQuotedIds = Set(allQuotedEvents.map(\.id))
+        let stillNetworkIds = missingIds.filter { !cachedQuotedIds.contains($0) }
+        if !stillNetworkIds.isEmpty {
+            let filter = NostrFilter(ids: stillNetworkIds, limit: stillNetworkIds.count)
+            let fetched = await fetchEvents(filters: [filter], timeoutSeconds: fast ? 2.0 : 3.0)
+            cache.setCachedEvents(fetched)
+            allQuotedEvents.append(contentsOf: fetched)
+        }
 
         // 取得できなかった ID を個別リレーでリトライ（fast時は体感優先で省略）
         if !fast {

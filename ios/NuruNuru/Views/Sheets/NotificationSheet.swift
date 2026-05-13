@@ -447,6 +447,12 @@ struct NotificationSheet: View {
         originalPostLoadingIds.remove(eventId)
     }
 
+    private func makeScoredPost(_ event: NostrEvent) -> ScoredPost {
+        let scored = ScoredPost(event: event)
+        scored.profile = profiles[event.pubkey] ?? repository.getCachedProfile(pubkey: event.pubkey)
+        return scored
+    }
+
     private func postTargetEventId(for notif: NotificationItem) -> String? {
         switch notif.type {
         case "reply", "mention", "quote":
@@ -550,7 +556,18 @@ struct NotificationSheet: View {
     }
 
     private func loadNotifications(skipCache: Bool = false) async {
-        isLoading = notifications.isEmpty
+        if notifications.isEmpty, !skipCache,
+           let cached = await repository.cachedNotificationsWithContext(pubkey: myPubkeyHex) {
+            notifications = dedupAndSortNotifications(cached.items)
+            profiles = cached.profiles
+            originalPosts = cached.originalPosts
+            originalPostFailedIds.subtract(cached.originalPosts.keys)
+            originalPostLoadingIds = []
+            isLoading = false
+        } else {
+            isLoading = notifications.isEmpty
+        }
+
         let result = await repository.fetchNotificationsWithContext(
             pubkey: myPubkeyHex, skipCache: skipCache
         )

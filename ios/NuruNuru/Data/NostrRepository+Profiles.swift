@@ -18,11 +18,21 @@ extension NostrRepository {
     /// フォローリスト（kind 3）を取得し、フォロー中 pubkey の配列を返す。キャッシュ有効期限 10 分。
     /// Android: NostrRepository.fetchFollowList() に対応。
     func fetchFollowList(pubkey: String) async -> [String] {
-        if let cached = cache.getCachedFollowList(pubkey: pubkey) { return cached }
-        // Pure-Swift フォールバック。
+        // Stale-while-revalidate: callers that need first paint should never see
+        // an empty following tab just because the 10-minute TTL expired.
+        if let cached = cache.getCachedFollowList(pubkey: pubkey), !cached.isEmpty { return cached }
+        return await refreshFollowList(pubkey: pubkey)
+    }
+
+    /// Force a relay refresh of Kind 3. Only overwrites the cache when an actual
+    /// contact-list event is found, so transient relay failures cannot poison a
+    /// good cached follow list with an empty array.
+    func refreshFollowList(pubkey: String, timeoutSeconds: Double = 3.0) async -> [String] {
         let filter = NostrFilter(authors: [pubkey], kinds: [NostrKind.contactList], limit: 1)
-        let events = await fetchEvents(filters: [filter], timeoutSeconds: 5)
-        guard let latest = events.max(by: { $0.createdAt < $1.createdAt }) else { return [] }
+        let events = await fetchEvents(filters: [filter], timeoutSeconds: timeoutSeconds)
+        guard let latest = events.max(by: { $0.createdAt < $1.createdAt }) else {
+            return cache.getCachedFollowList(pubkey: pubkey) ?? []
+        }
         let list = latest.tags.filter { $0.first == "p" }.compactMap { $0.dropFirst().first }
         cache.setCachedFollowList(pubkey: pubkey, list: list)
         return list
@@ -143,28 +153,47 @@ extension NostrRepository {
 
     // MARK: - User Notes & Liked Events
 
+    nonisolated func getCachedUserNotes(pubkey: String) -> [NostrEvent] {
+        cache.getCachedUserNotes(pubkey: pubkey) ?? []
+    }
+
+    nonisolated func getCachedLikedEvents(pubkey: String) -> [NostrEvent] {
+        cache.getCachedLikedEvents(pubkey: pubkey) ?? []
+    }
+
+
     /// ユーザーの kind-1 ノートを取得する（過去 30 日間）。
     /// Android: NostrRepositoryProfiles.fetchUserNotes() に対応。
     func fetchUserNotes(pubkey: String, limit: Int = 50) async -> [NostrEvent] {
         let since = Int64(Date().addingTimeInterval(-86400 * 30).timeIntervalSince1970)
         let filter = NostrFilter(authors: [pubkey], kinds: [NostrKind.textNote], since: since, limit: limit)
-        return await fetchEvents(filters: [filter])
+        let events = await fetchEvents(filters: [filter], timeoutSeconds: 3.0)
             .filter { $0.kind == NostrKind.textNote }
             .sorted { $0.createdAt > $1.createdAt }
+        if !events.isEmpty {
+            cache.setCachedUserNotes(pubkey: pubkey, events: events)
+            return events
+        }
+        return cache.getCachedUserNotes(pubkey: pubkey) ?? []
     }
 
     /// ユーザーがいいねしたイベントを取得する（kind 7 → 対象イベントを逆引き）。
     /// Android: NostrRepositoryProfiles.fetchUserLikes() に対応。
     func fetchLikedEvents(pubkey: String, limit: Int = 30) async -> [NostrEvent] {
         let filter = NostrFilter(authors: [pubkey], kinds: [NostrKind.reaction], limit: limit)
-        let reactions = await fetchEvents(filters: [filter])
+        let reactions = await fetchEvents(filters: [filter], timeoutSeconds: 3.0)
             .filter { $0.kind == NostrKind.reaction && $0.content == "+" }
         let eventIds = Array(reactions.compactMap { $0.getTagValue("e") }.prefix(limit))
-        guard !eventIds.isEmpty else { return [] }
+        guard !eventIds.isEmpty else { return cache.getCachedLikedEvents(pubkey: pubkey) ?? [] }
         let eventFilter = NostrFilter(ids: eventIds, limit: limit)
-        return await fetchEvents(filters: [eventFilter])
+        let events = await fetchEvents(filters: [eventFilter], timeoutSeconds: 3.0)
             .filter { $0.kind == NostrKind.textNote }
             .sorted { $0.createdAt > $1.createdAt }
+        if !events.isEmpty {
+            cache.setCachedLikedEvents(pubkey: pubkey, events: events)
+            return events
+        }
+        return cache.getCachedLikedEvents(pubkey: pubkey) ?? []
     }
 
     // MARK: - Emoji Sets (NIP-30, Kind 10030 / 30030)
@@ -173,6 +202,7 @@ extension NostrRepository {
     /// Android: NostrRepositoryProfiles.fetchEmojiList() に対応。
     func fetchEmojiSets(pubkeyHex: String) async -> [EmojiSet] {
         AppLogger.log("Emoji", "fetchEmojiSets for \(pubkeyHex.prefix(16))…")
+        if let cached = cache.getCachedEmojiSets(pubkey: pubkeyHex), !cached.isEmpty { return cached }
 
         // kind 10030（ユーザー絵文字リスト）を取得してセット参照を収集
         let listFilter = NostrFilter(authors: [pubkeyHex], kinds: [NostrKind.emojiList], limit: 1)
@@ -207,11 +237,13 @@ extension NostrRepository {
             let setFilter = NostrFilter(authors: [pubkeyHex], kinds: [NostrKind.emojiSet], limit: 20)
             let setEvents = await fetchEvents(filters: [setFilter], timeoutSeconds: 5)
             AppLogger.log("Emoji", "Fallback kind-30030 events: \(setEvents.count)")
-            return setEvents.compactMap { event in
+            let sets = setEvents.compactMap { event in
                 let dTag = event.tags.first(where: { $0.first == "d" })?.dropFirst().first ?? ""
                 let ref = dTag.isEmpty ? event.id : "30030:\(event.pubkey):\(dTag)"
                 return parseEmojiSet(event, ref: ref)
             }
+            if !sets.isEmpty { cache.setCachedEmojiSets(pubkey: pubkeyHex, sets: sets) }
+            return sets
         }
 
         // "a" タグの参照から author を分解して、参照先の author に限定してフェッチ
@@ -244,11 +276,13 @@ extension NostrRepository {
             return refSet.contains(ref)
         }
         AppLogger.log("Emoji", "filtered emoji sets: \(filtered.count)")
-        return filtered.compactMap { ev in
+        let sets = filtered.compactMap { ev in
             let dTag = ev.tags.first(where: { $0.first == "d" })?.dropFirst().first ?? ""
             let ref = dTag.isEmpty ? ev.id : "30030:\(ev.pubkey):\(dTag)"
             return parseEmojiSet(ev, ref: ref)
         }
+        if !sets.isEmpty { cache.setCachedEmojiSets(pubkey: pubkeyHex, sets: sets) }
+        return sets
     }
 
     private func parseEmojiSet(_ event: NostrEvent, ref: String? = nil) -> EmojiSet? {
@@ -348,6 +382,7 @@ extension NostrRepository {
 
     /// kind-10030 の現在値から、個別お気に入り(emojiタグ)を返す。
     func fetchFavoriteEmojis(pubkeyHex: String) async -> [CustomEmoji] {
+        if let cached = cache.getCachedFavoriteEmojis(pubkey: pubkeyHex), !cached.isEmpty { return cached }
         let listFilter = NostrFilter(authors: [pubkeyHex], kinds: [NostrKind.emojiList], limit: 1)
         var listEvents = await fetchEvents(filters: [listFilter], timeoutSeconds: 5)
         if listEvents.isEmpty {
@@ -364,13 +399,15 @@ extension NostrRepository {
         else { return [] }
 
         var seen = Set<String>()
-        return latest.tags.compactMap { tag -> CustomEmoji? in
+        let emojis = latest.tags.compactMap { tag -> CustomEmoji? in
             guard tag.count >= 3, tag[0] == "emoji" else { return nil }
             let code = tag[1]
             let url  = tag[2]
             guard seen.insert(code).inserted else { return nil }
             return CustomEmoji(shortcode: code, url: url)
         }
+        if !emojis.isEmpty { cache.setCachedFavoriteEmojis(pubkey: pubkeyHex, emojis: emojis) }
+        return emojis
     }
 
     /// Android updateEmojiList(tags) 相当。
@@ -384,6 +421,8 @@ extension NostrRepository {
         favorites.forEach { tags.append(["emoji", $0.shortcode, $0.url]) }
         sets.forEach { tags.append(["a", $0.id]) }
         try await publishEvent(kind: NostrKind.emojiList, tags: tags, content: "")
+        cache.setCachedFavoriteEmojis(pubkey: pubkeyHex, emojis: favorites)
+        cache.setCachedEmojiSets(pubkey: pubkeyHex, sets: sets)
     }
 
     // Android 同等: kind-30030 セットを検索して追加候補を返す
@@ -498,13 +537,9 @@ extension NostrRepository {
     /// バッジ結果を永続キャッシュに保存する。
     private func cacheBadgeResults(pubkeyHex: String, badges: [BadgeItem]) {
         let urls = badges.compactMap(\.imageUrl)
-        if !urls.isEmpty {
-            cache.setCachedBadges(pubkey: pubkeyHex, urls: urls)
-            // BadgeItem キャッシュも更新（名前付き）
-            cache.setCachedBadgeItems(pubkey: pubkeyHex, items: badges)
-            // BadgeDisplay のインメモリキャッシュも更新
-            clearBadgeCache(pubkey: pubkeyHex)
-        }
+        cache.setCachedBadges(pubkey: pubkeyHex, urls: urls)
+        cache.setCachedBadgeItems(pubkey: pubkeyHex, items: badges)
+        clearBadgeCache(pubkey: pubkeyHex)
     }
 
     // MARK: - Awarded Badges (Kind 8)
@@ -819,5 +854,19 @@ private struct ProfileContent: Decodable {
 
         birthday = b1 ?? b2 ?? b3 ?? normalizeBirthdayObject(bo1) ?? normalizeBirthdayObject(bo2) ?? normalizeBirthdayObject(bo3)
         geohash = try c.decodeIfPresent(String.self, forKey: .geohash)
+    }
+}
+
+
+extension NostrRepository {
+    func prefetchProfilesAndBadges(pubkeys: [String], limit: Int = 80) async {
+        let targets = Array(Set(pubkeys).prefix(limit))
+        guard !targets.isEmpty else { return }
+        _ = await fetchProfiles(pubkeys: targets)
+        await withTaskGroup(of: Void.self) { group in
+            for pk in targets.prefix(30) {
+                group.addTask { _ = await self.fetchBadges(pubkeyHex: pk) }
+            }
+        }
     }
 }

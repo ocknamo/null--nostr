@@ -260,8 +260,9 @@ struct EditProfileSheet: View {
 
         do {
             let url = try await uploadService.uploadImage(
-                imageData:  compressed,
-                server:     server
+                imageData:      compressed,
+                server:         server,
+                blossomBaseUrl: await repo.prefs.blossomUploadBaseUrl
             )
             switch target {
             case .picture: picture = url

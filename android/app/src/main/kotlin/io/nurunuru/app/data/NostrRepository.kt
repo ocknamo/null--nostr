@@ -285,19 +285,33 @@ class NostrRepository(
     fun getCachedFollowList(pubkeyHex: String): List<String>? = cache.getCachedFollowList(pubkeyHex)
 
     suspend fun fetchFollowList(pubkeyHex: String): List<String> {
+        // Stale-while-revalidate: callers on the hot path should never block for
+        // several seconds or see an empty following tab just because relays hiccup.
+        val cached = getCachedFollowList(pubkeyHex)
+        if (!cached.isNullOrEmpty()) {
+            if (pubkeyHex == myPubkeyHex) {
+                followingSet.clear(); followingSet.addAll(cached)
+            }
+            return cached
+        }
+        return refreshFollowList(pubkeyHex)
+    }
+
+    suspend fun refreshFollowList(pubkeyHex: String, timeoutMs: Long = 3_000): List<String> {
         val filter = NostrClient.Filter(
             kinds = listOf(NostrKind.CONTACT_LIST),
             authors = listOf(pubkeyHex),
             limit = 1
         )
-        val events = client.fetchEvents(filter, timeoutMs = 4_000)
+        val events = client.fetchEvents(filter, timeoutMs = timeoutMs)
         val event = events.maxByOrNull { it.createdAt } ?: return getCachedFollowList(pubkeyHex) ?: emptyList()
         val followList = event.getTagValues("p")
-        cache.setCachedFollowList(pubkeyHex, followList)
-        // フォロー中セットを最新状態に同期（プロフィール永続化判定に使用）
+        // Do not poison a good cache with an empty list from malformed/transient data.
+        if (followList.isNotEmpty() || getCachedFollowList(pubkeyHex) == null) {
+            cache.setCachedFollowList(pubkeyHex, followList)
+        }
         if (pubkeyHex == myPubkeyHex) {
-            followingSet.clear()
-            followingSet.addAll(followList)
+            followingSet.clear(); followingSet.addAll(followList)
         }
         return followList
     }

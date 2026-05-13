@@ -2,7 +2,6 @@
 # https://zapstore.dev/docs/publish
 
 name: ぬるぬる
-identifier: io.nurunuru.app
 summary: シンプルで使いやすいNostrクライアント
 
 images:
@@ -38,7 +37,6 @@ description: |
   nsec・外部署名アプリ（Amber）に対応。
 
 repository: https://github.com/tami1A84/null--nostr
-homepage:
 license: Unlicense
 tags:
   - nostr
@@ -47,16 +45,10 @@ tags:
   - japan
 
 icon: public/favicon-512.png
-changelog: CHANGELOG.md
+release_notes: CHANGELOG.md
 
-# Assets from GitHub releases
-assets:
-  - nurunuru-.*-arm64-v8a.apk
+# GitHub release asset matching
+match: nurunuru-.*-arm64-v8a.apk
 
-remote_metadata:
+metadata_sources:
   - github
-
-# Blossom servers for uploading
-blossom_servers:
-  - https://cdn.zapstore.dev
-  - https://blossom.band

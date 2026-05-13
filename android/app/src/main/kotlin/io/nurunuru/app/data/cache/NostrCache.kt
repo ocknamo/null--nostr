@@ -54,6 +54,7 @@ class NostrCache(context: Context) {
     // Hot caches (in-memory)
     private val profileCache = LRUCache<String, UserProfile>(Constants.CacheMaxEntries.PROFILES)
     private val timelineCache = LRUCache<String, String>(Constants.CacheMaxEntries.TIMELINE)
+    private val eventCache = LRUCache<String, io.nurunuru.app.data.models.NostrEvent>(Constants.CacheMaxEntries.TIMELINE)
 
     // ── 可変TTL・有効フラグ（AppPreferences から applySettings() で設定）────────
 
@@ -122,6 +123,12 @@ class NostrCache(context: Context) {
         }
     }
 
+    /** Read persisted cache without TTL enforcement. Used for stale-safe UX caches. */
+    private fun getRawNoTtl(key: String): String? {
+        val raw = prefs.getString(prefix + key, null) ?: return null
+        return try { json.decodeFromString<CacheEntry>(raw).data } catch (_: Exception) { null }
+    }
+
     private fun setRaw(key: String, data: String, durationMs: Long) {
         val entry = CacheEntry(data, System.currentTimeMillis() + durationMs)
         prefs.edit().putString(prefix + key, json.encodeToString(entry)).apply()
@@ -167,7 +174,13 @@ class NostrCache(context: Context) {
 
     // ─── Follow List Cache ───────────────────────────────────────────────────
 
+    /** Stale-safe follow list. Old follows are better than an empty following tab. */
     fun getCachedFollowList(pubkey: String): List<String>? {
+        val stored = getRawNoTtl("followlist_$pubkey") ?: return null
+        return try { json.decodeFromString(stored) } catch (_: Exception) { null }
+    }
+
+    fun getFreshCachedFollowList(pubkey: String): List<String>? {
         val stored = getRaw("followlist_$pubkey") ?: return null
         return try { json.decodeFromString(stored) } catch (_: Exception) { null }
     }
@@ -190,7 +203,7 @@ class NostrCache(context: Context) {
 
     // ─── Emoji Cache ─────────────────────────────────────────────────────────
 
-    fun getCachedEmoji(pubkey: String): String? = getRaw("emoji_$pubkey")
+    fun getCachedEmoji(pubkey: String): String? = getRawNoTtl("emoji_$pubkey")
 
     fun setCachedEmoji(pubkey: String, emojiDataJson: String) {
         if (!emojiEnabled) return
@@ -201,14 +214,14 @@ class NostrCache(context: Context) {
 
     // ─── Badge Cache (1 hour) ────────────────────────────────────────────────
 
-    fun getCachedBadgeInfo(pubkey: String): String? = getRaw("badge_info_$pubkey")
+    fun getCachedBadgeInfo(pubkey: String): String? = getRawNoTtl("badge_info_$pubkey")
 
     fun setCachedBadgeInfo(pubkey: String, dataJson: String) {
         if (!badgeEnabled) return
         setRaw("badge_info_$pubkey", dataJson, badgeTtl)
     }
 
-    fun getCachedAwardedBadges(pubkey: String): String? = getRaw("badge_awarded_$pubkey")
+    fun getCachedAwardedBadges(pubkey: String): String? = getRawNoTtl("badge_awarded_$pubkey")
 
     fun setCachedAwardedBadges(pubkey: String, dataJson: String) {
         if (!badgeEnabled) return
@@ -217,10 +230,35 @@ class NostrCache(context: Context) {
 
     // ─── User Notes / Likes Cache ────────────────────────────────────────────
 
-    fun getCachedUserNotes(pubkey: String): String? = getRaw("user_notes_$pubkey")
+    fun getCachedUserNotes(pubkey: String): String? = getRawNoTtl("user_notes_$pubkey")
 
     fun setCachedUserNotes(pubkey: String, json: String) {
         setRaw("user_notes_$pubkey", json, Constants.CacheDuration.NOTIFICATION) // 1 day
+    }
+
+
+    fun prependToUserNotesCache(pubkey: String, post: io.nurunuru.app.data.models.ScoredPost, serializer: kotlinx.serialization.json.Json) {
+        try {
+            val current = getCachedUserNotes(pubkey)?.let { raw ->
+                serializer.decodeFromString<List<io.nurunuru.app.data.models.ScoredPost>>(raw)
+            } ?: emptyList()
+            val updated = (listOf(post) + current.filter { it.event.id != post.event.id })
+                .sortedByDescending { it.event.createdAt }
+                .take(100)
+            setCachedUserNotes(pubkey, serializer.encodeToString(updated))
+        } catch (_: Exception) { }
+    }
+
+    fun prependToUserLikesCache(pubkey: String, post: io.nurunuru.app.data.models.ScoredPost, serializer: kotlinx.serialization.json.Json) {
+        try {
+            val current = getCachedUserLikes(pubkey)?.let { raw ->
+                serializer.decodeFromString<List<io.nurunuru.app.data.models.ScoredPost>>(raw)
+            } ?: emptyList()
+            val updated = (listOf(post) + current.filter { it.event.id != post.event.id })
+                .sortedByDescending { it.event.createdAt }
+                .take(100)
+            setCachedUserLikes(pubkey, serializer.encodeToString(updated))
+        } catch (_: Exception) { }
     }
 
     fun removeFromUserNotesCache(pubkey: String, eventId: String, serializer: kotlinx.serialization.json.Json) {
@@ -234,7 +272,7 @@ class NostrCache(context: Context) {
         } catch (_: Exception) { }
     }
 
-    fun getCachedUserLikes(pubkey: String): String? = getRaw("user_likes_$pubkey")
+    fun getCachedUserLikes(pubkey: String): String? = getRawNoTtl("user_likes_$pubkey")
 
     fun setCachedUserLikes(pubkey: String, json: String) {
         setRaw("user_likes_$pubkey", json, Constants.CacheDuration.NOTIFICATION) // 1 day
@@ -249,6 +287,24 @@ class NostrCache(context: Context) {
                 setCachedUserLikes(pubkey, serializer.encodeToString(updated))
             }
         } catch (_: Exception) { }
+    }
+
+    // ─── Event Cache ─────────────────────────────────────────────────────────
+
+    fun getCachedEvent(eventId: String): io.nurunuru.app.data.models.NostrEvent? {
+        eventCache.get(eventId)?.let { return it }
+        val stored = getRawNoTtl("event_$eventId") ?: return null
+        return try { json.decodeFromString<io.nurunuru.app.data.models.NostrEvent>(stored).also { eventCache.set(eventId, it) } } catch (_: Exception) { null }
+    }
+
+    fun setCachedEvent(event: io.nurunuru.app.data.models.NostrEvent) {
+        if (event.id.isBlank()) return
+        eventCache.set(event.id, event)
+        try { setRaw("event_${event.id}", json.encodeToString(event), timelineTtl) } catch (_: Exception) { }
+    }
+
+    fun setCachedEvents(events: List<io.nurunuru.app.data.models.NostrEvent>) {
+        events.forEach { setCachedEvent(it) }
     }
 
     // ─── Timeline Cache ──────────────────────────────────────────────────────
@@ -273,7 +329,9 @@ class NostrCache(context: Context) {
 
     // ─── Notification Cache (1 day) ──────────────────────────────────────────
 
-    fun getCachedNotifications(pubkey: String): String? = getRaw("notifications_$pubkey")
+    fun getCachedNotifications(pubkey: String): String? = getRawNoTtl("notifications_$pubkey")
+
+    fun getFreshCachedNotifications(pubkey: String): String? = getRaw("notifications_$pubkey")
 
     fun setCachedNotifications(pubkey: String, json: String) {
         if (!notificationEnabled) return
@@ -384,7 +442,7 @@ class NostrCache(context: Context) {
     fun clearByType(typeId: String) {
         when (typeId) {
             "profile"      -> { profileCache.clear(); clearByPrefix("profile_") }
-            "timeline"     -> { timelineCache.clear(); clearByPrefix("timeline_") }
+            "timeline"     -> { timelineCache.clear(); eventCache.clear(); clearByPrefix("timeline_"); clearByPrefix("event_") }
             "followlist"   -> clearByPrefix("followlist_")
             "mutelist"     -> clearByPrefix("mutelist_")
             "notification" -> clearByPrefix("notifications_")
@@ -399,6 +457,7 @@ class NostrCache(context: Context) {
     fun clearAll() {
         profileCache.clear()
         timelineCache.clear()
+        eventCache.clear()
         val editor = prefs.edit()
         prefs.all.keys.filter { it.startsWith(prefix) }.forEach { editor.remove(it) }
         editor.remove("mls_left_groups")
@@ -438,6 +497,6 @@ class NostrCache(context: Context) {
     fun getCacheStats(): CacheStats = CacheStats(
         entryCount = prefs.all.count { it.key.startsWith(prefix) },
         memoryProfileCount = profileCache.size,
-        memoryTimelineCount = timelineCache.size
+        memoryTimelineCount = timelineCache.size + eventCache.size
     )
 }

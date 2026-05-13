@@ -83,10 +83,11 @@ fun TimelineScreen(
                 TimelineHeader(
                     feedType = uiState.feedType,
                     onFeedTypeChange = { viewModel.switchFeed(it) },
-                    showRecommendedDot = uiState.hasNewRecommendations,
-                    showFollowingDot = uiState.hasNewFollowing,
+                    showRecommendedDot = uiState.hasNewRecommendations || uiState.pendingGlobalPosts.isNotEmpty() || uiState.pendingRelayPosts.isNotEmpty(),
+                    showFollowingDot = uiState.hasNewFollowing || uiState.pendingFollowingPosts.isNotEmpty(),
+                    showNotificationsDot = uiState.hasNewNotifications,
                     onSearchClick = { showSearchModal = true },
-                    onNotificationsClick = { showNotificationsModal = true },
+                    onNotificationsClick = { viewModel.markNotificationsSeen(); showNotificationsModal = true },
                     savedRelayUrls = uiState.savedRelayUrls,
                     selectedRelayUrl = uiState.selectedRelayUrl,
                     onSelectRelay = { viewModel.selectRelayFeed(it) }
@@ -118,8 +119,9 @@ fun TimelineScreen(
                     feedType = if (page == 0) FeedType.GLOBAL else FeedType.FOLLOWING,
                     onProfileClick = { viewingPubkey = it },
                     onHashtagClick = { tag ->
+                        val q = if (tag.startsWith("#")) tag else "#$tag"
+                        viewModel.search(q)
                         showSearchModal = true
-                        viewModel.search(tag)
                     },
                     myPubkey = myPubkey,
                     onReplyLongPress = { eventId -> onNoteClick?.invoke(eventId, null) },
@@ -271,7 +273,8 @@ private fun TimelineContent(
             else -> {
                 LazyColumn(
                     state = listState,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(top = 4.dp)
                 ) {
                     items(displayPosts, key = { it.event.id }) { post ->
                         val notInterestedCallback = if (feedType == FeedType.GLOBAL && !isRelaySelected) {
@@ -341,7 +344,7 @@ private fun TimelineContent(
                 pendingPosts = pendingPosts,
                 onClick = {
                     viewModel.flushPendingPosts(feedType)
-                    coroutineScope.launch { listState.animateScrollToItem(0) }
+                    coroutineScope.launch { listState.scrollToItem(0) }
                 }
             )
         }

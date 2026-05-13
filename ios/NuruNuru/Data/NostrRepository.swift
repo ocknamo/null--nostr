@@ -232,31 +232,34 @@ actor NostrRepository {
             AppLogger.log("Repository", "✅ relay connect background task finished")
         }
         isConnected = true
-        AppLogger.log("Repository", "connect() returned — FFI ready, relay connecting in background")
-        Task { await self.drainMlsRetryQueue(trigger: "connect", maxItems: 3) }
-        Task { await self.drainMlsRetryQueue(trigger: "connect", maxItems: 3) }
+        AppLogger.log("Repository", "connect() returned — timeline relays connecting in background")
     }
 
     /// Build the canonical relay list used for initial connection and lazy fetch recovery.
     private func buildRelayConnectionUrls() -> [String] {
-        // Startup should stay lean: prefer NIP-65/default read relays, cap persistent
-        // connections, and avoid adding every selected/fallback relay immediately.
-        var relayUrls = getSavedRelayUrls()
-        if relayUrls.isEmpty {
-            AppLogger.log("Repository", "No relays configured — using defaults")
-            relayUrls = defaultRelays
-        }
-        relayUrls = relayUrls.filter { !Self.deadRelays.contains($0) && !Self.temporarilyDeprioritizedRelays.contains($0) }
+        // First paint must be tiny and deterministic.  Do not let NIP-65 write
+        // relays, search relays, or MLS interop relays enter the startup pool.
+        // Search/Talk-specific code connects their relays lazily when needed.
+        let preferredTimelineRelays = [
+            "wss://yabu.me",
+            "wss://r.kojira.io",
+            "wss://relay-jp.nostr.wirednet.jp"
+        ]
 
-        // Keep JP/default relays first and cap to 4 general relays. Search relay is added
-        // separately because NIP-50 queries rely on it.
-        var compact: [String] = []
-        for url in relayUrls where !compact.contains(url) && url != searchRelayUrl {
-            compact.append(url)
-            if compact.count >= 4 { break }
+        let saved = getSavedRelayUrls()
+        var candidates: [String] = []
+        candidates.append(contentsOf: preferredTimelineRelays)
+        for url in saved where candidates.count < 3 {
+            if !candidates.contains(url) { candidates.append(url) }
         }
-        if !compact.contains(searchRelayUrl), !Self.deadRelays.contains(searchRelayUrl) {
-            compact.append(searchRelayUrl)
+
+        var compact: [String] = []
+        for url in candidates {
+            guard !Self.deadRelays.contains(url),
+                  !Self.temporarilyDeprioritizedRelays.contains(url),
+                  url != searchRelayUrl else { continue }
+            if !compact.contains(url) { compact.append(url) }
+            if compact.count >= 3 { break }
         }
         return compact
     }
@@ -391,6 +394,8 @@ actor NostrRepository {
     /// long cooldown path.
     static let temporarilyDeprioritizedRelays: Set<String> = [
         "wss://relay.nostr.wirednet.jp",
+        "wss://relay.0xchat.com",
+        "wss://realy.westernbtc.com",
     ]
 
     /// Return the saved relay URL list from preferences.
@@ -509,17 +514,16 @@ actor NostrRepository {
     }
 
     /// Upload an image. Routes to nostr.build / yabu.me / Blossom based on prefs.uploadServer.
-    /// Adds NIP-98 HTTP Auth (Kind 27235) header when available.
+    /// Uses the shared ImageUploadService so composer/profile uploads share the same endpoint,
+    /// Blossom auth, timeout, and response parsing behavior.
     func uploadImage(data: Data, mimeType: String) async throws -> String {
-        let server = prefs.uploadServer.lowercased()
-        if server == "share.yabu.me" || server.contains("yabu") {
-            return try await uploadToYabuMe(data: data, mimeType: mimeType)
-        } else if server.hasPrefix("http") {
-            // Blossom-compatible server
-            return try await uploadToBlossom(data: data, mimeType: mimeType, baseUrl: server)
-        }
-        // Default: nostr.build
-        return try await uploadToNostrBuild(data: data, mimeType: mimeType)
+        let service = ImageUploadService(signer: signer)
+        return try await service.uploadImage(
+            imageData: data,
+            server: prefs.uploadServerEnum,
+            blossomBaseUrl: prefs.blossomUploadBaseUrl,
+            mimeType: mimeType
+        )
     }
 
     // MARK: - Upload Targets

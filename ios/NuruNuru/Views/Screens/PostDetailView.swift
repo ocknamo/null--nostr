@@ -30,10 +30,14 @@ final class PostDetailViewModel {
 
     // MARK: - Init
 
-    init(repository: NostrRepository, myPubkeyHex: String, eventId: String) {
+    init(repository: NostrRepository, myPubkeyHex: String, eventId: String, initialPost: ScoredPost? = nil) {
         self.repository   = repository
         self.myPubkeyHex  = myPubkeyHex
         self.eventId      = eventId
+        if let initialPost {
+            self.post = initialPost
+            self.isLoading = false
+        }
     }
 
     // MARK: - Load
@@ -41,25 +45,33 @@ final class PostDetailViewModel {
     /// 元投稿とリプライを取得する。
     /// Android: `PostDetailScreen.kt` の `LaunchedEffect(eventId)` に対応。
     func loadPostAndReplies() async {
-        isLoading    = true
+        if post == nil { isLoading = true }
         errorMessage = nil
 
-        // 元投稿取得。更新時にリレーから一時的に取得できない場合でも、既に表示中の投稿は維持する。
+        // 元投稿取得。initialPost/cache を最優先し、表示をブロックしない。
         let rawEvent: NostrEvent
-        if let fetched = await repository.fetchEvent(eventId: eventId) {
-            rawEvent = fetched
-        } else if let existing = post?.event {
+        if let existing = post?.event {
             rawEvent = existing
+        } else if let fetched = await repository.fetchEvent(eventId: eventId) {
+            rawEvent = fetched
         } else {
             errorMessage = "投稿が見つかりませんでした"
             isLoading    = false
             return
         }
 
-        // enrichPosts は inout — 1 要素の配列でラップして呼ぶ
-        var mainArr = [ScoredPost(event: rawEvent)]
-        await repository.enrichPosts(&mainArr)
-        post = mainArr.first
+        let mainPost = post ?? ScoredPost(event: rawEvent)
+        if mainPost.profile == nil, let cachedProfile = repository.getCachedProfile(pubkey: rawEvent.pubkey) {
+            mainPost.profile = cachedProfile
+        }
+        post = mainPost
+        isLoading = false
+        Task { [weak self, mainPost] in
+            guard let self else { return }
+            var arr = [mainPost]
+            await repository.enrichPosts(&arr)
+            self.post = arr.first
+        }
 
         // ── 祖先投稿を取得（e タグを再帰的に辿り最大5件） ──────────────────────
         // 辿った ID を記録してループを防ぐ
@@ -99,17 +111,25 @@ final class PostDetailViewModel {
             timeoutSeconds: 5.0
         )
 
-        var enrichedReplies = replyEvents
+        let rawReplies = replyEvents
             .filter { $0.id != eventId }
             .sorted { $0.createdAt < $1.createdAt }
-            .map { ScoredPost(event: $0) }
+            .map { ev -> ScoredPost in
+                let post = ScoredPost(event: ev)
+                post.profile = repository.getCachedProfile(pubkey: ev.pubkey)
+                return post
+            }
 
-        await repository.enrichPosts(&enrichedReplies)
-        replies   = enrichedReplies
+        replies = rawReplies
         isLoading = false
 
-        // プロフィール補完（バックグラウンド）
-        Task { await enrichProfiles() }
+        Task { [weak self, rawReplies] in
+            guard let self else { return }
+            var enrichedReplies = rawReplies
+            await repository.enrichPosts(&enrichedReplies)
+            self.replies = enrichedReplies
+            await self.enrichProfiles()
+        }
     }
 
     private func enrichProfiles() async {
@@ -241,7 +261,8 @@ struct PostDetailView: View {
             wrappedValue: PostDetailViewModel(
                 repository:  repository,
                 myPubkeyHex: myPubkeyHex,
-                eventId:     post.event.id
+                eventId:     post.event.id,
+                initialPost: post
             )
         )
     }
@@ -323,7 +344,7 @@ struct PostDetailView: View {
             PostSheet(
                 repository:  viewModel.repository,
                 myPubkeyHex: viewModel.myPubkeyHex,
-                myProfile:   viewModel.post?.profile,
+                myProfile:   viewModel.repository.getCachedProfile(pubkey: viewModel.myPubkeyHex) ?? viewModel.post?.profile,
                 replyToId:   viewModel.post?.event.id,
                 onDismiss:   { showReplySheet = false },
                 onSuccess:   {

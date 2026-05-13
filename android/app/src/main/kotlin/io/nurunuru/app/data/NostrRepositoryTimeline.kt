@@ -21,6 +21,53 @@ suspend fun NostrRepository.fetchEventsFromRelays(
     return client.fetchEventsFrom(relayUrls.distinct(), filter, timeoutMs)
 }
 
+suspend fun NostrRepository.fetchGlobalTimelineFast(limit: Int = 50): List<ScoredPost> = withContext(Dispatchers.IO) {
+    val filter = NostrClient.Filter(
+        kinds = listOf(NostrKind.TEXT_NOTE, NostrKind.VIDEO_LOOP, NostrKind.LONG_FORM, NostrKind.REPOST),
+        since = getOneHourAgo(),
+        limit = limit
+    )
+    val events = client.fetchEvents(filter, timeoutMs = 2_500)
+        .distinctBy { it.id }
+        .filter { it.getTagValues("e").isEmpty() }
+        .sortedByDescending { it.createdAt }
+    cache.setCachedEvents(events)
+    val muted = getCachedMuteList(myPubkeyHex)?.pubkeys?.toSet() ?: emptySet()
+    events.filter { it.pubkey !in muted }.map { ev ->
+        ScoredPost(event = ev, profile = getCachedProfile(ev.pubkey))
+    }
+}
+
+suspend fun NostrRepository.fetchFollowingTimelineFast(authors: List<String>, limit: Int = 50): List<ScoredPost> = withContext(Dispatchers.IO) {
+    if (authors.isEmpty()) return@withContext emptyList()
+    val filter = NostrClient.Filter(
+        kinds = listOf(NostrKind.TEXT_NOTE, NostrKind.VIDEO_LOOP, NostrKind.LONG_FORM, NostrKind.REPOST),
+        authors = authors.take(500),
+        since = System.currentTimeMillis() / 1000 - 2 * Constants.Time.DAY_SECS,
+        limit = limit
+    )
+    val events = client.fetchEvents(filter, timeoutMs = 2_500)
+        .distinctBy { it.id }
+        .filter { it.getTagValues("e").isEmpty() }
+        .sortedByDescending { it.createdAt }
+    cache.setCachedEvents(events)
+    val muted = getCachedMuteList(myPubkeyHex)?.pubkeys?.toSet() ?: emptySet()
+    events.filter { it.pubkey !in muted }.map { ev ->
+        ScoredPost(event = ev, profile = getCachedProfile(ev.pubkey))
+    }
+}
+
+suspend fun NostrRepository.enrichTimelinePosts(posts: List<ScoredPost>): List<ScoredPost> = withContext(Dispatchers.IO) {
+    enrichPosts(posts.map { it.event })
+}
+
+suspend fun NostrRepository.prefetchProfilesAndBadges(pubkeys: List<String>, limit: Int = 80) = coroutineScope {
+    val targets = pubkeys.distinct().take(limit)
+    if (targets.isEmpty()) return@coroutineScope
+    launch(Dispatchers.IO) { runCatching { fetchProfiles(targets) } }
+    targets.take(30).forEach { pk -> launch(Dispatchers.IO) { runCatching { fetchProfileBadgesInfo(pk) } } }
+}
+
 suspend fun NostrRepository.fetchRecommendedTimeline(limit: Int = 50): List<ScoredPost> =
     withContext(Dispatchers.IO) {
         try {
@@ -92,6 +139,7 @@ suspend fun NostrRepository.fetchGlobalTimeline(limit: Int = 50): List<ScoredPos
                         null
                     }
                 }.distinctBy { it.id }
+                cache.setCachedEvents(events)
                 enrichPosts(events)
             } catch (e: Exception) {
                 android.util.Log.e("NostrRepository", "Rust fetchGlobalTimeline failed, falling back", e)
@@ -238,6 +286,7 @@ suspend fun NostrRepository.fetchFollowTimeline(pubkeyHex: String, limit: Int = 
                     }
                 }.distinctBy { it.id }
                     .filter { it.getTagValues("e").isEmpty() } // リプライ除外
+                cache.setCachedEvents(events)
                 enrichPosts(events)
             } catch (e: Exception) {
                 android.util.Log.e("NostrRepository", "Rust fetchFollowTimeline failed, falling back", e)
@@ -260,6 +309,7 @@ private suspend fun NostrRepository.fetchFollowTimelineLegacy(pubkeyHex: String,
     )
     val events = client.fetchEvents(filter, timeoutMs = 6_000).distinctBy { it.id }
         .filter { it.getTagValues("e").isEmpty() } // リプライ除外
+    cache.setCachedEvents(events)
     return enrichPosts(events)
 }
 
@@ -275,6 +325,7 @@ suspend fun NostrRepository.searchNotes(query: String, limit: Int = 30): List<Sc
     val events = client.fetchEventsFrom(
         listOf(NostrClient.SEARCH_RELAY), filter, timeoutMs = 6_000
     ).filter { it.kind == NostrKind.TEXT_NOTE || it.kind == NostrKind.VIDEO_LOOP }
+    cache.setCachedEvents(events)
     return enrichPosts(events)
 }
 
@@ -343,6 +394,7 @@ suspend fun NostrRepository.advancedSearch(
         }
     }
     android.util.Log.d("SearchQuery", "raw=${rawEvents.size} filtered=${filtered.size}")
+    cache.setCachedEvents(filtered)
     return enrichPosts(filtered)
 }
 

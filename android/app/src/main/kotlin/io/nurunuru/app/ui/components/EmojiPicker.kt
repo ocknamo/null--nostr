@@ -79,17 +79,14 @@ internal suspend fun fetchAndCacheEmojis(
     if (EmojiPickerCache.get(pubkey) != null) return EmojiPickerCache.get(pubkey)
     if (!EmojiPickerCache.tryStartFetch(pubkey)) return null  // 既にフェッチ中
     return try {
-        val filter = NostrClient.Filter(kinds = listOf(10030), authors = listOf(pubkey), limit = 1)
-        val events = repository.fetchEvents(filter)
+        val listEvent = repository.fetchEmojiList(pubkey)
         val individualEmojis = mutableListOf<CustomEmoji>()
         val setPointers = mutableListOf<String>()
-        if (events.isNotEmpty()) {
-            events.first().tags.forEach { tag ->
-                if (tag.getOrNull(0) == "emoji" && tag.size >= 3)
-                    individualEmojis.add(CustomEmoji(tag[1], tag[2], "user"))
-                else if (tag.getOrNull(0) == "a" && tag.getOrNull(1)?.startsWith("30030:") == true)
-                    setPointers.add(tag[1])
-            }
+        listEvent?.tags?.forEach { tag ->
+            if (tag.getOrNull(0) == "emoji" && tag.size >= 3)
+                individualEmojis.add(CustomEmoji(tag[1], tag[2], "user"))
+            else if (tag.getOrNull(0) == "a" && tag.getOrNull(1)?.startsWith("30030:") == true)
+                setPointers.add(tag[1])
         }
         val loadedSets = coroutineScope {
             setPointers.map { pointer ->
@@ -102,9 +99,12 @@ internal suspend fun fetchAndCacheEmojis(
                             tags = mapOf("d" to listOf(parts.drop(2).joinToString(":"))),
                             limit = 1
                         )
-                        val setEvents = repository.fetchEvents(setFilter)
-                        if (setEvents.isNotEmpty()) {
-                            val setEvent = setEvents.first()
+                        val cacheKey = "set_$pointer"
+                        val setEvent = repository.getCachedEmojiEvent(cacheKey) ?: run {
+                            val setEvents = repository.fetchEvents(setFilter)
+                            setEvents.firstOrNull()?.also { repository.cacheEmojiEvent(cacheKey, it) }
+                        }
+                        if (setEvent != null) {
                             val setName = setEvent.getTagValue("title") ?: setEvent.getTagValue("d") ?: "Emoji Set"
                             val setEmojis = setEvent.tags
                                 .filter { it.getOrNull(0) == "emoji" && it.size >= 3 }

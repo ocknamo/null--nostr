@@ -557,6 +557,7 @@ struct QuoteRepostSheet: View {
             let urls = await uploadService.uploadImages(
                 selectedImages,
                 server: server,
+                blossomBaseUrl: repository.prefs.blossomUploadBaseUrl,
                 onProgress: { current, _ in
                     Task { @MainActor in
                         self.uploadProgress = "画像をアップロード中 (\(current)/\(total))..."

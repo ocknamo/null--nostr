@@ -21,6 +21,22 @@ suspend fun NostrRepository.fetchProfile(pubkeyHex: String): UserProfile? {
     return profile
 }
 
+
+fun NostrRepository.cacheUserNotePost(pubkeyHex: String, post: ScoredPost) {
+    cache.setCachedEvent(post.event)
+    cache.prependToUserNotesCache(pubkeyHex, post, json)
+}
+
+fun NostrRepository.cacheUserLikedPost(pubkeyHex: String, post: ScoredPost) {
+    cache.setCachedEvent(post.event)
+    cache.prependToUserLikesCache(pubkeyHex, post, json)
+}
+
+
+fun NostrRepository.removeCachedUserLikedPost(pubkeyHex: String, eventId: String) {
+    cache.removeFromUserLikesCache(pubkeyHex, eventId, json)
+}
+
 // ─── User Notes / Likes ───────────────────────────────────────────────────────
 
 /** キャッシュのみ読む（ネットワーク不使用）。初回表示の即時描画に使う。 */
@@ -65,8 +81,7 @@ suspend fun NostrRepository.fetchUserNotes(pubkeyHex: String, limit: Int = 30): 
     val filter = NostrClient.Filter(
         kinds = listOf(NostrKind.TEXT_NOTE, NostrKind.LONG_FORM, NostrKind.VIDEO_LOOP, NostrKind.REPOST),
         authors = listOf(pubkeyHex),
-        limit = limit,
-        since = getOneDayAgo()
+        limit = limit
     )
     val relayEvents = client.fetchEvents(filter, 6_000)
     val deletedIds = cache.getDeletedEventIds()
@@ -74,6 +89,8 @@ suspend fun NostrRepository.fetchUserNotes(pubkeyHex: String, limit: Int = 30): 
         .filter { it.id !in deletedIds }
         .sortedByDescending { it.createdAt }
         .take(limit)
+    if (allEvents.isEmpty()) return getCachedUserNotesPosts(pubkeyHex).take(limit)
+    cache.setCachedEvents(allEvents)
     val posts = enrichPosts(allEvents)
     try {
         cache.setCachedUserNotes(pubkeyHex,
@@ -91,15 +108,17 @@ suspend fun NostrRepository.fetchUserLikes(pubkeyHex: String, limit: Int = 30): 
     val reactionFilter = NostrClient.Filter(
         kinds = listOf(NostrKind.REACTION),
         authors = listOf(pubkeyHex),
-        limit = limit,
-        since = getOneDayAgo()
+        limit = limit
     )
     val reactions = client.fetchEvents(reactionFilter, timeoutMs = 5_000)
     val eventIds = reactions.mapNotNull { it.getTagValue("e") }.distinct()
-    if (eventIds.isEmpty()) return emptyList()
+    if (eventIds.isEmpty()) return getCachedUserLikesPosts(pubkeyHex).take(limit)
 
     val eventsFilter = NostrClient.Filter(ids = eventIds)
-    val posts = enrichPosts(client.fetchEvents(eventsFilter, timeoutMs = 6_000).distinctBy { it.id }.sortedByDescending { it.createdAt })
+    val events = client.fetchEvents(eventsFilter, timeoutMs = 3_000).distinctBy { it.id }.sortedByDescending { it.createdAt }
+    if (events.isEmpty()) return getCachedUserLikesPosts(pubkeyHex).take(limit)
+    cache.setCachedEvents(events)
+    val posts = enrichPosts(events)
     try {
         cache.setCachedUserLikes(pubkeyHex,
             json.encodeToString(kotlinx.serialization.builtins.ListSerializer(ScoredPost.serializer()), posts))
@@ -317,9 +336,18 @@ suspend fun NostrRepository.updateProfileBadges(pubkeyHex: String, badges: List<
 
 // ─── Emoji ────────────────────────────────────────────────────────────────────
 
+
+fun NostrRepository.getCachedEmojiEvent(cacheKey: String): NostrEvent? {
+    val jsonStr = cache.getCachedEmoji(cacheKey) ?: return null
+    return try { json.decodeFromString<NostrEvent>(jsonStr) } catch (_: Exception) { null }
+}
+
+fun NostrRepository.cacheEmojiEvent(cacheKey: String, event: NostrEvent) {
+    try { cache.setCachedEmoji(cacheKey, json.encodeToString(NostrEvent.serializer(), event)) } catch (_: Exception) { }
+}
+
 fun NostrRepository.getCachedEmojiList(pubkeyHex: String): NostrEvent? {
-    val jsonStr = cache.getCachedEmoji(pubkeyHex) ?: return null
-    return try { json.decodeFromString<NostrEvent>(jsonStr) } catch (e: Exception) { null }
+    return getCachedEmojiEvent(pubkeyHex)
 }
 
 suspend fun NostrRepository.fetchEmojiList(pubkeyHex: String): NostrEvent? {
@@ -331,7 +359,7 @@ suspend fun NostrRepository.fetchEmojiList(pubkeyHex: String): NostrEvent? {
     val events = client.fetchEvents(filter, timeoutMs = 4_000)
     val event = events.maxByOrNull { it.createdAt }
     if (event != null) {
-        cache.setCachedEmoji(pubkeyHex, json.encodeToString(NostrEvent.serializer(), event))
+        cacheEmojiEvent(pubkeyHex, event)
         return event
     }
     return getCachedEmojiList(pubkeyHex)

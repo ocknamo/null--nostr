@@ -846,6 +846,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -891,7 +895,11 @@ fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_follow_list(
 ): Short
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_follow_timeline(
 ): Short
+fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_follow_timeline_fast(
+): Short
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_global_timeline(
+): Short
+fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_global_timeline_fast(
 ): Short
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_profile(
 ): Short
@@ -1078,7 +1086,11 @@ fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_fetch_follow_list(`ptr`: Poi
 ): RustBuffer.ByValue
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_fetch_follow_timeline(`ptr`: Pointer,`authors`: RustBuffer.ByValue,`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_fetch_follow_timeline_fast(`ptr`: Pointer,`authors`: RustBuffer.ByValue,`limit`: Int,`timeoutSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_fetch_global_timeline(`ptr`: Pointer,`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_fetch_global_timeline_fast(`ptr`: Pointer,`limit`: Int,`timeoutSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_fetch_profile(`ptr`: Pointer,`pubkeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1349,7 +1361,13 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_follow_timeline() != 38806.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_follow_timeline_fast() != 32831.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_global_timeline() != 34592.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_global_timeline_fast() != 9225.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_profile() != 36544.toShort()) {
@@ -2015,6 +2033,11 @@ public interface NuruNuruClientInterface {
     fun `fetchFollowTimeline`(`authors`: List<kotlin.String>, `limit`: kotlin.UInt): List<kotlin.String>
     
     /**
+     * Fast follow timeline for first paint. No engagement/profile/quote enrich.
+     */
+    fun `fetchFollowTimelineFast`(`authors`: List<kotlin.String>, `limit`: kotlin.UInt, `timeoutSecs`: kotlin.UInt): List<kotlin.String>
+    
+    /**
      * Connect to relays and fetch the global timeline (Kind 1 text notes,
      * no author filter). Returns up to `limit` events as serialised JSON
      * strings, newest-first.
@@ -2024,6 +2047,11 @@ public interface NuruNuruClientInterface {
      * Call `connect()` first so the relays are ready.
      */
     fun `fetchGlobalTimeline`(`limit`: kotlin.UInt): List<kotlin.String>
+    
+    /**
+     * Fast global timeline for first paint. Returns raw displayable events only.
+     */
+    fun `fetchGlobalTimelineFast`(`limit`: kotlin.UInt, `timeoutSecs`: kotlin.UInt): List<kotlin.String>
     
     /**
      * Fetch a user profile (kind 0 metadata). Returns `None` if not found.
@@ -2727,6 +2755,22 @@ open class NuruNuruClient: Disposable, AutoCloseable, NuruNuruClientInterface
 
     
     /**
+     * Fast follow timeline for first paint. No engagement/profile/quote enrich.
+     */
+    @Throws(NuruNuruFfiException::class)override fun `fetchFollowTimelineFast`(`authors`: List<kotlin.String>, `limit`: kotlin.UInt, `timeoutSecs`: kotlin.UInt): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NuruNuruFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_nurunuru_fn_method_nurunuruclient_fetch_follow_timeline_fast(
+        it, FfiConverterSequenceString.lower(`authors`),FfiConverterUInt.lower(`limit`),FfiConverterUInt.lower(`timeoutSecs`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Connect to relays and fetch the global timeline (Kind 1 text notes,
      * no author filter). Returns up to `limit` events as serialised JSON
      * strings, newest-first.
@@ -2741,6 +2785,22 @@ open class NuruNuruClient: Disposable, AutoCloseable, NuruNuruClientInterface
     uniffiRustCallWithError(NuruNuruFfiException) { _status ->
     UniffiLib.INSTANCE.uniffi_uniffi_nurunuru_fn_method_nurunuruclient_fetch_global_timeline(
         it, FfiConverterUInt.lower(`limit`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Fast global timeline for first paint. Returns raw displayable events only.
+     */
+    @Throws(NuruNuruFfiException::class)override fun `fetchGlobalTimelineFast`(`limit`: kotlin.UInt, `timeoutSecs`: kotlin.UInt): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NuruNuruFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_nurunuru_fn_method_nurunuruclient_fetch_global_timeline_fast(
+        it, FfiConverterUInt.lower(`limit`),FfiConverterUInt.lower(`timeoutSecs`),_status)
 }
     }
     )

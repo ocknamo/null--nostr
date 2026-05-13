@@ -50,6 +50,12 @@ fun SearchModal(
     var query by remember { mutableStateOf(TextFieldValue(uiState.searchQuery)) }
     var isFocused by remember { mutableStateOf(false) }
 
+    LaunchedEffect(uiState.searchQuery) {
+        if (uiState.searchQuery != query.text) {
+            query = TextFieldValue(uiState.searchQuery, selection = TextRange(uiState.searchQuery.length))
+        }
+    }
+
     // Handle navigation events from ViewModel
     LaunchedEffect(viewModel.navigationEvents) {
         viewModel.navigationEvents.collect { event ->

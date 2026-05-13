@@ -39,6 +39,9 @@ targets:
         UIAppFonts:
           - LineSeedJP-Rg.ttf
           - LineSeedJP-Bd.ttf
+        CFBundleShortVersionString: "1.0.2"
+        CFBundleVersion: "3"
+        CFBundleDisplayName: ぬるぬる
         CFBundleURLTypes:
           - CFBundleURLName: io.nurunuru.app
             CFBundleURLSchemes:
@@ -55,20 +58,24 @@ targets:
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
-        UISupportedInterfaceOrientations~ipad:
-          - UIInterfaceOrientationPortrait
-          - UIInterfaceOrientationPortraitUpsideDown
-          - UIInterfaceOrientationLandscapeLeft
-          - UIInterfaceOrientationLandscapeRight
+        # iPadOS is intentionally unsupported for this App Store submission.
+        # Do not declare iPad-specific orientations; TARGETED_DEVICE_FAMILY is iPhone-only.
+        # UISupportedInterfaceOrientations~ipad:
+        #   - UIInterfaceOrientationPortrait
+        #   - UIInterfaceOrientationPortraitUpsideDown
+        #   - UIInterfaceOrientationLandscapeLeft
+        #   - UIInterfaceOrientationLandscapeRight
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.nurunuru.app
         SWIFT_VERSION: "5.9"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
-        MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "2"
+        MARKETING_VERSION: "1.0.2"
+        CURRENT_PROJECT_VERSION: "3"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: "66G7S3P755"
+        # iPhone only. iPadOS support is intentionally disabled for Review.
+        TARGETED_DEVICE_FAMILY: "1"
         ENABLE_HARDENED_RUNTIME: YES
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: NURUNURU_FFI_AVAILABLE
       configs:

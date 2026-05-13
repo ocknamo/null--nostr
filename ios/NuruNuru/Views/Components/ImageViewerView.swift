@@ -106,7 +106,15 @@ private struct ZoomableImageView: View {
                 .contentShape(Rectangle())
                 .highPriorityGesture(doubleTapGesture)
                 .simultaneousGesture(magnifyGesture(container: geo.size))
-                .simultaneousGesture(dragGesture(container: geo.size))
+                // Do not attach a drag recognizer while scale == 1.0. Even a guard inside
+                // DragGesture can win recognition and block TabView's horizontal paging.
+                .modifier(ZoomDragGestureModifier(
+                    enabled: scale > 1.01,
+                    container: geo.size,
+                    lastOffset: $lastOffset,
+                    offset: $offset,
+                    scale: scale
+                ))
             }
             .frame(width: geo.size.width, height: geo.size.height)
         }
@@ -135,26 +143,6 @@ private struct ZoomableImageView: View {
                     lastOffset = offset
                     onZoomChanged(true)
                 }
-            }
-    }
-
-    private func dragGesture(container: CGSize) -> some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { value in
-                guard scale > 1.01 else { return }
-                let proposed = CGSize(
-                    width: lastOffset.width + value.translation.width,
-                    height: lastOffset.height + value.translation.height
-                )
-                offset = clampedOffset(proposed, scale: scale, container: container)
-            }
-            .onEnded { _ in
-                guard scale > 1.01 else {
-                    offset = .zero
-                    lastOffset = .zero
-                    return
-                }
-                lastOffset = offset
             }
     }
 
@@ -190,14 +178,47 @@ private struct ZoomableImageView: View {
     }
 
     private func clampedOffset(_ value: CGSize, scale: CGFloat, container: CGSize) -> CGSize {
-        guard scale > 1 else { return .zero }
-        let maxX = max(0, container.width * (scale - 1) / 2)
-        let maxY = max(0, container.height * (scale - 1) / 2)
-        return CGSize(
-            width: value.width.clamped(to: -maxX...maxX),
-            height: value.height.clamped(to: -maxY...maxY)
-        )
+        clampedZoomOffset(value, scale: scale, container: container)
     }
+}
+
+
+private struct ZoomDragGestureModifier: ViewModifier {
+    let enabled: Bool
+    let container: CGSize
+    @Binding var lastOffset: CGSize
+    @Binding var offset: CGSize
+    let scale: CGFloat
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.simultaneousGesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let proposed = CGSize(
+                            width: lastOffset.width + value.translation.width,
+                            height: lastOffset.height + value.translation.height
+                        )
+                        offset = clampedZoomOffset(proposed, scale: scale, container: container)
+                    }
+                    .onEnded { _ in
+                        lastOffset = offset
+                    }
+            )
+        } else {
+            content
+        }
+    }
+}
+
+private func clampedZoomOffset(_ value: CGSize, scale: CGFloat, container: CGSize) -> CGSize {
+    guard scale > 1 else { return .zero }
+    let maxX = max(0, container.width * (scale - 1) / 2)
+    let maxY = max(0, container.height * (scale - 1) / 2)
+    return CGSize(
+        width: value.width.clamped(to: -maxX...maxX),
+        height: value.height.clamped(to: -maxY...maxY)
+    )
 }
 
 private extension Comparable {

@@ -82,17 +82,10 @@ private struct GroupListView: View {
             .animation(.easeInOut(duration: 0.25), value: selectedPage)
         }
         .background(theme.bgPrimary)
-        // If WhiteNoise sends a Welcome after the first Talk load, the list can be
-        // empty until the next manual refresh. Keep polling while the empty Talk
-        // list is visible so newly invited MLS groups appear automatically.
-        .task {
-            while !Task.isCancelled {
-                if viewModel.groups.isEmpty && !viewModel.isLoading {
-                    await viewModel.loadGroups()
-                }
-                try? await Task.sleep(nanoseconds: 15_000_000_000)
-            }
-        }
+        // Do not auto-load MLS groups from .task. MainTabView keeps TalkView alive
+        // behind the timeline tab, and eager MLS/KeyPackage discovery was one of the
+        // largest startup bottlenecks. Groups are loaded explicitly when the user taps
+        // the Talk tab, pulls to refresh, opens a DM, or creates a group.
         // New DM sheet
         .sheet(isPresented: $showNewChat) {
             NewChatSheet(onStartChat: { pubkey in
@@ -119,9 +112,7 @@ private struct GroupListView: View {
     @ViewBuilder
     private func filterPage(_ filter: TalkFilter) -> some View {
         let groups = filteredGroups(for: filter)
-        if viewModel.isLoading && viewModel.groups.isEmpty {
-            skeletonList
-        } else if groups.isEmpty {
+        if groups.isEmpty {
             emptyState
         } else {
             ScrollView {
@@ -172,16 +163,8 @@ private struct GroupListView: View {
         .buttonStyle(.plain)
     }
 
-    private var skeletonList: some View {
-        VStack(spacing: 0) {
-            ForEach(0..<8, id: \.self) { _ in
-                GroupRowSkeleton()
-                Divider().padding(.horizontal, NuruSpacing.space4)
-            }
-            Spacer()
-        }
-        .background(theme.bgPrimary)
-    }
+    // Loading skeleton intentionally removed: Talk loads in the background and
+    // the empty state remains visible when there are no local groups yet.
 
     private var emptyState: some View {
         VStack(spacing: 0) {

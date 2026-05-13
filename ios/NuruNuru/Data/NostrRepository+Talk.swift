@@ -60,7 +60,6 @@ extension NostrRepository {
             "wss://r.kojira.io",
             "wss://relay.nostr.wirednet.jp",
             "wss://relay-jp.nostr.wirednet.jp",
-            "wss://relay.nostr.band",
             "wss://purplepag.es"
         ]
     }
@@ -79,7 +78,7 @@ extension NostrRepository {
     }
 
     private var defaultMlsInboxRelays: [String] {
-        ["wss://relay.0xchat.com", "wss://auth.nostr1.com", "wss://yabu.me", "wss://r.kojira.io"]
+        ["wss://auth.nostr1.com", "wss://yabu.me", "wss://r.kojira.io", "wss://relay.damus.io"]
     }
 
     private func myMlsKeyPackageRelays() -> [String] {
@@ -1762,7 +1761,6 @@ extension NostrRepository {
         // Including them in reliable fanout makes sends slow and can keep the UI waiting
         // without improving WhiteNoise delivery.
         let blocked: Set<String> = [
-            "wss://relay.nostr.band",
             "wss://purplepag.es",
             "wss://search.nos.today",
             "wss://relay.nostr.wirednet.jp"
@@ -1772,7 +1770,6 @@ extension NostrRepository {
 
     private func scoreAndSortRelays(_ relays: [String]) -> [String] {
         let priority: [String: Int] = [
-            "wss://relay.0xchat.com": 120,
             "wss://auth.nostr1.com": 115,
             "wss://yabu.me": 100,
             "wss://r.kojira.io": 95,

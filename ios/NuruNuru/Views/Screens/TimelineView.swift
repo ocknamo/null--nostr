@@ -9,6 +9,7 @@ struct TimelineView: View {
     var onPostTap:           () -> Void        = {}
     var onProfileTap:        (String) -> Void  = { _ in }
     var onNotificationBell:  () -> Void        = {}
+    var hasNewNotifications: Bool              = false
     var onSearchTap:         () -> Void        = {}
     var onHashtagTap:       (String) -> Void  = { _ in }
 
@@ -127,12 +128,21 @@ struct TimelineView: View {
                         .foregroundStyle(theme.textTertiary)
                         .frame(width: 40, height: 40)
                 }
-                // Notification bell (no badge — notification unread count is separate from timeline new posts)
-                Button(action: onNotificationBell) {
-                    Image(systemName: NuruIcons.bell)
-                        .font(.system(size: 20))
-                        .foregroundStyle(theme.textTertiary)
-                        .frame(width: 40, height: 40)
+                // Notification bell + new dot
+                ZStack(alignment: .topTrailing) {
+                    Button(action: onNotificationBell) {
+                        Image(systemName: NuruIcons.bell)
+                            .font(.system(size: 20))
+                            .foregroundStyle(theme.textTertiary)
+                            .frame(width: 40, height: 40)
+                    }
+                    if hasNewNotifications {
+                        Circle()
+                            .fill(NuruColors.lineGreen)
+                            .frame(width: 10, height: 10)
+                            .overlay(Circle().stroke(Color.black, lineWidth: 2))
+                            .offset(x: -6, y: 7)
+                    }
                 }
             }
             .frame(height: 56)
@@ -191,7 +201,7 @@ struct TimelineView: View {
             .buttonStyle(.plain)
 
             // New-post dot
-            if viewModel.hasNewRelayPosts && !selected {
+            if viewModel.hasNewRelayPosts && selectedPage != 0 {
                 Circle()
                     .fill(NuruColors.lineGreen)
                     .frame(width: 10, height: 10)
@@ -220,7 +230,7 @@ struct TimelineView: View {
             .buttonStyle(.plain)
 
             // New-post dot
-            if viewModel.hasNewFollowingPosts && !selected {
+            if viewModel.hasNewFollowingPosts && selectedPage != 1 {
                 Circle()
                     .fill(NuruColors.lineGreen)
                     .frame(width: 10, height: 10)
@@ -382,8 +392,9 @@ struct TimelineView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        // スクロールトップ用アンカー
-                        Color.clear.frame(height: 0).id("timeline-top")
+                        // スクロールトップ用アンカー。0pt だと新着挿入直後の scrollTo が
+                        // ヘッダー/新着Pill と競合して先頭セルが隠れることがある。
+                        Color.clear.frame(height: 12).id("timeline-top")
 
                         ForEach(posts, id: \.id) { post in
                             postCell(post)
@@ -393,8 +404,11 @@ struct TimelineView: View {
                 .background(theme.bgPrimary)
                 .refreshable { await onRefresh() }
                 .onChange(of: scrollToTopTrigger) { _, _ in
-                    withAnimation(.easeInOut(duration: 0.3)) {
-                        proxy.scrollTo("timeline-top", anchor: .top)
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 80_000_000)
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            proxy.scrollTo("timeline-top", anchor: .top)
+                        }
                     }
                 }
             }

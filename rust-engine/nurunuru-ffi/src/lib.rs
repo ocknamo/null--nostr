@@ -343,6 +343,15 @@ impl NuruNuruClient {
         self.fetch_timeline_inner(None, limit)
     }
 
+    /// Fast global timeline for first paint. Returns raw displayable events only.
+    pub fn fetch_global_timeline_fast(
+        &self,
+        limit: u32,
+        timeout_secs: u32,
+    ) -> Result<Vec<String>, NuruNuruFfiError> {
+        self.fetch_timeline_fast_inner(None, limit, timeout_secs)
+    }
+
     /// Fetch the follow timeline for a set of authors (Kind 1 text notes).
     ///
     /// Issues a single REQ to all connected relays filtered by the given
@@ -360,6 +369,19 @@ impl NuruNuruClient {
             return Ok(vec![]);
         }
         self.fetch_timeline_inner(Some(authors), limit)
+    }
+
+    /// Fast follow timeline for first paint. No engagement/profile/quote enrich.
+    pub fn fetch_follow_timeline_fast(
+        &self,
+        authors: Vec<String>,
+        limit: u32,
+        timeout_secs: u32,
+    ) -> Result<Vec<String>, NuruNuruFfiError> {
+        if authors.is_empty() {
+            return Ok(vec![]);
+        }
+        self.fetch_timeline_fast_inner(Some(authors), limit, timeout_secs)
     }
 
     // ─── Relay fetch ───────────────────────────────────────────────────────
@@ -1308,6 +1330,37 @@ impl NuruNuruClient {
             .block_on(
                 self.engine
                     .fetch_timeline(author_pks.as_deref(), None, limit as usize),
+            )
+            .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))?;
+
+        events
+            .iter()
+            .map(|e| {
+                serde_json::to_string(e)
+                    .map_err(|err| NuruNuruFfiError::EngineError(err.to_string()))
+            })
+            .collect()
+    }
+
+    fn fetch_timeline_fast_inner(
+        &self,
+        author_hexes: Option<Vec<String>>,
+        limit: u32,
+        timeout_secs: u32,
+    ) -> Result<Vec<String>, NuruNuruFfiError> {
+        let author_pks: Option<Vec<nostr::PublicKey>> = author_hexes.map(|hexes| {
+            hexes
+                .iter()
+                .filter_map(|h| nostr::PublicKey::from_hex(h).ok())
+                .collect()
+        });
+        let timeout = std::time::Duration::from_secs(timeout_secs.max(1) as u64);
+        let since = Some(nostr::Timestamp::now() - 86400 * 2);
+        let events = self
+            .runtime
+            .block_on(
+                self.engine
+                    .fetch_timeline_fast(author_pks.as_deref(), since, limit as usize, timeout),
             )
             .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))?;
 

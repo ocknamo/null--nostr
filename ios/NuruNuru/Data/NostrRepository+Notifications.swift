@@ -397,6 +397,26 @@ extension NostrRepository {
         return allEvents
     }
 
+
+    /// Fast, network-free notification snapshot for opening the sheet without a spinner.
+    /// Uses the persisted notification result, profile cache, and cached original posts only.
+    func cachedNotificationsWithContext(pubkey: String) -> NotificationResult? {
+        guard let cached = cache.getCachedNotificationResult() else { return nil }
+        let pubkeys = Array(Set(cached.items.map { $0.pubkey }))
+        var profiles: [String: UserProfile] = [:]
+        for key in pubkeys {
+            if let profile = cache.getCachedProfile(key) { profiles[key] = profile }
+        }
+        var originals: [String: NostrEvent] = [:]
+        for event in cached.originalPosts ?? [] { originals[event.id] = event }
+        for id in cached.items.compactMap(\.targetEventId) {
+            if originals[id] == nil, let event = cache.getCachedEvent(eventId: id) {
+                originals[id] = event
+            }
+        }
+        return NotificationResult(items: cached.items, profiles: profiles, originalPosts: originals)
+    }
+
     /// 通知 + プロフィール + 元投稿を一括取得（Android fetchNotifications 相当）。
     /// キャッシュを活用し、skipCache=true でリフレッシュ。
     func fetchNotificationsWithContext(pubkey: String, skipCache: Bool = false) async -> NotificationResult {
@@ -441,7 +461,8 @@ extension NostrRepository {
         let missingIds = Array(targetIds.subtracting(originalPosts.keys).prefix(50))
         if !missingIds.isEmpty {
             let filter = NostrFilter(ids: missingIds, limit: missingIds.count)
-            let events = await fetchEvents(filters: [filter], timeoutSeconds: 5.0)
+            let events = await fetchEvents(filters: [filter], timeoutSeconds: 3.0)
+            cache.setCachedEvents(events)
             for event in events { originalPosts[event.id] = event }
         }
         return originalPosts.filter { targetIds.contains($0.key) }
@@ -452,8 +473,11 @@ extension NostrRepository {
     /// イベント ID を指定して単一イベントを取得する。
     /// Android: `NostrRepository.fetchEvent()` に相当。
     func fetchEvent(eventId: String) async -> NostrEvent? {
+        if let cached = cache.getCachedEvent(eventId: eventId) { return cached }
         let filter = NostrFilter(ids: [eventId], limit: 1)
-        return await fetchEvents(filters: [filter]).first
+        let event = await fetchEvents(filters: [filter], timeoutSeconds: 2.5).first
+        if let event { cache.setCachedEvent(event) }
+        return event
     }
 
 

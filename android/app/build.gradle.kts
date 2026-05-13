@@ -33,8 +33,14 @@ android {
         applicationId = "io.nurunuru.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 20
-        versionName = "1.4.7"
+        versionCode = 21
+        versionName = "1.4.8"
+
+        // Zapstore向けAPKはarm64-v8aのみを同梱する。
+        // これによりx86/x86_64/armeabi-v7a等のnative libsを除外してアップロードサイズを削減する。
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     buildTypes {

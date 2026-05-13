@@ -1,5 +1,12 @@
 import Foundation
 import Observation
+import UIKit
+
+extension Notification.Name {
+    static let nuruHomePublishedPost = Notification.Name("nuruHomePublishedPost")
+    static let nuruHomeLikedPost = Notification.Name("nuruHomeLikedPost")
+    static let nuruHomeUnlikedPost = Notification.Name("nuruHomeUnlikedPost")
+}
 
 /// Profile screen state and logic.
 /// Used for both own profile (HomeView) and other users (UserProfileSheet).
@@ -35,6 +42,12 @@ final class HomeViewModel {
     // MARK: - Dependencies
 
     private let repository: NostrRepository
+    private var homeEventObserverTokens: [NSObjectProtocol] = []
+    /// Locally acknowledged operations that may not be visible from relays yet.
+    /// Keep these merged into Home across pull-to-refresh so optimistic rows do not disappear.
+    private var pendingPublishedEvents: [String: NostrEvent] = [:]
+    private var pendingLikedEvents:     [String: NostrEvent] = [:]
+    private var pendingUnlikedEventIds: Set<String> = []
 
     // MARK: - Init
 
@@ -42,6 +55,119 @@ final class HomeViewModel {
         self.repository      = repository
         self.myPubkeyHex     = myPubkeyHex
         self.targetPubkeyHex = targetPubkeyHex ?? myPubkeyHex
+        installHomeEventObservers()
+    }
+
+
+    private func installHomeEventObservers() {
+        let center = NotificationCenter.default
+        homeEventObserverTokens.append(center.addObserver(
+            forName: .nuruHomePublishedPost,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let event = notification.userInfo?["event"] as? NostrEvent else { return }
+            Task { @MainActor in self.applyPublishedPost(event) }
+        })
+        homeEventObserverTokens.append(center.addObserver(
+            forName: .nuruHomeLikedPost,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let event = notification.userInfo?["event"] as? NostrEvent else { return }
+            Task { @MainActor in self.applyLikedPost(event) }
+        })
+        homeEventObserverTokens.append(center.addObserver(
+            forName: .nuruHomeUnlikedPost,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let eventId = notification.userInfo?["eventId"] as? String else { return }
+            Task { @MainActor in self.applyUnlikedPost(eventId: eventId) }
+        })
+    }
+
+    func applyPublishedPost(_ event: NostrEvent) {
+        guard isOwnProfile, event.pubkey == targetPubkeyHex else { return }
+        pendingPublishedEvents[event.id] = event
+        if posts.contains(where: { $0.event.id == event.id }) { return }
+        let scored = makeScoredPost(event)
+        posts.insert(scored, at: 0)
+        AppLogger.log("HomeVM", "Optimistic home posts insert — id=\(event.id.prefix(8))")
+    }
+
+    func applyLikedPost(_ event: NostrEvent) {
+        guard isOwnProfile else { return }
+        pendingLikedEvents[event.id] = event
+        pendingUnlikedEventIds.remove(event.id)
+        if likedPosts.contains(where: { $0.event.id == event.id }) { return }
+        let scored = makeScoredPost(event, preferExisting: true)
+        scored.isLiked = true
+        if scored.likeCount == 0 { scored.likeCount = max(scored.likeCount, 1) }
+        likedPosts.insert(scored, at: 0)
+        AppLogger.log("HomeVM", "Optimistic liked posts insert — id=\(event.id.prefix(8))")
+    }
+
+    func applyUnlikedPost(eventId: String) {
+        guard isOwnProfile else { return }
+        pendingLikedEvents.removeValue(forKey: eventId)
+        pendingUnlikedEventIds.insert(eventId)
+        likedPosts.removeAll { $0.event.id == eventId }
+        AppLogger.log("HomeVM", "Optimistic liked posts remove — id=\(eventId.prefix(8))")
+    }
+
+    private func makeScoredPost(_ event: NostrEvent, preferExisting: Bool = false) -> ScoredPost {
+        if preferExisting, let existing = (posts + likedPosts).first(where: { $0.event.id == event.id }) {
+            // Do not overwrite the liked post author with my Home profile. If the
+            // existing row still has no profile, resolve the profile for the
+            // event author only.
+            if existing.profile == nil {
+                existing.profile = repository.getCachedProfile(pubkey: event.pubkey)
+            }
+            return existing
+        }
+        let scored = ScoredPost(event: event)
+        // Only a newly published own post should use Home's own profile fallback.
+        // Liked posts may be authored by someone else, so using the Home profile
+        // here made the avatar/name appear as myself until enrichment completed.
+        if event.pubkey == targetPubkeyHex {
+            scored.profile = profile ?? repository.getCachedProfile(pubkey: event.pubkey)
+        } else {
+            scored.profile = repository.getCachedProfile(pubkey: event.pubkey)
+        }
+        return scored
+    }
+
+    private func mergePendingPosts(into base: [ScoredPost]) -> [ScoredPost] {
+        guard isOwnProfile else { return base }
+        var merged = base
+        let existingIds = Set(merged.map { $0.event.id })
+        let pending = pendingPublishedEvents.values
+            .filter { !existingIds.contains($0.id) }
+            .sorted { $0.createdAt > $1.createdAt }
+            .map { makeScoredPost($0) }
+        if !pending.isEmpty { merged.insert(contentsOf: pending, at: 0) }
+        return merged.sorted { $0.event.createdAt > $1.event.createdAt }
+    }
+
+    private func mergePendingLikes(into base: [ScoredPost]) -> [ScoredPost] {
+        guard isOwnProfile else { return base }
+        var merged = base.filter { !pendingUnlikedEventIds.contains($0.event.id) }
+        let existingIds = Set(merged.map { $0.event.id })
+        let pending = pendingLikedEvents.values
+            .filter { !existingIds.contains($0.id) }
+            .sorted { $0.createdAt > $1.createdAt }
+            .map { event -> ScoredPost in
+                let scored = makeScoredPost(event, preferExisting: true)
+                scored.isLiked = true
+                if scored.likeCount == 0 { scored.likeCount = max(scored.likeCount, 1) }
+                return scored
+            }
+        if !pending.isEmpty { merged.insert(contentsOf: pending, at: 0) }
+        return merged
     }
 
     // MARK: - Load
@@ -57,6 +183,19 @@ final class HomeViewModel {
         } else {
             // キャッシュが空の場合のみローディング表示
             isLoading = true
+        }
+
+
+        // ── Cache-first posts/likes: avoid blank Home tabs on relay hiccups ──
+        let cachedNotes = repository.getCachedUserNotes(pubkey: targetPubkeyHex)
+        if !cachedNotes.isEmpty, posts.isEmpty {
+            posts = cachedNotes.map { ScoredPost(event: $0) }
+            AppLogger.log("HomeVM", "Cache-first: showing cached user notes — count=\(cachedNotes.count)")
+        }
+        let cachedLikes = repository.getCachedLikedEvents(pubkey: targetPubkeyHex)
+        if !cachedLikes.isEmpty, likedPosts.isEmpty {
+            likedPosts = cachedLikes.map { ScoredPost(event: $0) }
+            AppLogger.log("HomeVM", "Cache-first: showing cached liked posts — count=\(cachedLikes.count)")
         }
 
         // グレース期間チェック（プロフィール編集直後はリレーデータで上書きしない）
@@ -108,19 +247,34 @@ final class HomeViewModel {
         async let postsTask   = repository.fetchUserNotes(pubkey: targetPubkeyHex)
         async let likedTask   = repository.fetchLikedEvents(pubkey: targetPubkeyHex)
         let (postsEvents, likedEvents) = await (postsTask, likedTask)
-        var resolvedPosts = postsEvents.map { ScoredPost(event: $0) }
-        var resolvedLikedPosts = likedEvents.map { ScoredPost(event: $0) }
-
-        await repository.resolveQuotedPosts(&resolvedPosts)
-        await repository.resolveQuotedPosts(&resolvedLikedPosts)
+        var resolvedPosts = mergePendingPosts(into: postsEvents.map { ScoredPost(event: $0) })
+        var resolvedLikedPosts = mergePendingLikes(into: likedEvents.map { ScoredPost(event: $0) })
 
         if !resolvedPosts.isEmpty || posts.isEmpty {
             posts = resolvedPosts
+            Task { [weak self, resolvedPosts] in
+                guard let self else { return }
+                var withQuotes = resolvedPosts
+                await repository.resolveQuotedPosts(&withQuotes)
+                let mergedWithPending = await MainActor.run { self.mergePendingPosts(into: withQuotes) }
+                if await MainActor.run(body: { self.samePostIds(self.posts, resolvedPosts) || self.samePostIds(self.posts, mergedWithPending) }) {
+                    await MainActor.run { self.posts = mergedWithPending }
+                }
+            }
         } else {
             AppLogger.log("HomeVM", "Keeping existing posts because refresh returned 0 events")
         }
         if !resolvedLikedPosts.isEmpty || likedPosts.isEmpty {
             likedPosts = resolvedLikedPosts
+            Task { [weak self, resolvedLikedPosts] in
+                guard let self else { return }
+                var withQuotes = resolvedLikedPosts
+                await repository.resolveQuotedPosts(&withQuotes)
+                let mergedWithPending = await MainActor.run { self.mergePendingLikes(into: withQuotes) }
+                if await MainActor.run(body: { self.samePostIds(self.likedPosts, resolvedLikedPosts) || self.samePostIds(self.likedPosts, mergedWithPending) }) {
+                    await MainActor.run { self.likedPosts = mergedWithPending }
+                }
+            }
         } else {
             AppLogger.log("HomeVM", "Keeping existing liked posts because refresh returned 0 events")
         }
@@ -144,6 +298,11 @@ final class HomeViewModel {
         }
         // プロフィールエンリッチメント（1回のみ、重複回避）
         await enrichProfiles()
+    }
+
+    private func samePostIds(_ lhs: [ScoredPost], _ rhs: [ScoredPost]) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        return zip(lhs, rhs).allSatisfy { $0.event.id == $1.event.id }
     }
 
     private func enrichProfiles() async {
@@ -266,25 +425,39 @@ final class HomeViewModel {
         // Find the event's author pubkey from posts/likedPosts
         let all = posts + likedPosts
         guard let post = all.first(where: { $0.event.id == eventId }) else { return }
+        let willLike = !post.isLiked
         // Optimistic UI update
-        post.isLiked    = !post.isLiked
-        post.likeCount += post.isLiked ? 1 : -1
+        post.isLiked    = willLike
+        post.likeCount += willLike ? 1 : -1
+        if isOwnProfile {
+            if willLike {
+                applyLikedPost(post.event)
+            } else {
+                applyUnlikedPost(eventId: eventId)
+            }
+        }
         Task {
             do {
-                if post.isLiked {
+                if willLike {
                     try await repository.publishReaction(
                         to:          eventId,
                         authorPubkey: post.event.pubkey,
                         content:     emoji.isEmpty ? "+" : emoji
                     )
+                    NotificationCenter.default.post(name: .nuruHomeLikedPost, object: nil, userInfo: ["event": post.event])
                 } else if let likeId = post.myLikeEventId {
                     try await repository.publishDelete(eventId: likeId)
                     post.myLikeEventId = nil
+                    NotificationCenter.default.post(name: .nuruHomeUnlikedPost, object: nil, userInfo: ["eventId": eventId])
                 }
             } catch {
                 // Revert on failure
                 post.isLiked    = !post.isLiked
                 post.likeCount += post.isLiked ? 1 : -1
+                if self.isOwnProfile {
+                    if willLike { self.applyUnlikedPost(eventId: eventId) }
+                    else { self.applyLikedPost(post.event) }
+                }
             }
         }
     }

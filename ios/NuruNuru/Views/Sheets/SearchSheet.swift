@@ -12,11 +12,9 @@ struct SearchSheet: View {
     @Environment(\.nuruTheme) private var theme
     @State private var query:           String         = ""
     @State private var results:         [ScoredPost]   = []
-    @State private var profileResults:  [UserProfile]  = []
     @State private var isSearching:     Bool           = false
     @State private var recentSearches:  [String]       = []
     @State private var hasSearched:     Bool           = false
-    @State private var activeResultTab: Int            = 0  // 0: 投稿, 1: ユーザー
 
     @FocusState private var focused: Bool
 
@@ -89,7 +87,7 @@ struct SearchSheet: View {
                     }
                     .padding(NuruSpacing.space4)
                 }
-            } else if results.isEmpty && profileResults.isEmpty {
+            } else if results.isEmpty {
                 Spacer()
                 VStack(spacing: NuruSpacing.space3) {
                     Image(systemName: "magnifyingglass")
@@ -101,61 +99,41 @@ struct SearchSheet: View {
                 }
                 Spacer()
             } else {
-                // Result tab switcher
-                resultTabBar
-
-                // Results content
-                if activeResultTab == 0 {
-                    // 投稿 tab
-                    ScrollView {
-                        LazyVStack(spacing: 0) {
-                            Text("\(results.count)件の結果")
-                                .font(NuruFont.labelSmall())
-                                .foregroundStyle(theme.textTertiary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, NuruSpacing.space4)
-                                .padding(.vertical, NuruSpacing.space2)
-                            ForEach(results, id: \.id) { post in
-                                PostRow(
-                                    post:         post,
-                                    repository:   repository,
-                                    myPubkeyHex:  myPubkeyHex,
-                                    onLike: {
-                                        try? await repository.publishReaction(
-                                            to: post.event.id,
-                                            authorPubkey: post.event.pubkey
-                                        )
-                                        post.isLiked = true
-                                        post.likeCount += 1
-                                    },
-                                    onRepost: {
-                                        try? await repository.publishRepost(event: post.event)
-                                        post.isReposted = true
-                                        post.repostCount += 1
-                                    },
-                                    onProfileTap: onProfileTap,
-                                    onHashtagTap: { tag in
-                                        let q = "#\(tag)"
-                                        query = q
-                                        Task { await doSearch(q) }
-                                    }
-                                )
-                            }
-                        }
-                    }
-                } else {
-                    // ユーザー tab
-                    ScrollView {
-                        LazyVStack(spacing: 0) {
-                            Text("\(profileResults.count)件のユーザー")
-                                .font(NuruFont.labelSmall())
-                                .foregroundStyle(theme.textTertiary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, NuruSpacing.space4)
-                                .padding(.vertical, NuruSpacing.space2)
-                            ForEach(profileResults, id: \.pubkey) { profile in
-                                profileResultRow(profile)
-                            }
+                // Search results are post-only for speed. Profile search is intentionally
+                // not executed here; tap usernames from posts to open profiles.
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        Text("\(results.count)件の結果")
+                            .font(NuruFont.labelSmall())
+                            .foregroundStyle(theme.textTertiary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, NuruSpacing.space4)
+                            .padding(.vertical, NuruSpacing.space2)
+                        ForEach(results, id: \.id) { post in
+                            PostRow(
+                                post:         post,
+                                repository:   repository,
+                                myPubkeyHex:  myPubkeyHex,
+                                onLike: {
+                                    try? await repository.publishReaction(
+                                        to: post.event.id,
+                                        authorPubkey: post.event.pubkey
+                                    )
+                                    post.isLiked = true
+                                    post.likeCount += 1
+                                },
+                                onRepost: {
+                                    try? await repository.publishRepost(event: post.event)
+                                    post.isReposted = true
+                                    post.repostCount += 1
+                                },
+                                onProfileTap: onProfileTap,
+                                onHashtagTap: { tag in
+                                    let q = "#\(tag)"
+                                    query = q
+                                    Task { await doSearch(q) }
+                                }
+                            )
                         }
                     }
                 }
@@ -378,13 +356,7 @@ struct SearchSheet: View {
         let parsed  = SearchQueryParser.parse(query: q)
         AppLogger.log("Search", "doSearch q=\(q) text=\(parsed.text) hashtags=\(parsed.hashtags.joined(separator: ","))")
 
-        // Parallel: fetch posts and profiles simultaneously
-        async let postsTask    = performSearch(parsed: parsed, rawQuery: q)
-        async let profilesTask = repository.searchProfiles(query: parsed.text.isEmpty ? q : parsed.text)
-        let (events, foundProfiles) = await (postsTask, profilesTask)
-
-        profileResults = foundProfiles
-
+        let events = await performSearch(parsed: parsed, rawQuery: q)
         let scored  = events.map { ScoredPost(event: $0) }
 
         // Enrich profiles
@@ -435,7 +407,7 @@ struct SearchSheet: View {
 
         results     = filtered
         isSearching = false
-        AppLogger.log("Search", "doSearch complete q=\(q) events=\(events.count) results=\(filtered.count) profiles=\(foundProfiles.count)")
+        AppLogger.log("Search", "doSearch complete q=\(q) events=\(events.count) results=\(filtered.count) profiles=0")
 
         // Save to recent
         var recent = recentSearches.filter { $0 != q }
@@ -533,83 +505,6 @@ struct SearchSheet: View {
         return events
             .filter { kinds.contains($0.kind) }
             .sorted { $0.createdAt > $1.createdAt }
-    }
-
-    // MARK: - Result Tabs
-
-    private var resultTabBar: some View {
-        HStack(spacing: 0) {
-            resultTabButton(title: "投稿", count: results.count, tab: 0)
-            resultTabButton(title: "ユーザー", count: profileResults.count, tab: 1)
-        }
-        .padding(.horizontal, NuruSpacing.space4)
-        .background(theme.bgPrimary)
-    }
-
-    private func resultTabButton(title: String, count: Int, tab: Int) -> some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.2)) { activeResultTab = tab }
-        } label: {
-            VStack(spacing: NuruSpacing.space1) {
-                Text("\(title) (\(count))")
-                    .font(NuruFont.labelSmall())
-                    .foregroundStyle(activeResultTab == tab ? NuruColors.lineGreen : theme.textTertiary)
-                    .padding(.vertical, NuruSpacing.space2)
-                Rectangle()
-                    .fill(activeResultTab == tab ? NuruColors.lineGreen : Color.clear)
-                    .frame(height: 2)
-            }
-        }
-        .buttonStyle(.plain)
-        .frame(maxWidth: .infinity)
-    }
-
-    // MARK: - Profile Result Row
-
-    private func profileResultRow(_ profile: UserProfile) -> some View {
-        Button {
-            onProfileTap(profile.pubkey)
-        } label: {
-            HStack(spacing: NuruSpacing.space3) {
-                // Avatar
-                AsyncImage(url: profile.picture.flatMap { URL(string: $0) }) { image in
-                    image.resizable().scaledToFill()
-                } placeholder: {
-                    Circle().fill(theme.bgSecondary)
-                }
-                .frame(width: 44, height: 44)
-                .clipShape(Circle())
-
-                // Name + NIP-05 + about
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(profile.displayName ?? profile.name ?? NostrKeyUtils.shortenPubkey(profile.pubkey))
-                        .font(NuruFont.bodyMedium())
-                        .foregroundStyle(theme.textPrimary)
-                        .lineLimit(1)
-                    if let nip05 = profile.nip05, !nip05.isEmpty {
-                        Text(nip05)
-                            .font(NuruFont.bodySmall())
-                            .foregroundStyle(NuruColors.lineGreen)
-                            .lineLimit(1)
-                    }
-                    if let about = profile.about, !about.isEmpty {
-                        Text(about)
-                            .font(NuruFont.bodySmall())
-                            .foregroundStyle(theme.textSecondary)
-                            .lineLimit(2)
-                    }
-                }
-
-                Spacer()
-
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12))
-                    .foregroundStyle(theme.textTertiary)
-            }
-            .padding(.horizontal, NuruSpacing.space4)
-            .padding(.vertical, NuruSpacing.space3)
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: - Persistence

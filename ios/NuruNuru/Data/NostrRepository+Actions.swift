@@ -20,6 +20,7 @@ extension NostrRepository {
     ///   - customTags:     追加タグ (NIP-71 imeta 等)。
     ///   - targetRelays:   特定リレーのみに送出する場合に指定 (nil = 全リレー)。
     ///   - nip70Protected: true のとき ["-"] タグ (NIP-70) を付与。
+    @discardableResult
     func publishNote(
         content:        String,
         replyToId:      String?    = nil,
@@ -27,7 +28,7 @@ extension NostrRepository {
         customTags:     [[String]] = [],
         targetRelays:   [String]?  = nil,
         nip70Protected: Bool       = false
-    ) async throws {
+    ) async throws -> NostrEvent {
         var tags: [[String]] = []
         if let id = replyToId { tags.append(["e", id, "", "reply"]) }
         if let cw = contentWarning, !cw.isEmpty { tags.append(["content-warning", cw]) }
@@ -37,7 +38,7 @@ extension NostrRepository {
             tags.append(["client", "nullnull iOS"])
         }
         tags.append(contentsOf: customTags)
-        try await publishEvent(kind: NostrKind.textNote, tags: tags, content: content)
+        return try await publishEventAndReturnSigned(kind: NostrKind.textNote, tags: tags, content: content)
     }
 
     // MARK: - Follow List (Kind 3)

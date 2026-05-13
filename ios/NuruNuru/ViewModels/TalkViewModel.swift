@@ -7,6 +7,8 @@ import Foundation
     // MARK: - Published State
 
     var groups:           [MlsGroup]    = []
+    // Talk list loading is background-only for App Review stability.
+    // Do not show a foreground spinner/skeleton while MLS/KeyPackage discovery runs.
     var isLoading:        Bool          = false
     var error:            String?       = nil
     var activeGroup:      MlsGroup?     = nil
@@ -101,9 +103,11 @@ import Foundation
         defer { loadGroupsInFlight = false }
 
         AppLogger.log("MLS", "TalkVM.loadGroups start")
-        // Foreground Talk load must not be blocked by retry drains. Retry work is
-        // handled by polling/background paths with tiny batches.
-        isLoading = true
+        // App Review 2.1(a): never put Talk into a foreground loading state.
+        // MLS/KeyPackage relay discovery can be slow or relay-dependent; keep the
+        // existing empty screen visible and update groups when the background fetch
+        // finishes.
+        isLoading = false
         error     = nil
         do {
             let fetched = try await repository.fetchMlsGroups(myPubkeyHex: myPubkeyHex)
