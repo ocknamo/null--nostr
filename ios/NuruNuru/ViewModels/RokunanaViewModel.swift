@@ -16,6 +16,8 @@ final class RokunanaViewModel {
     var posts: [ScoredPost] = []
     var isLoading = false
     var isPublishing = false
+    private var inFlightLikeEventIds: Set<String> = []
+    private var inFlightRepostEventIds: Set<String> = []
     var errorMessage: String? = nil
     var selectedCategory = "すべて"
 
@@ -49,6 +51,10 @@ final class RokunanaViewModel {
     }
 
     func toggleLike(post: ScoredPost) async {
+        let eventId = post.event.id
+        guard !inFlightLikeEventIds.contains(eventId) else { return }
+        inFlightLikeEventIds.insert(eventId)
+        defer { inFlightLikeEventIds.remove(eventId) }
         let wasLiked = post.isLiked
         post.isLiked = !wasLiked
         post.likeCount += wasLiked ? -1 : 1
@@ -67,6 +73,10 @@ final class RokunanaViewModel {
     }
 
     func toggleRepost(post: ScoredPost) async {
+        let eventId = post.event.id
+        guard !inFlightRepostEventIds.contains(eventId) else { return }
+        inFlightRepostEventIds.insert(eventId)
+        defer { inFlightRepostEventIds.remove(eventId) }
         let wasReposted = post.isReposted
         post.isReposted = !wasReposted
         post.repostCount += wasReposted ? -1 : 1

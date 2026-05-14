@@ -162,7 +162,11 @@ suspend fun NostrRepository.fetchBadges(pubkeyHex: String): List<NostrEvent> = c
 // ─── Badge Cache helpers ───────────────────────────────────────────────────────
 
 fun NostrRepository.getCachedProfileBadges(pubkeyHex: String): List<BadgeInfo> {
-    val raw = cache.getCachedBadgeInfo(pubkeyHex) ?: return emptyList()
+    return getCachedProfileBadgesOrNull(pubkeyHex) ?: emptyList()
+}
+
+private fun NostrRepository.getCachedProfileBadgesOrNull(pubkeyHex: String): List<BadgeInfo>? {
+    val raw = cache.getCachedBadgeInfo(pubkeyHex) ?: return null
     return try { json.decodeFromString(raw) } catch (_: Exception) { emptyList() }
 }
 
@@ -172,12 +176,16 @@ fun NostrRepository.getCachedAwardedBadgesList(pubkeyHex: String): List<BadgeInf
 }
 
 suspend fun NostrRepository.fetchProfileBadgesInfo(pubkeyHex: String): List<BadgeInfo> = coroutineScope {
-    // Cache-first: return immediately if fresh cache exists
-    val cached = getCachedProfileBadges(pubkeyHex)
-    if (cached.isNotEmpty()) {
-        // Refresh in background (fire and forget)
-        kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            try { refreshProfileBadgesInBackground(pubkeyHex) } catch (_: Exception) {}
+    // Cache-first: return immediately if a fresh cache exists, including an
+    // intentionally empty list right after the user removed all kind-30008 badges.
+    val cached = getCachedProfileBadgesOrNull(pubkeyHex)
+    if (cached != null) {
+        // Refresh non-empty cache in background. For an empty cache, avoid an
+        // immediate stale relay response resurrecting just-removed badges.
+        if (cached.isNotEmpty()) {
+            kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                try { refreshProfileBadgesInBackground(pubkeyHex) } catch (_: Exception) {}
+            }
         }
         return@coroutineScope cached
     }
@@ -326,12 +334,23 @@ suspend fun NostrRepository.fetchAwardedBadges(pubkeyHex: String, currentBadgeRe
 }
 
 suspend fun NostrRepository.updateProfileBadges(pubkeyHex: String, badges: List<BadgeInfo>): Boolean {
+    // NIP-58 profile_badges is kind 30008: a replaceable event containing
+    // ["d", "profile_badges"] and ordered badge-definition refs.  When the
+    // award event is known, publish the paired ["e", award-event-id] tag too.
+    val selected = badges.distinctBy { it.ref }.take(3)
     val tags = mutableListOf(listOf("d", "profile_badges"))
-    for (badge in badges) {
+    for (badge in selected) {
         tags.add(listOf("a", badge.ref))
-        badge.awardEventId?.let { tags.add(listOf("e", it)) }
+        badge.awardEventId?.takeIf { it.isNotBlank() }?.let { tags.add(listOf("e", it)) }
     }
-    return publishNewEvent(NostrKind.PROFILE_BADGES, "", tags) != null
+    val ok = publishNewEvent(NostrKind.PROFILE_BADGES, "", tags) != null
+    if (ok) {
+        // Make the freshly edited badge set visible immediately.  Do not wait
+        // for relay propagation; otherwise a cache-first profile screen may keep
+        // showing the previous kind-30008 for the badge TTL.
+        try { cache.setCachedBadgeInfo(pubkeyHex, json.encodeToString(selected)) } catch (_: Exception) {}
+    }
+    return ok
 }
 
 // ─── Emoji ────────────────────────────────────────────────────────────────────

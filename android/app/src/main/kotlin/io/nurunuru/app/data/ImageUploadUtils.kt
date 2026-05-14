@@ -1,5 +1,7 @@
 package io.nurunuru.app.data
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.util.Base64
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
@@ -22,6 +24,27 @@ object ImageUploadUtils {
         .build()
     private val json = Json { ignoreUnknownKeys = true }
 
+    private fun stripImageMetadata(fileBytes: ByteArray, mimeType: String): Pair<ByteArray, String> {
+        if (!mimeType.startsWith("image/")) return fileBytes to mimeType
+        return try {
+            val bitmap = BitmapFactory.decodeByteArray(fileBytes, 0, fileBytes.size) ?: return fileBytes to mimeType
+            val out = java.io.ByteArrayOutputStream()
+            val format = if (mimeType.equals("image/png", ignoreCase = true)) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
+            val ok = bitmap.compress(format, 88, out)
+            if (!ok) return fileBytes to mimeType
+            val clean = out.toByteArray()
+            val cleanMime = if (format == Bitmap.CompressFormat.PNG) "image/png" else "image/jpeg"
+            if (clean.size > fileBytes.size) {
+                Log.d("ImageUploadUtils", "Metadata-stripped image is larger (${fileBytes.size} -> ${clean.size}); keeping stripped bytes")
+            }
+            clean to cleanMime
+        } catch (e: Exception) {
+            Log.w("ImageUploadUtils", "Failed to strip image metadata", e)
+            fileBytes to mimeType
+        }
+    }
+
+
     suspend fun uploadToBlossom(
         fileBytes: ByteArray,
         mimeType: String,
@@ -29,14 +52,15 @@ object ImageUploadUtils {
         blossomUrl: String = "https://blossom.nostr.build"
     ): String? = withContext(Dispatchers.IO) {
         try {
+            val (cleanBytes, cleanMimeType) = stripImageMetadata(fileBytes, mimeType)
             val requestBuilder = okhttp3.Request.Builder()
                 .url("$blossomUrl/upload")
-                .put(fileBytes.toRequestBody(mimeType.toMediaTypeOrNull()))
+                .put(cleanBytes.toRequestBody(cleanMimeType.toMediaTypeOrNull()))
 
             // Blossom NIP-98 Auth (Kind 24242)
             if (signer != null) {
                 val hash = java.security.MessageDigest.getInstance("SHA-256")
-                    .digest(fileBytes)
+                    .digest(cleanBytes)
                     .joinToString("") { "%02x".format(it) }
 
                 val now = System.currentTimeMillis() / 1000
@@ -74,6 +98,7 @@ object ImageUploadUtils {
         signer: AppSigner? = null
     ): String? = withContext(Dispatchers.IO) {
         try {
+            val (cleanBytes, cleanMimeType) = stripImageMetadata(fileBytes, mimeType)
             val url = "https://nostr.build/api/v2/upload/files"
             val requestBuilder = okhttp3.Request.Builder().url(url)
 
@@ -100,8 +125,8 @@ object ImageUploadUtils {
                 .setType(MultipartBody.FORM)
                 .addFormDataPart(
                     "file",
-                    "image.${mimeType.split("/").last()}",
-                    fileBytes.toRequestBody(mimeType.toMediaTypeOrNull())
+                    "image.${cleanMimeType.split("/").last()}",
+                    cleanBytes.toRequestBody(cleanMimeType.toMediaTypeOrNull())
                 )
                 .build()
 
@@ -143,6 +168,7 @@ object ImageUploadUtils {
         baseUrl: String = "https://share.yabu.me"
     ): String? = withContext(Dispatchers.IO) {
         try {
+            val (cleanBytes, cleanMimeType) = stripImageMetadata(fileBytes, mimeType)
             val endpoint = if (baseUrl.startsWith("http")) {
                 if (baseUrl.endsWith("/api/v2/media")) baseUrl else "${baseUrl.removeSuffix("/")}/api/v2/media"
             } else {
@@ -172,8 +198,8 @@ object ImageUploadUtils {
                 .setType(MultipartBody.FORM)
                 .addFormDataPart(
                     "file",
-                    "image.${mimeType.split("/").last()}",
-                    fileBytes.toRequestBody(mimeType.toMediaTypeOrNull())
+                    "image.${cleanMimeType.split("/").last()}",
+                    cleanBytes.toRequestBody(cleanMimeType.toMediaTypeOrNull())
                 )
                 .build()
 

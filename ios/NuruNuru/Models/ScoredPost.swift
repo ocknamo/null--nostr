@@ -114,10 +114,14 @@ struct EmojiSet: Identifiable, Codable {
 
 /// NIP-58 badge awarded to a user.
 struct BadgeItem: Identifiable, Codable {
-    let id:          String
-    let name:        String
-    let description: String?
-    let imageUrl:    String?
+    let id:           String
+    let name:         String
+    let description:  String?
+    let imageUrl:     String?
+    /// Kind 8 badge award event id paired with the preceding `a` tag in kind 30008.
+    /// NIP-58 profile_badges should publish `["a", "30009:..."]` followed by
+    /// `["e", <award-event-id>]` when the award event is known.
+    var awardEventId: String? = nil
 }
 
 /// Notification item — mirrors Android NotificationItem.

@@ -299,9 +299,9 @@ actor NostrRepository {
         let state = await client.connectionState
         let shouldEnsureConnection: Bool
         switch state {
-        case .connected, .connecting:
+        case .connected:
             shouldEnsureConnection = clientEmpty
-        case .disconnected, .failed:
+        case .connecting, .disconnected, .failed:
             shouldEnsureConnection = true
         }
         if shouldEnsureConnection {
@@ -320,6 +320,25 @@ actor NostrRepository {
 
     /// Sign and publish an event to the relay, returning the exact signed event that was sent.
     func publishEventAndReturnSigned(kind: Int, tags: [[String]], content: String) async throws -> NostrEvent {
+        // Publish paths can be reached from profile sheets before the timeline
+        // has finished connecting relays.  Ensure at least the compact write
+        // pool exists so follow/profile/reaction events are actually sent.
+        let clientEmpty = await client.isEmpty
+        let state = await client.connectionState
+        let shouldEnsureConnection: Bool
+        switch state {
+        case .connected:
+            shouldEnsureConnection = clientEmpty
+        case .connecting, .disconnected, .failed:
+            shouldEnsureConnection = true
+        }
+        if shouldEnsureConnection {
+            let relayUrls = buildRelayConnectionUrls()
+            AppLogger.log("Repository", "publishEvent: ensuring relay connections (empty=\(clientEmpty), state=\(state)) relays=\(relayUrls.count)")
+            await client.connect(relayUrls: relayUrls)
+            isConnected = true
+        }
+
         let event = try signer.signEvent(kind: kind, tags: tags, content: content)
         try await client.publish(event: event)
         return event

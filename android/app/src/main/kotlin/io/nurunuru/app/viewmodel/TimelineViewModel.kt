@@ -67,6 +67,9 @@ class TimelineViewModel(
 
     // ─── Relay live streaming ─────────────────────────────────────────────────
     private var relayLiveJob: Job? = null
+    private val inFlightLikeEventIds = mutableSetOf<String>()
+    private val inFlightRepostEventIds = mutableSetOf<String>()
+
     private val seenRelayEventIds: MutableSet<String> =
         java.util.concurrent.ConcurrentHashMap.newKeySet()
     private val liveRelayBuffer = mutableListOf<ScoredPost>()
@@ -774,7 +777,9 @@ class TimelineViewModel(
     }
 
     fun likePost(eventId: String, emoji: String = "+", customTags: List<List<String>> = emptyList()) {
+        if (!inFlightLikeEventIds.add(eventId)) return
         viewModelScope.launch {
+            try {
             val post = (_uiState.value.globalPosts + _uiState.value.followingPosts +
                         _uiState.value.searchResults + _uiState.value.relayPosts)
                 .firstOrNull { it.event.id == eventId }
@@ -795,11 +800,16 @@ class TimelineViewModel(
                 post?.let { repository.cacheUserLikedPost(pubkeyHex, it.copy(isLiked = true, myLikeEventId = newEventId)) }
                 if (authorPubkey.isNotEmpty()) repository.recordEngagement("like", authorPubkey)
             }
+            } finally {
+                inFlightLikeEventIds.remove(eventId)
+            }
         }
     }
 
     fun repostPost(eventId: String) {
+        if (!inFlightRepostEventIds.add(eventId)) return
         viewModelScope.launch {
+            try {
             val post = (_uiState.value.globalPosts + _uiState.value.followingPosts +
                         _uiState.value.searchResults + _uiState.value.relayPosts)
                 .firstOrNull { it.event.id == eventId }
@@ -820,6 +830,9 @@ class TimelineViewModel(
                 updatePostInteraction(eventId, isLike = false, newEventId = newEventId)
                 val authorPubkey = post?.event?.pubkey
                 if (authorPubkey != null) repository.recordEngagement("repost", authorPubkey)
+            }
+            } finally {
+                inFlightRepostEventIds.remove(eventId)
             }
         }
     }

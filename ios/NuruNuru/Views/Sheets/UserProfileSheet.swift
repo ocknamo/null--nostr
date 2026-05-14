@@ -113,6 +113,10 @@ struct UserProfileSheet: View {
                         let hDelta = value.translation.width
                         let vDelta = abs(value.translation.height)
                         guard abs(hDelta) > vDelta else { return }
+                        // Avoid stealing horizontal drags from multi-image carousels in posts.
+                        let screenWidth = UIScreen.main.bounds.width
+                        let edgeWidth: CGFloat = 32
+                        guard value.startLocation.x <= edgeWidth || value.startLocation.x >= screenWidth - edgeWidth else { return }
                         if hDelta < -30 && vm.activeTab == 0 {
                             withAnimation(.easeInOut(duration: 0.2)) { vm.activeTab = 1 }
                         } else if hDelta > 30 && vm.activeTab == 1 {

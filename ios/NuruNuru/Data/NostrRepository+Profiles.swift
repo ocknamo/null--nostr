@@ -1,5 +1,9 @@
 import Foundation
 
+extension Notification.Name {
+    static let nuruProfileBadgesUpdated = Notification.Name("nuruProfileBadgesUpdated")
+}
+
 /// Profiles extension — プロフィール・フォローリスト・バッジ・絵文字セット関連メソッド。
 /// Android の NostrRepositoryProfiles.kt に相当。
 ///
@@ -466,7 +470,7 @@ extension NostrRepository {
         AppLogger.log("Badges", "fetchBadges start — pubkey: \(pubkeyHex.prefix(16))…")
 
         // キャッシュファースト: 名前付き BadgeItem キャッシュから即時返却（Android 同様）
-        if let cachedItems = cache.getCachedBadgeItems(pubkey: pubkeyHex), !cachedItems.isEmpty {
+        if let cachedItems = cache.getCachedBadgeItems(pubkey: pubkeyHex) {
             AppLogger.log("Badges", "cache hit (items) — \(cachedItems.count) badges for \(pubkeyHex.prefix(16))…")
             return cachedItems
         }
@@ -506,6 +510,12 @@ extension NostrRepository {
         for tag in aTags {
             if results.count >= 3 { break }
             let ref = tag[1]
+            let awardEventId: String? = {
+                guard let idx = profileEvent.tags.firstIndex(where: { $0.count >= 2 && $0[0] == "a" && $0[1] == ref }),
+                      profileEvent.tags.indices.contains(idx + 1),
+                      profileEvent.tags[idx + 1].first == "e" else { return nil }
+                return profileEvent.tags[idx + 1][safe: 1]
+            }()
             let parts = ref.split(separator: ":", maxSplits: 2).map(String.init)
             guard parts.count == 3 else { continue }
             let creator = parts[1]
@@ -518,7 +528,7 @@ extension NostrRepository {
 
             guard let def = defEvents.max(by: { $0.createdAt < $1.createdAt }) else {
                 // このリレーに定義がない場合: 名前のみのプレースホルダーを追加
-                results.append(BadgeItem(id: ref, name: dTag, description: nil, imageUrl: nil))
+                results.append(BadgeItem(id: ref, name: dTag, description: nil, imageUrl: nil, awardEventId: awardEventId))
                 continue
             }
 
@@ -528,7 +538,7 @@ extension NostrRepository {
             let name = tagValue("name") ?? dTag
             let url  = tagValue("thumb") ?? tagValue("image")
             AppLogger.log("Badges", "badge '\(name)' image: \(url ?? "none")")
-            results.append(BadgeItem(id: ref, name: name, description: tagValue("description"), imageUrl: url))
+            results.append(BadgeItem(id: ref, name: name, description: tagValue("description"), imageUrl: url, awardEventId: awardEventId))
         }
         AppLogger.log("Badges", "total badges resolved: \(results.count)")
         return results
@@ -578,7 +588,7 @@ extension NostrRepository {
                 let defEvents = await fetchEvents(filters: [defFilter], timeoutSeconds: 3)
 
                 guard let def = defEvents.max(by: { $0.createdAt < $1.createdAt }) else {
-                    results.append(BadgeItem(id: ref, name: dTag, description: nil, imageUrl: nil))
+                    results.append(BadgeItem(id: ref, name: dTag, description: nil, imageUrl: nil, awardEventId: event.id))
                     continue
                 }
 
@@ -587,7 +597,7 @@ extension NostrRepository {
                 }
                 let name = tagValue("name") ?? dTag
                 let url  = tagValue("thumb") ?? tagValue("image")
-                results.append(BadgeItem(id: ref, name: name, description: tagValue("description"), imageUrl: url))
+                results.append(BadgeItem(id: ref, name: name, description: tagValue("description"), imageUrl: url, awardEventId: event.id))
             }
         }
 
@@ -599,13 +609,28 @@ extension NostrRepository {
     /// 選択したバッジの "a" タグリストで replaceable event を発行。
     /// Android: BadgeSettings.kt のバッジ入れ替え機能に対応。
     func publishProfileBadges(badges: [BadgeItem]) async throws {
-        // "d" タグ + "a" タグ群で Kind 30008 を構築
+        // NIP-58 profile_badges (kind 30008): replaceable event with
+        // ["d", "profile_badges"], and pairs of ["a", badge-definition]
+        // + ["e", award-event-id] when known.
+        var seen = Set<String>()
+        let selected = badges.prefix(3).filter { seen.insert($0.id).inserted }
         var tags: [[String]] = [["d", "profile_badges"]]
-        for badge in badges {
+        for badge in selected {
             tags.append(["a", badge.id])
+            if let awardEventId = badge.awardEventId, !awardEventId.isEmpty {
+                tags.append(["e", awardEventId])
+            }
         }
         try await publishEvent(kind: NostrKind.profileBadges, tags: tags, content: "")
-        AppLogger.log("Badges", "published profile_badges with \(badges.count) badges")
+
+        let updated = Array(selected)
+        cacheBadgeResults(pubkeyHex: prefs.publicKeyHex ?? "", badges: updated)
+        NotificationCenter.default.post(
+            name: .nuruProfileBadgesUpdated,
+            object: nil,
+            userInfo: ["pubkey": prefs.publicKeyHex ?? "", "badges": updated]
+        )
+        AppLogger.log("Badges", "published kind-30008 profile_badges with \(updated.count) badges")
     }
 
     // MARK: - NIP-05 Resolution

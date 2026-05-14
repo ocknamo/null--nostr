@@ -12,9 +12,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
@@ -23,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import io.nurunuru.app.data.models.ScoredPost
 import io.nurunuru.app.ui.icons.NuruIcons
 import io.nurunuru.app.ui.theme.LocalNuruColors
+import kotlinx.coroutines.launch
 
 @Composable
 fun PostActions(
@@ -36,6 +42,10 @@ fun PostActions(
     onBookmark: (() -> Unit)? = null
 ) {
     val nuruColors = LocalNuruColors.current
+    val scope = rememberCoroutineScope()
+    var likeInFlight by remember(post.event.id) { mutableStateOf(false) }
+    var repostInFlight by remember(post.event.id) { mutableStateOf(false) }
+    var bookmarkInFlight by remember(post.event.id) { mutableStateOf(false) }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -46,7 +56,14 @@ fun PostActions(
         ActionButton(
             icon = NuruIcons.Like(post.isLiked),
             count = post.likeCount,
-            onClick = onLike,
+            onClick = {
+                if (likeInFlight) return@ActionButton
+                likeInFlight = true
+                scope.launch {
+                    try { onLike() } finally { likeInFlight = false }
+                }
+            },
+            enabled = !likeInFlight,
             onLongClick = onLikeLongPress,
             tint = if (post.isLiked) nuruColors.lineGreen else nuruColors.textTertiary,
             animate = post.isLiked
@@ -55,7 +72,14 @@ fun PostActions(
         ActionButton(
             icon = NuruIcons.Repost,
             count = post.repostCount,
-            onClick = onRepost,
+            onClick = {
+                if (repostInFlight) return@ActionButton
+                repostInFlight = true
+                scope.launch {
+                    try { onRepost() } finally { repostInFlight = false }
+                }
+            },
+            enabled = !repostInFlight,
             onLongClick = onQuoteRepost,
             tint = if (post.isReposted) nuruColors.lineGreen else nuruColors.textTertiary,
             animate = post.isReposted
@@ -74,7 +98,14 @@ fun PostActions(
             ActionButton(
                 icon = NuruIcons.Bookmark(post.isBookmarked),
                 count = 0,
-                onClick = onBookmark,
+                onClick = {
+                    if (bookmarkInFlight) return@ActionButton
+                    bookmarkInFlight = true
+                    scope.launch {
+                        try { onBookmark() } finally { bookmarkInFlight = false }
+                    }
+                },
+                enabled = !bookmarkInFlight,
                 tint = if (post.isBookmarked) nuruColors.lineGreen else nuruColors.textTertiary,
                 animate = post.isBookmarked
             )
@@ -103,6 +134,7 @@ private fun ActionButton(
     count: Int,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
+    enabled: Boolean = true,
     tint: Color,
     animate: Boolean = false
 ) {
@@ -124,10 +156,13 @@ private fun ActionButton(
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
-        modifier = Modifier.combinedClickable(
-            onClick = onClick,
-            onLongClick = onLongClick
-        )
+        modifier = Modifier
+            .alpha(if (enabled) 1f else 0.45f)
+            .combinedClickable(
+                enabled = enabled,
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
     ) {
         Icon(
             imageVector = icon,

@@ -1358,10 +1358,12 @@ impl NuruNuruClient {
         let since = Some(nostr::Timestamp::now() - 86400 * 2);
         let events = self
             .runtime
-            .block_on(
-                self.engine
-                    .fetch_timeline_fast(author_pks.as_deref(), since, limit as usize, timeout),
-            )
+            .block_on(self.engine.fetch_timeline_fast(
+                author_pks.as_deref(),
+                since,
+                limit as usize,
+                timeout,
+            ))
             .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))?;
 
         events

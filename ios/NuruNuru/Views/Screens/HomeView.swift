@@ -193,6 +193,11 @@ struct HomeView: View {
                     let hDelta = value.translation.width
                     let vDelta = abs(value.translation.height)
                     guard abs(hDelta) > vDelta * 1.5 else { return } // 縦スクロール優先
+                    // Avoid stealing horizontal drags from multi-image carousels in posts.
+                    // Profile tab swipes are accepted only from screen edges; tab buttons remain available.
+                    let screenWidth = UIScreen.main.bounds.width
+                    let edgeWidth: CGFloat = 32
+                    guard value.startLocation.x <= edgeWidth || value.startLocation.x >= screenWidth - edgeWidth else { return }
                     if hDelta < -30 && selectedPage == 0 {
                         withAnimation(.easeInOut(duration: 0.2)) { selectedPage = 1 }
                         viewModel.activeTab = 1
@@ -353,8 +358,7 @@ struct HomeView: View {
             onDismiss:   { showFollowList = false },
             onUnfollow:  { pk in
                 Task {
-                    let updated = viewModel.myFollowList.filter { $0 != pk }
-                    try? await repository.publishFollowList(follows: updated)
+                    try? await repository.unfollowUser(targetPubkeyHex: pk)
                     await viewModel.loadProfile()
                 }
                 showFollowList = false

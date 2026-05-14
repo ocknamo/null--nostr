@@ -21,10 +21,11 @@ struct BadgeDisplay: View {
 
     @State private var badgeUrls: [String] = []
     @State private var hasFetched: Bool = false
+    @State private var refreshNonce: Int = 0
 
     /// initialBadges のハッシュ値を追跡して再レンダリングを検知するためのキー
     private var badgeKey: String {
-        pubkey + "_" + initialBadges.joined(separator: ",")
+        pubkey + "_" + initialBadges.joined(separator: ",") + "_\(refreshNonce)"
     }
 
     var body: some View {
@@ -43,6 +44,20 @@ struct BadgeDisplay: View {
                 }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .nuruProfileBadgesUpdated)) { notification in
+            guard let updatedPubkey = notification.userInfo?["pubkey"] as? String,
+                  updatedPubkey == pubkey else { return }
+            clearBadgeCache(pubkey: pubkey)
+            if let badges = notification.userInfo?["badges"] as? [BadgeItem] {
+                let urls = badges.compactMap(\.imageUrl)
+                badgeUrls = Array(urls.prefix(maxBadges))
+                // Store even an empty array so the next task does not refetch an
+                // older relay value immediately after removing all profile badges.
+                badgeCache[pubkey] = urls
+            }
+            hasFetched = false
+            refreshNonce += 1
+        }
         // pubkey + initialBadges の組み合わせが変わったら再実行
         .task(id: badgeKey) {
             // Prefer pre-fetched initialBadges (mirrors Android's initialBadges param)
@@ -52,7 +67,7 @@ struct BadgeDisplay: View {
                 return
             }
             // Return from cache without network round-trip
-            if let cached = badgeCache[pubkey], !cached.isEmpty {
+            if let cached = badgeCache[pubkey] {
                 badgeUrls = Array(cached.prefix(maxBadges))
                 return
             }

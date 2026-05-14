@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.9] - 2026-05-15
+
+### Changed
+- Android / iOS / Rust FFI の最新改善を取り込み
+- App Store Connect 向け iOS バージョンを 1.0.3 (4) に更新
+- GitHub APK、Zapstore、Google Play 配信用リリースアーティファクトを更新
+
 ## [1.4.8] - 2026-05-14
 
 ### Changed

@@ -223,6 +223,10 @@ struct BadgeSettingsView: View {
         errorMessage = nil
         do {
             try await repository.publishProfileBadges(badges: profileBadges)
+            // publishProfileBadges updates the local badge cache and posts an in-process
+            // notification.  Do not immediately refetch from relays here: replaceable
+            // kind-30008 propagation is not instant and a stale relay response can make
+            // the just-saved UI appear to revert.
             hasChanges = false
         } catch {
             errorMessage = "保存に失敗しました: \(error.localizedDescription)"

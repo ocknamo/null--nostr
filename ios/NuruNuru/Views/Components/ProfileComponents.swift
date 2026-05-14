@@ -24,31 +24,39 @@ struct ProfileHeader: View {
     @State private var showCopiedFeedback  = false
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            VStack(spacing: 0) {
-                // Banner
-                bannerView
-                    .frame(height: 112)
+        GeometryReader { geo in
+            ZStack(alignment: .topLeading) {
+                VStack(spacing: 0) {
+                    // Banner
+                    bannerView
+                        .frame(width: geo.size.width, height: 112)
+                        .clipped()
 
-                // Card overlapping banner
-                profileCard
-                    .padding(.horizontal, NuruSpacing.space4)
-                    .offset(y: -56)
-                    .padding(.bottom, -56)
+                    // Card overlapping banner
+                    profileCard
+                        .padding(.horizontal, NuruSpacing.space4)
+                        .offset(y: -56)
+                        .padding(.bottom, -56)
+                }
+                .frame(width: geo.size.width)
+                .clipped()
+
+                // Avatar (overlaps banner/card boundary)
+                // size: 80pt (= Android 80dp)
+                AvatarView(
+                    url:  profile?.picture,
+                    name: profile?.displayedName ?? "?",
+                    size: NuruSpacing.avatarXl
+                )
+                .background(Circle().fill(theme.bgPrimary).frame(width: 88, height: 88))
+                .frame(width: 88, height: 88)
+                .padding(.leading, 32)
+                .offset(y: 24)   // mirrors Android: offset(y = 24.dp) — avatar bridges banner/card boundary
             }
-
-            // Avatar (overlaps banner/card boundary)
-            // size: 80pt (= Android 80dp)
-            AvatarView(
-                url:  profile?.picture,
-                name: profile?.displayedName ?? "?",
-                size: NuruSpacing.avatarXl
-            )
-            .background(Circle().fill(theme.bgPrimary).frame(width: 88, height: 88))
-            .frame(width: 88, height: 88)
-            .padding(.leading, 32)
-            .offset(y: 24)   // mirrors Android: offset(y = 24.dp) — avatar bridges banner/card boundary
+            .frame(width: geo.size.width, alignment: .topLeading)
+            .clipped()
         }
+        .frame(height: 280)
         .task(id: profile?.birthday) {
             await checkBirthday()
         }
@@ -74,16 +82,19 @@ struct ProfileHeader: View {
             if let url = profile?.banner, !url.isEmpty, let imageUrl = URL(string: url) {
                 // CachedAsyncImage を使用してバナー画像をディスクキャッシュ
                 // Android の Coil キャッシュに対応 — 毎回ネットワークから読み込まない
-                CachedAsyncImage(url: imageUrl) {
+                CachedAsyncImage(url: imageUrl, contentMode: .fill) {
                     // ローディング中はバナー背景色（lineGreen）を表示
                     Color.clear
                 }
-                .frame(maxWidth: .infinity, minHeight: 112, maxHeight: 112)
+                .frame(height: 112)
+                .frame(maxWidth: .infinity)
                 .contentShape(Rectangle())
                 .clipped()
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: 112)
+        .frame(height: 112)
+        .frame(maxWidth: .infinity)
+        .clipped()
     }
 
     // MARK: Card
@@ -361,29 +372,54 @@ struct ProfileAbout: View {
         Text(attributedAbout)
             .font(NuruFont.bodySmall())
             .lineSpacing(4)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
+            .lineLimit(nil)
+            .layoutPriority(1)
+            .clipped()
     }
 
     private var attributedAbout: AttributedString {
-        var result   = AttributedString(about)
-        let pattern  = #"(https?://[^\s]+|nostr:[a-z0-9]+)"#
+        // 長い連続トークン（URL/npub/ハッシュ等）にゼロ幅スペースを挿入して
+        // 横方向のはみ出しを防ぐ。
+        let source = profileWrapLongTokens(about, chunkSize: 16)
+        var result = AttributedString(source)
+        let pattern = #"(https?://[^\s]+|nostr:[a-z0-9]+)"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return result }
-        let ns       = about as NSString
-        for match in regex.matches(in: about, range: NSRange(location: 0, length: ns.length)).reversed() {
-            let range  = match.range
-            let value  = ns.substring(with: range)
-            let short  = value.count > 40 ? String(value.prefix(40)) + "…" : value
-            if let swRange = Range(range, in: about),
+        let ns = source as NSString
+        for match in regex.matches(in: source, range: NSRange(location: 0, length: ns.length)).reversed() {
+            let range = match.range
+            let value = ns.substring(with: range)
+            let short = value.count > 40 ? String(value.prefix(40)) + "…" : value
+            if let swRange = Range(range, in: source),
                let attrRange = Range(swRange, in: result) {
-                result.replaceSubrange(attrRange, with: {
-                    var s = AttributedString(short)
-                    s.foregroundColor = NuruColors.lineGreen
-                    return s
-                }())
+                // ここで short を置換するとゼロ幅スペースが消えて再び横にはみ出すため、
+                // 元の wrapped 値を残し、色だけを付ける。
+                var segment = AttributedString(value)
+                segment.foregroundColor = NuruColors.lineGreen
+                result.replaceSubrange(attrRange, with: segment)
             }
         }
         return result
     }
+}
+
+private func profileWrapLongTokens(_ text: String, chunkSize: Int = 18) -> String {
+    text.split(separator: " ", omittingEmptySubsequences: false).map { tokenSub in
+        let token = String(tokenSub)
+        guard token.count > chunkSize,
+              token.rangeOfCharacter(from: .whitespacesAndNewlines) == nil else { return token }
+        var out = ""
+        for (idx, ch) in token.enumerated() {
+            if idx > 0 && idx % chunkSize == 0 { out.append(Character("\u{200B}")) }
+            out.append(ch)
+        }
+        return out
+    }.joined(separator: " ")
+}
+
+private func metaWrappedText(_ text: String) -> String {
+    profileWrapLongTokens(text, chunkSize: 14)
 }
 
 // MARK: - Meta Info Item
@@ -409,10 +445,13 @@ struct MetaInfoItem: View {
                     .font(.system(size: 14))
                     .foregroundStyle(theme.textTertiary)
             }
-            Text(text)
+            Text(metaWrappedText(text))
                 .font(.system(size: 14))
                 .foregroundStyle(color ?? theme.textTertiary)
-                .lineLimit(1)
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .clipped()
         }
     }
 }

@@ -45,30 +45,64 @@ extension NostrRepository {
 
     /// フォローリストを上書き発行する (kind 3)。
     func publishFollowList(follows: [String]) async throws {
-        let tags: [[String]] = follows.map { ["p", $0] }
+        var seen = Set<String>()
+        let tags: [[String]] = follows.compactMap { pk in
+            guard seen.insert(pk).inserted else { return nil }
+            return ["p", pk]
+        }
         try await publishEvent(kind: NostrKind.contactList, tags: tags, content: "")
     }
 
     /// ユーザーをフォローする (kind-3 contact list 追加)。
-    ///
-    /// - FFI + 内部サイナー: Rust engine が kind-3 を更新して発行後、Swift キャッシュをリフレッシュ。
-    /// - 外部サイナー / FFI なし: 現在のリストを取得して追加後、Swift で発行。
+    /// NIP-02 の kind 3 は「差分」ではなく置換可能な完全リストなので、
+    /// 最新の既存フォローリストを取得し、対象 pubkey を追加した全体を発行する。
     func followUser(targetPubkeyHex: String) async throws {
         let myPubkey = prefs.publicKeyHex ?? ""
-        var follows = await fetchFollowList(pubkey: myPubkey)
-        guard !follows.contains(targetPubkeyHex) else { return }
-        follows.append(targetPubkeyHex)
-        try await publishFollowList(follows: follows)
-        cache.setCachedFollowList(pubkey: myPubkey, list: follows)
+        guard !myPubkey.isEmpty else { return }
+        let latest = await latestContactListEvent(pubkey: myPubkey)
+        let fallbackTags = await fetchFollowList(pubkey: myPubkey).map { ["p", $0] }
+        var tags = latest?.tags ?? fallbackTags
+        guard !tags.contains(where: { $0.first == "p" && $0[safe: 1] == targetPubkeyHex }) else {
+            cache.setCachedFollowList(pubkey: myPubkey, list: contactPubkeys(from: tags))
+            return
+        }
+        tags.append(["p", targetPubkeyHex])
+        try await publishEvent(kind: NostrKind.contactList, tags: dedupContactTags(tags), content: latest?.content ?? "")
+        cache.setCachedFollowList(pubkey: myPubkey, list: contactPubkeys(from: tags))
     }
 
     /// ユーザーをアンフォローする (kind-3 contact list 削除)。
     func unfollowUser(targetPubkeyHex: String) async throws {
         let myPubkey = prefs.publicKeyHex ?? ""
-        var follows = await fetchFollowList(pubkey: myPubkey)
-        follows.removeAll { $0 == targetPubkeyHex }
-        try await publishFollowList(follows: follows)
-        cache.setCachedFollowList(pubkey: myPubkey, list: follows)
+        guard !myPubkey.isEmpty else { return }
+        let latest = await latestContactListEvent(pubkey: myPubkey)
+        let fallbackTags = await fetchFollowList(pubkey: myPubkey).map { ["p", $0] }
+        let baseTags = latest?.tags ?? fallbackTags
+        let tags = baseTags.filter { !($0.first == "p" && $0[safe: 1] == targetPubkeyHex) }
+        try await publishEvent(kind: NostrKind.contactList, tags: dedupContactTags(tags), content: latest?.content ?? "")
+        cache.setCachedFollowList(pubkey: myPubkey, list: contactPubkeys(from: tags))
+    }
+
+    private func latestContactListEvent(pubkey: String) async -> NostrEvent? {
+        let filter = NostrFilter(authors: [pubkey], kinds: [NostrKind.contactList], limit: 5)
+        let events = await fetchEvents(filters: [filter], timeoutSeconds: 4.0)
+        return events.filter { $0.kind == NostrKind.contactList }.max(by: { $0.createdAt < $1.createdAt })
+    }
+
+    private func contactPubkeys(from tags: [[String]]) -> [String] {
+        var seen = Set<String>()
+        return tags.compactMap { tag in
+            guard tag.first == "p", let pk = tag[safe: 1], seen.insert(pk).inserted else { return nil }
+            return pk
+        }
+    }
+
+    private func dedupContactTags(_ tags: [[String]]) -> [[String]] {
+        var seenP = Set<String>()
+        return tags.filter { tag in
+            guard tag.first == "p", let pk = tag[safe: 1] else { return true }
+            return seenP.insert(pk).inserted
+        }
     }
 
     // MARK: - Delete (Kind 5, NIP-09)

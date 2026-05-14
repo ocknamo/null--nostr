@@ -57,6 +57,9 @@ final class TimelineViewModel {
     // SwiftUI may evaluate MainTabView.init multiple times. Keep network side effects
     // out of init and start them exactly once for the retained @State instance.
     private var didStartInitialLoad: Bool = false
+    private var inFlightLikeEventIds: Set<String> = []
+    private var inFlightRepostEventIds: Set<String> = []
+    private var inFlightBookmarkEventIds: Set<String> = []
 
     // MARK: - Dependencies
 
@@ -405,6 +408,10 @@ final class TimelineViewModel {
     // MARK: - Interactions
 
     func toggleLike(post: ScoredPost) async {
+        let eventId = post.event.id
+        guard !inFlightLikeEventIds.contains(eventId) else { return }
+        inFlightLikeEventIds.insert(eventId)
+        defer { inFlightLikeEventIds.remove(eventId) }
         let wasLiked = post.isLiked
         post.isLiked   = !wasLiked
         post.likeCount += wasLiked ? -1 : 1
@@ -429,6 +436,10 @@ final class TimelineViewModel {
     }
 
     func toggleRepost(post: ScoredPost) async {
+        let eventId = post.event.id
+        guard !inFlightRepostEventIds.contains(eventId) else { return }
+        inFlightRepostEventIds.insert(eventId)
+        defer { inFlightRepostEventIds.remove(eventId) }
         let wasReposted = post.isReposted
         post.isReposted = !wasReposted
         post.repostCount += wasReposted ? -1 : 1
@@ -455,6 +466,10 @@ final class TimelineViewModel {
     // MARK: - Bookmark (NIP-51, Kind 10003) — mirrors Android toggleBookmark
 
     func toggleBookmark(post: ScoredPost) async {
+        let eventId = post.event.id
+        guard !inFlightBookmarkEventIds.contains(eventId) else { return }
+        inFlightBookmarkEventIds.insert(eventId)
+        defer { inFlightBookmarkEventIds.remove(eventId) }
         let wasBookmarked = post.isBookmarked
         post.isBookmarked = !wasBookmarked
         triggerUpdate()

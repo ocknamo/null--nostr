@@ -276,25 +276,81 @@ impl NuruNuruEngine {
 
     /// Fetch the follow list for a user.
     pub async fn fetch_follow_list(&self, pubkey: PublicKey) -> Result<Vec<String>> {
+        let event = self.latest_contact_list_event(pubkey).await?;
+        Ok(event
+            .map(|e| Self::contact_pubkeys_from_tags(e.tags.iter()))
+            .unwrap_or_default())
+    }
+
+    async fn latest_contact_list_event(&self, pubkey: PublicKey) -> Result<Option<Event>> {
         let filter = filters::follow_list_filter(pubkey);
         let events = self
             .client
             .fetch_events(filter, Duration::from_secs(10))
             .await?;
+        Ok(events.into_iter().max_by_key(|e| e.created_at))
+    }
 
-        let follows = events
-            .into_iter()
-            .next()
-            .map(|e| {
-                e.tags
-                    .iter()
-                    .filter(|t| t.kind() == TagKind::p())
-                    .filter_map(|t| t.content().map(|s| s.to_string()))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+    fn contact_pubkeys_from_tags<'a>(tags: impl Iterator<Item = &'a Tag>) -> Vec<String> {
+        let mut seen = HashSet::new();
+        let mut follows = Vec::new();
+        for tag in tags {
+            if tag.kind() == TagKind::p() {
+                if let Some(pubkey) = tag.content().map(|s| s.to_string()) {
+                    if seen.insert(pubkey.clone()) {
+                        follows.push(pubkey);
+                    }
+                }
+            }
+        }
+        follows
+    }
 
-        Ok(follows)
+    fn merge_contact_tags(
+        latest: Option<&Event>,
+        fallback_follows: &[String],
+        target_pubkey: PublicKey,
+        follow: bool,
+    ) -> Vec<Tag> {
+        let target_hex = target_pubkey.to_hex();
+        let mut seen_p = HashSet::new();
+        let mut tags = Vec::new();
+
+        if let Some(event) = latest {
+            for tag in event.tags.iter() {
+                if tag.kind() == TagKind::p() {
+                    if let Some(pk) = tag.content().map(|s| s.to_string()) {
+                        if pk == target_hex && !follow {
+                            continue;
+                        }
+                        if seen_p.insert(pk) {
+                            tags.push(tag.clone());
+                        }
+                    }
+                } else {
+                    // Preserve non-p tags from the latest NIP-02 event.
+                    tags.push(tag.clone());
+                }
+            }
+        } else {
+            for hex in fallback_follows {
+                if hex == &target_hex && !follow {
+                    continue;
+                }
+                if seen_p.insert(hex.clone()) {
+                    if let Ok(tag) = Tag::parse(["p", hex.as_str()]) {
+                        tags.push(tag);
+                    }
+                }
+            }
+        }
+
+        if follow && seen_p.insert(target_hex.clone()) {
+            if let Ok(tag) = Tag::parse(["p", target_hex.as_str()]) {
+                tags.push(tag);
+            }
+        }
+        tags
     }
 
     /// Follow a user (publish updated kind 3).
@@ -304,25 +360,27 @@ impl NuruNuruEngine {
             .await
             .ok_or(NuruNuruError::NoSigningMethod)?;
 
-        let current_follows = self.fetch_follow_list(my_pk).await?;
+        let latest = self.latest_contact_list_event(my_pk).await?;
+        let current_follows = latest
+            .as_ref()
+            .map(|e| Self::contact_pubkeys_from_tags(e.tags.iter()))
+            .unwrap_or_default();
 
         if current_follows.contains(&target_pubkey.to_hex()) {
             return Err(NuruNuruError::AlreadyFollowing);
         }
 
-        // Build new contact list
-        let mut contacts: Vec<Contact> = current_follows
-            .iter()
-            .filter_map(|hex| PublicKey::from_hex(hex).ok())
-            .map(|pk| Contact::new(pk))
-            .collect();
-        contacts.push(Contact::new(target_pubkey));
-
-        let builder = EventBuilder::contact_list(contacts);
+        // NIP-02 kind 3 is a replaceable *complete* contact list. Publish the
+        // latest list with the new target appended, preserving non-p tags.
+        let tags = Self::merge_contact_tags(latest.as_ref(), &current_follows, target_pubkey, true);
+        let builder = EventBuilder::new(Kind::ContactList, "").tags(tags);
         self.client.send_event_builder(builder).await?;
 
         // Update local state
         let mut fl = self.follow_list.write().await;
+        for pk in current_follows {
+            fl.insert(pk);
+        }
         fl.insert(target_pubkey.to_hex());
 
         Ok(())
@@ -335,21 +393,25 @@ impl NuruNuruEngine {
             .await
             .ok_or(NuruNuruError::NoSigningMethod)?;
 
-        let current_follows = self.fetch_follow_list(my_pk).await?;
+        let latest = self.latest_contact_list_event(my_pk).await?;
+        let current_follows = latest
+            .as_ref()
+            .map(|e| Self::contact_pubkeys_from_tags(e.tags.iter()))
+            .unwrap_or_default();
 
         let target_hex = target_pubkey.to_hex();
-        let contacts: Vec<Contact> = current_follows
-            .iter()
-            .filter(|hex| *hex != &target_hex)
-            .filter_map(|hex| PublicKey::from_hex(hex).ok())
-            .map(|pk| Contact::new(pk))
-            .collect();
-
-        let builder = EventBuilder::contact_list(contacts);
+        let tags =
+            Self::merge_contact_tags(latest.as_ref(), &current_follows, target_pubkey, false);
+        let builder = EventBuilder::new(Kind::ContactList, "").tags(tags);
         self.client.send_event_builder(builder).await?;
 
         // Update local state
         let mut fl = self.follow_list.write().await;
+        for pk in current_follows {
+            if pk != target_hex {
+                fl.insert(pk);
+            }
+        }
         fl.remove(&target_hex);
 
         Ok(())
@@ -418,7 +480,9 @@ impl NuruNuruEngine {
         let mut handles = Vec::new();
         for filter in tl_filters {
             let client = self.client.clone();
-            handles.push(tokio::spawn(async move { client.fetch_events(filter, timeout).await }));
+            handles.push(tokio::spawn(async move {
+                client.fetch_events(filter, timeout).await
+            }));
         }
         for handle in handles {
             if let Ok(Ok(events)) = handle.await {
@@ -962,11 +1026,17 @@ impl NuruNuruEngine {
                 let client = self.client.clone();
                 connect_tasks.push(tokio::spawn(async move {
                     let _ = client.add_relay(relay_url.clone()).await;
-                    let _ = tokio::time::timeout(Duration::from_millis(900), client.connect_relay(relay_url)).await;
+                    let _ = tokio::time::timeout(
+                        Duration::from_millis(900),
+                        client.connect_relay(relay_url),
+                    )
+                    .await;
                 }));
             }
         }
-        for task in connect_tasks { let _ = task.await; }
+        for task in connect_tasks {
+            let _ = task.await;
+        }
 
         let urls: Vec<RelayUrl> = relay_urls
             .iter()

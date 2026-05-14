@@ -48,6 +48,9 @@ final class HomeViewModel {
     private var pendingPublishedEvents: [String: NostrEvent] = [:]
     private var pendingLikedEvents:     [String: NostrEvent] = [:]
     private var pendingUnlikedEventIds: Set<String> = []
+    private var inFlightFollowAction = false
+    private var inFlightLikeEventIds: Set<String> = []
+    private var inFlightRepostEventIds: Set<String> = []
 
     // MARK: - Init
 
@@ -88,6 +91,17 @@ final class HomeViewModel {
                   let eventId = notification.userInfo?["eventId"] as? String else { return }
             Task { @MainActor in self.applyUnlikedPost(eventId: eventId) }
         })
+        homeEventObserverTokens.append(center.addObserver(
+            forName: .nuruProfileBadgesUpdated,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let pubkey = notification.userInfo?["pubkey"] as? String,
+                  pubkey == self.targetPubkeyHex else { return }
+            let badges = notification.userInfo?["badges"] as? [BadgeItem] ?? []
+            Task { @MainActor in self.applyProfileBadges(badges) }
+        })
     }
 
     func applyPublishedPost(_ event: NostrEvent) {
@@ -117,6 +131,13 @@ final class HomeViewModel {
         pendingUnlikedEventIds.insert(eventId)
         likedPosts.removeAll { $0.event.id == eventId }
         AppLogger.log("HomeVM", "Optimistic liked posts remove — id=\(eventId.prefix(8))")
+    }
+
+
+    func applyProfileBadges(_ badges: [BadgeItem]) {
+        // Immediately reflect updated kind-30008 badge order/images in profile header.
+        badgeUrls = badges.compactMap(\.imageUrl)
+        AppLogger.log("HomeVM", "Applied updated profile badges — count=\(badgeUrls.count)")
     }
 
     private func makeScoredPost(_ event: NostrEvent, preferExisting: Bool = false) -> ScoredPost {
@@ -383,28 +404,37 @@ final class HomeViewModel {
     // MARK: - Follow / Unfollow
 
     func followUser() async {
-        guard !isFollowing else { return }
-        isFollowing  = true
-        let newList  = myFollowList + [targetPubkeyHex]
-        myFollowList = newList
+        guard !isFollowing, !inFlightFollowAction else { return }
+        inFlightFollowAction = true
+        isFollowing = true
+        if !myFollowList.contains(targetPubkeyHex) { myFollowList.append(targetPubkeyHex) }
         do {
-            try await repository.publishFollowList(follows: newList)
+            try await repository.followUser(targetPubkeyHex: targetPubkeyHex)
+            let refreshed = await repository.fetchFollowList(pubkey: myPubkeyHex)
+            myFollowList = refreshed.isEmpty ? myFollowList : refreshed
+            isFollowing = myFollowList.contains(targetPubkeyHex)
         } catch {
             isFollowing  = false
-            myFollowList = myFollowList.filter { $0 != targetPubkeyHex }
+            myFollowList.removeAll { $0 == targetPubkeyHex }
         }
+        inFlightFollowAction = false
     }
 
     func unfollowUser() async {
-        guard isFollowing else { return }
-        isFollowing  = false
-        myFollowList = myFollowList.filter { $0 != targetPubkeyHex }
+        guard isFollowing, !inFlightFollowAction else { return }
+        inFlightFollowAction = true
+        isFollowing = false
+        myFollowList.removeAll { $0 == targetPubkeyHex }
         do {
-            try await repository.publishFollowList(follows: myFollowList)
+            try await repository.unfollowUser(targetPubkeyHex: targetPubkeyHex)
+            let refreshed = await repository.fetchFollowList(pubkey: myPubkeyHex)
+            myFollowList = refreshed.isEmpty ? myFollowList : refreshed
+            isFollowing = myFollowList.contains(targetPubkeyHex)
         } catch {
             isFollowing  = true
-            myFollowList = myFollowList + [targetPubkeyHex]
+            if !myFollowList.contains(targetPubkeyHex) { myFollowList.append(targetPubkeyHex) }
         }
+        inFlightFollowAction = false
     }
 
     // MARK: - Delete Post
@@ -422,9 +452,11 @@ final class HomeViewModel {
     // MARK: - Like (Kind 7, NIP-25) — mirrors Android HomeViewModel.likePost
 
     func likePost(_ eventId: String, emoji: String = "+", tags: [[String]] = []) {
+        guard !inFlightLikeEventIds.contains(eventId) else { return }
+        inFlightLikeEventIds.insert(eventId)
         // Find the event's author pubkey from posts/likedPosts
         let all = posts + likedPosts
-        guard let post = all.first(where: { $0.event.id == eventId }) else { return }
+        guard let post = all.first(where: { $0.event.id == eventId }) else { inFlightLikeEventIds.remove(eventId); return }
         let willLike = !post.isLiked
         // Optimistic UI update
         post.isLiked    = willLike
@@ -459,14 +491,17 @@ final class HomeViewModel {
                     else { self.applyLikedPost(post.event) }
                 }
             }
+            self.inFlightLikeEventIds.remove(eventId)
         }
     }
 
     // MARK: - Repost (Kind 6, NIP-18) — mirrors Android HomeViewModel.repostPost
 
     func repostPost(_ eventId: String) {
+        guard !inFlightRepostEventIds.contains(eventId) else { return }
+        inFlightRepostEventIds.insert(eventId)
         let all = posts + likedPosts
-        guard let post = all.first(where: { $0.event.id == eventId }) else { return }
+        guard let post = all.first(where: { $0.event.id == eventId }) else { inFlightRepostEventIds.remove(eventId); return }
         post.isReposted    = !post.isReposted
         post.repostCount  += post.isReposted ? 1 : -1
         Task {
@@ -481,6 +516,7 @@ final class HomeViewModel {
                 post.isReposted    = !post.isReposted
                 post.repostCount  += post.isReposted ? 1 : -1
             }
+            self.inFlightRepostEventIds.remove(eventId)
         }
     }
 

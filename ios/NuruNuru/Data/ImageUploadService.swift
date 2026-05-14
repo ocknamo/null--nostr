@@ -94,12 +94,14 @@ struct ImageUploadService {
             resized = image
         }
 
-        let compressed = resized.jpegData(compressionQuality: quality) ?? data
-        // 圧縮結果が元データより大きい場合は元データをそのまま使用する
-        // （既に最適化済みの JPEG を再圧縮すると逆にサイズが増えるケースがある）
+        // Always return a newly-rendered JPEG.  Some upload servers (notably
+        // nostr.build) reject images that contain private EXIF/GPS metadata.
+        // Returning the original bytes when the recompressed image is larger can
+        // reintroduce that metadata and cause HTTP 400 during sign-up/profile
+        // image upload.  UIImage.draw + jpegData writes clean image pixels only.
+        guard let compressed = resized.jpegData(compressionQuality: quality) else { return data }
         if compressed.count > data.count {
-            AppLogger.log("Upload", "Compression produced larger output (\(data.count) → \(compressed.count)), using original")
-            return data
+            AppLogger.log("Upload", "Compression produced larger metadata-stripped output (\(data.count) → \(compressed.count)); keeping stripped JPEG")
         }
         return compressed
     }

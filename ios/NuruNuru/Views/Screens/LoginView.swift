@@ -178,10 +178,16 @@ struct LoginView: View {
 
     private func requestTermsAgreement(for action: TermsStartAction) {
         pendingTermsAction = action
-        if viewModel.prefs.hasAcceptedTerms {
-            performPendingTermsAction()
-        } else {
+        switch action {
+        case .signUp:
+            // 新規登録は毎回利用規約を表示する（同意済みでも再確認）
             showTermsAgreement = true
+        case .login:
+            if viewModel.prefs.hasAcceptedTerms {
+                performPendingTermsAction()
+            } else {
+                showTermsAgreement = true
+            }
         }
     }
 
@@ -984,6 +990,7 @@ private struct SignUpProfileStep: View {
     let onFinish: (String, String, String, String, String, String, String, String) -> Void
     let isLoading: Bool
 
+    @Environment(AuthViewModel.self) private var authViewModel
     @Environment(\.nuruTheme) private var theme
     @State private var name = ""
     @State private var about = ""
@@ -1000,6 +1007,7 @@ private struct SignUpProfileStep: View {
     @State private var bannerPickerItem: PhotosPickerItem?
     @State private var uploadingPicture = false
     @State private var uploadingBanner = false
+    @State private var uploadError: String? = nil
 
     var body: some View {
         VStack(spacing: NuruSpacing.space5) {
@@ -1038,6 +1046,14 @@ private struct SignUpProfileStep: View {
                 Text(uploadingPicture ? "アップロード中..." : "アイコン画像をアップロード")
                     .font(NuruFont.labelSmall())
                     .foregroundStyle(uploadingPicture ? NuruColors.lineGreen : theme.textTertiary)
+
+                if let uploadError {
+                    Text(uploadError)
+                        .font(NuruFont.labelSmall())
+                        .foregroundStyle(NuruColors.colorError)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, NuruSpacing.space2)
+                }
             }
             .onChange(of: picturePickerItem) { _, item in
                 guard let item else { return }
@@ -1122,6 +1138,8 @@ private struct SignUpProfileStep: View {
         case .picture: uploadingPicture = true
         case .banner:  uploadingBanner = true
         }
+        uploadError = nil
+
         Task {
             defer {
                 switch target {
@@ -1129,17 +1147,48 @@ private struct SignUpProfileStep: View {
                 case .banner:  uploadingBanner = false
                 }
             }
-            guard let data = try? await item.loadTransferable(type: Data.self) else { return }
-            let service = ImageUploadService(signer: nil)
-            let compressed = service.compressImage(data: data)
-            guard let url = try? await service.uploadImage(
-                imageData: compressed,
-                server: .nostrBuild
-            ) else { return }
 
-            switch target {
-            case .picture: picture = url
-            case .banner:  banner = url
+            guard let data = try? await item.loadTransferable(type: Data.self), !data.isEmpty else {
+                uploadError = "画像の読み込みに失敗しました"
+                return
+            }
+
+            // Sign-up can receive HEIC/HEIF with private EXIF/GPS metadata.
+            // Always redraw and upload a clean JPEG payload.
+            guard let image = UIImage(data: data) else {
+                uploadError = "画像形式を読み込めませんでした"
+                return
+            }
+            let renderer = UIGraphicsImageRenderer(size: image.size, format: {
+                let fmt = UIGraphicsImageRendererFormat()
+                fmt.preferredRange = .standard
+                return fmt
+            }())
+            let redrawnJpeg = renderer.jpegData(withCompressionQuality: 0.92) { _ in
+                image.draw(in: CGRect(origin: .zero, size: image.size))
+            }
+
+            let signer = InternalSigner(keyManager: authViewModel.keyManager)
+            let service = ImageUploadService(signer: signer)
+            let compressed = service.compressImage(data: redrawnJpeg, maxSize: 1920, quality: 0.85)
+
+            do {
+                let url = try await service.uploadImage(
+                    imageData: compressed,
+                    server: .nostrBuild,
+                    mimeType: "image/jpeg"
+                )
+                switch target {
+                case .picture: picture = url
+                case .banner:  banner = url
+                }
+            } catch {
+                let msg = error.localizedDescription
+                if msg.contains("401") || msg.lowercased().contains("nip-98") || msg.lowercased().contains("unauthorized") {
+                    uploadError = "サーバー認証エラー (NIP-98)。もう一度お試しください"
+                } else {
+                    uploadError = msg
+                }
             }
         }
     }

@@ -16,6 +16,9 @@ struct PostActions: View {
 
     @Environment(\.nuruTheme) private var theme
     @State private var isLikeAnimating = false
+    @State private var isLikeInFlight = false
+    @State private var isRepostInFlight = false
+    @State private var isBookmarkInFlight = false
 
     var body: some View {
         // Mirrors Android PostActions: Row with spacedBy(24.dp), buttons auto-sized,
@@ -60,7 +63,15 @@ struct PostActions: View {
 
         return label
             .contentShape(Rectangle())
-            .simultaneousGesture(TapGesture().onEnded { Task { await onRepost() } })
+            .opacity(isRepostInFlight ? 0.45 : 1.0)
+            .simultaneousGesture(TapGesture().onEnded {
+                guard !isRepostInFlight else { return }
+                isRepostInFlight = true
+                Task {
+                    await onRepost()
+                    isRepostInFlight = false
+                }
+            })
             .simultaneousGesture(
                 LongPressGesture(minimumDuration: 0.5).onEnded { _ in onRepostLongPress?() }
             )
@@ -80,12 +91,16 @@ struct PostActions: View {
 
         return label
             .contentShape(Rectangle())
+            .opacity(isLikeInFlight ? 0.45 : 1.0)
             .simultaneousGesture(TapGesture().onEnded {
+                guard !isLikeInFlight else { return }
+                isLikeInFlight = true
                 withAnimation(.spring(response: 0.2, dampingFraction: 0.4)) { isLikeAnimating = true }
                 Task {
                     await onLike()
                     try? await Task.sleep(nanoseconds: 300_000_000)
                     withAnimation { isLikeAnimating = false }
+                    isLikeInFlight = false
                 }
             })
             .simultaneousGesture(
@@ -117,9 +132,14 @@ struct PostActions: View {
             .frame(width: NuruSpacing.iconMd, height: NuruSpacing.iconMd)
             .foregroundStyle(post.isBookmarked ? NuruColors.lineGreen : theme.textTertiary)
             .contentShape(Rectangle())
+            .opacity(isBookmarkInFlight ? 0.45 : 1.0)
             .onTapGesture {
-                guard let handler = onBookmark else { return }
-                Task { await handler() }
+                guard let handler = onBookmark, !isBookmarkInFlight else { return }
+                isBookmarkInFlight = true
+                Task {
+                    await handler()
+                    isBookmarkInFlight = false
+                }
             }
     }
 

@@ -19,6 +19,8 @@ final class PostDetailViewModel {
     var replies:      [ScoredPost] = []
     var isLoading:    Bool = true
     var isRefreshing: Bool = false
+    private var inFlightLikeEventIds: Set<String> = []
+    private var inFlightRepostEventIds: Set<String> = []
     var errorMessage: String? = nil
 
     // MARK: - Dependencies
@@ -163,6 +165,10 @@ final class PostDetailViewModel {
     // MARK: - Interactions
 
     func toggleLike(post scoredPost: ScoredPost) async {
+        let eventId = scoredPost.event.id
+        guard !inFlightLikeEventIds.contains(eventId) else { return }
+        inFlightLikeEventIds.insert(eventId)
+        defer { inFlightLikeEventIds.remove(eventId) }
         let wasLiked = scoredPost.isLiked
         scoredPost.isLiked   = !wasLiked
         scoredPost.likeCount += wasLiked ? -1 : 1
@@ -180,6 +186,10 @@ final class PostDetailViewModel {
     }
 
     func toggleRepost(post scoredPost: ScoredPost) async {
+        let eventId = scoredPost.event.id
+        guard !inFlightRepostEventIds.contains(eventId) else { return }
+        inFlightRepostEventIds.insert(eventId)
+        defer { inFlightRepostEventIds.remove(eventId) }
         guard !scoredPost.isReposted else { return }
         scoredPost.isReposted  = true
         scoredPost.repostCount += 1

@@ -50,6 +50,9 @@ class HomeViewModel(
     // Locally deleted post IDs — prevents deleted posts from reappearing after relay re-fetch.
     // Cleared only on ViewModel destruction (Activity lifecycle boundary).
     private val deletedPostIds = mutableSetOf<String>()
+    private val inFlightLikeEventIds = mutableSetOf<String>()
+    private val inFlightRepostEventIds = mutableSetOf<String>()
+    private val inFlightFollowPubkeys = mutableSetOf<String>()
 
     init {
         _uiState.update { it.copy(uploadServer = repository.getUploadServer()) }
@@ -234,6 +237,7 @@ class HomeViewModel(
     }
 
     fun likePost(eventId: String, emoji: String = "+", customTags: List<List<String>> = emptyList()) {
+        if (!inFlightLikeEventIds.add(eventId)) return
         viewModelScope.launch {
             try {
                 val post = (_uiState.value.posts + _uiState.value.likedPosts)
@@ -276,11 +280,14 @@ class HomeViewModel(
                 }
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = "いいねに失敗しました") }
+            } finally {
+                inFlightLikeEventIds.remove(eventId)
             }
         }
     }
 
     fun repostPost(eventId: String) {
+        if (!inFlightRepostEventIds.add(eventId)) return
         viewModelScope.launch {
             try {
                 val post = (_uiState.value.posts + _uiState.value.likedPosts)
@@ -325,6 +332,8 @@ class HomeViewModel(
                 }
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = "リポストに失敗しました") }
+            } finally {
+                inFlightRepostEventIds.remove(eventId)
             }
         }
     }
@@ -396,6 +405,7 @@ class HomeViewModel(
     }
 
     fun unfollowUser(targetPubkeyHex: String) {
+        if (!inFlightFollowPubkeys.add(targetPubkeyHex)) return
         viewModelScope.launch {
             try {
                 val success = repository.unfollowUser(myPubkeyHex, targetPubkeyHex)
@@ -410,11 +420,14 @@ class HomeViewModel(
                 }
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = "フォロー解除に失敗しました") }
+            } finally {
+                inFlightFollowPubkeys.remove(targetPubkeyHex)
             }
         }
     }
 
     fun followUser(targetPubkeyHex: String) {
+        if (!inFlightFollowPubkeys.add(targetPubkeyHex)) return
         viewModelScope.launch {
             try {
                 val success = repository.followUser(myPubkeyHex, targetPubkeyHex)
@@ -427,6 +440,8 @@ class HomeViewModel(
                 }
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = "フォローに失敗しました") }
+            } finally {
+                inFlightFollowPubkeys.remove(targetPubkeyHex)
             }
         }
     }
