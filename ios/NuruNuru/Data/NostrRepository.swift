@@ -319,7 +319,12 @@ actor NostrRepository {
     // MARK: - Publish
 
     /// Sign and publish an event to the relay, returning the exact signed event that was sent.
-    func publishEventAndReturnSigned(kind: Int, tags: [[String]], content: String) async throws -> NostrEvent {
+    func publishEventAndReturnSigned(
+        kind: Int,
+        tags: [[String]],
+        content: String,
+        waitForAllRelays: Bool = false
+    ) async throws -> NostrEvent {
         // Publish paths can be reached from profile sheets before the timeline
         // has finished connecting relays.  Ensure at least the compact write
         // pool exists so follow/profile/reaction events are actually sent.
@@ -340,13 +345,13 @@ actor NostrRepository {
         }
 
         let event = try signer.signEvent(kind: kind, tags: tags, content: content)
-        try await client.publish(event: event)
+        try await client.publish(event: event, waitForAllRelays: waitForAllRelays)
         return event
     }
 
     /// Publish a signed event to the relay.
-    func publishEvent(kind: Int, tags: [[String]], content: String) async throws {
-        _ = try await publishEventAndReturnSigned(kind: kind, tags: tags, content: content)
+    func publishEvent(kind: Int, tags: [[String]], content: String, waitForAllRelays: Bool = false) async throws {
+        _ = try await publishEventAndReturnSigned(kind: kind, tags: tags, content: content, waitForAllRelays: waitForAllRelays)
     }
 
     /// NIP-07 WebBridge 用 — 署名済みイベントを返すのみ（発行しない）。

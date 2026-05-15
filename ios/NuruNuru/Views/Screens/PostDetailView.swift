@@ -320,7 +320,18 @@ struct PostDetailView: View {
             if !viewModel.isLoading && viewModel.errorMessage == nil {
                 replyFAB
             }
+
+            // PostDetailView itself is often presented as a sheet from PostRow.
+            // Presenting another SwiftUI .sheet from inside that sheet is unstable on
+            // iOS 17 and can immediately dismiss the reply composer.  Use an in-view
+            // full-screen overlay instead so the reply UI stays open until Cancel/Post.
+            if showReplySheet, let target = viewModel.post {
+                replyComposerOverlay(for: target)
+                    .zIndex(100)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
+        .animation(.easeInOut(duration: 0.2), value: showReplySheet)
         .navigationTitle("投稿")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -350,20 +361,43 @@ struct PostDetailView: View {
                 repository: viewModel.repository
             )
         }
-        .sheet(isPresented: $showReplySheet) {
+        .onReceive(NotificationCenter.default.publisher(for: .nuruHomePublishedPost)) { notification in
+            guard let event = notification.userInfo?["event"] as? NostrEvent,
+                  event.tags.contains(where: { $0.first == "e" && $0[safe: 1] == viewModel.post?.event.id }) else { return }
+            let optimistic = ScoredPost(event: event)
+            optimistic.profile = viewModel.repository.getCachedProfile(pubkey: viewModel.myPubkeyHex)
+            if !viewModel.replies.contains(where: { $0.event.id == event.id }) {
+                viewModel.replies.append(optimistic)
+            }
+        }
+    }
+
+    private func replyComposerOverlay(for target: ScoredPost) -> some View {
+        ZStack(alignment: .bottom) {
+            Color.black.opacity(0.45)
+                .ignoresSafeArea()
+                .onTapGesture { }
+
             PostSheet(
                 repository:  viewModel.repository,
                 myPubkeyHex: viewModel.myPubkeyHex,
-                myProfile:   viewModel.repository.getCachedProfile(pubkey: viewModel.myPubkeyHex) ?? viewModel.post?.profile,
-                replyToId:   viewModel.post?.event.id,
+                myProfile:   viewModel.repository.getCachedProfile(pubkey: viewModel.myPubkeyHex),
+                replyToId:   target.event.id,
+                replyToPubkey: target.event.pubkey,
                 onDismiss:   { showReplySheet = false },
                 onSuccess:   {
                     showReplySheet = false
                     Task { await viewModel.refresh() }
                 }
             )
-            .presentationDetents([.medium, .large])
+            .id(target.event.id)
+            .frame(maxWidth: .infinity)
+            .frame(height: UIScreen.main.bounds.height * 0.68)
+            .background(theme.bgPrimary)
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .ignoresSafeArea(edges: .bottom)
         }
+        .ignoresSafeArea()
     }
 
     private func openProfile(_ pubkey: String) {
@@ -482,23 +516,6 @@ struct PostDetailView: View {
         }
     }
 
-    // MARK: - Error
-
-    private func errorView(message: String) -> some View {
-        VStack(spacing: NuruSpacing.space3) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 36))
-                .foregroundStyle(theme.textTertiary)
-            Text(message)
-                .font(NuruFont.bodyMedium())
-                .foregroundStyle(theme.textSecondary)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 80)
-        .padding(.horizontal, NuruSpacing.space4)
-    }
-
     // MARK: - Reply FAB
 
     private var replyFAB: some View {
@@ -521,4 +538,22 @@ struct PostDetailView: View {
         .padding(.trailing, NuruSpacing.space4)
         .padding(.bottom, NuruSpacing.space5)
     }
+
+    // MARK: - Error
+
+    private func errorView(message: String) -> some View {
+        VStack(spacing: NuruSpacing.space3) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 36))
+                .foregroundStyle(theme.textTertiary)
+            Text(message)
+                .font(NuruFont.bodyMedium())
+                .foregroundStyle(theme.textSecondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 80)
+        .padding(.horizontal, NuruSpacing.space4)
+    }
+
 }

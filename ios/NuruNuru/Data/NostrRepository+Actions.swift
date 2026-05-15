@@ -16,6 +16,7 @@ extension NostrRepository {
     /// - Parameters:
     ///   - content:        本文 (140 文字制限は PostSheet で強制済み)。
     ///   - replyToId:      返信先イベント ID (nil = 新規投稿)。
+    ///   - replyToPubkey:  返信先イベントの作者 pubkey。NIP-10 の p タグとして必須。
     ///   - contentWarning: CW ラベル文字列 (nil = なし)。
     ///   - customTags:     追加タグ (NIP-71 imeta 等)。
     ///   - targetRelays:   特定リレーのみに送出する場合に指定 (nil = 全リレー)。
@@ -24,6 +25,7 @@ extension NostrRepository {
     func publishNote(
         content:        String,
         replyToId:      String?    = nil,
+        replyToPubkey:  String?    = nil,
         contentWarning: String?    = nil,
         customTags:     [[String]] = [],
         targetRelays:   [String]?  = nil,
@@ -31,14 +33,48 @@ extension NostrRepository {
     ) async throws -> NostrEvent {
         var tags: [[String]] = []
         if let id = replyToId { tags.append(["e", id, "", "reply"]) }
+        if let pk = replyToPubkey?.trimmingCharacters(in: .whitespacesAndNewlines), !pk.isEmpty {
+            tags.append(["p", pk])
+        }
         if let cw = contentWarning, !cw.isEmpty { tags.append(["content-warning", cw]) }
         if nip70Protected { tags.append(["-"]) }
         // クライアント識別タグ (iOS 版は "nullnull iOS" を付与)
         if !tags.contains(where: { $0.first == "client" }) {
             tags.append(["client", "nullnull iOS"])
         }
-        tags.append(contentsOf: customTags)
-        return try await publishEventAndReturnSigned(kind: NostrKind.textNote, tags: tags, content: content)
+        for tag in customTags {
+            guard let name = tag.first else { continue }
+            if name == "p", tag.count >= 2 {
+                let pk = tag[1]
+                if !tags.contains(where: { $0.first == "p" && $0[safe: 1] == pk }) {
+                    tags.append(tag)
+                }
+            } else {
+                tags.append(tag)
+            }
+        }
+        let event = try await publishEventAndReturnSigned(kind: NostrKind.textNote, tags: tags, content: content)
+
+        // Keep the compose UX fast: return after the first normal relay ACK, then
+        // fan out to explicitly selected relays / the parent author's NIP-65 read
+        // relays in the background.  Waiting for relay-list fetches and every
+        // targeted publish made replies feel stuck after tapping 投稿.
+        var fanoutRelays = targetRelays ?? []
+        if let replyToPubkey = replyToPubkey?.trimmingCharacters(in: .whitespacesAndNewlines), !replyToPubkey.isEmpty {
+            let readRelays = await fetchRelayList(pubkey: replyToPubkey)
+                .filter { $0.permission == .read || $0.permission == .readWrite }
+                .map(\.url)
+            fanoutRelays.append(contentsOf: readRelays)
+        }
+        let uniqueFanoutRelays = Array(Set(fanoutRelays)).filter { !$0.isEmpty }
+        if !uniqueFanoutRelays.isEmpty,
+           let data = try? JSONEncoder().encode(event),
+           let rawJson = String(data: data, encoding: .utf8) {
+            Task { [client] in
+                try? await client.publishRawEventJSON(rawJson, to: uniqueFanoutRelays)
+            }
+        }
+        return event
     }
 
     // MARK: - Follow List (Kind 3)

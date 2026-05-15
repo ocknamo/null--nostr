@@ -24,39 +24,37 @@ struct ProfileHeader: View {
     @State private var showCopiedFeedback  = false
 
     var body: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .topLeading) {
-                VStack(spacing: 0) {
-                    // Banner
-                    bannerView
-                        .frame(width: geo.size.width, height: 112)
-                        .clipped()
+        ZStack(alignment: .topLeading) {
+            VStack(spacing: 0) {
+                // Banner
+                bannerView
+                    .frame(height: 112)
+                    .clipped()
 
-                    // Card overlapping banner
-                    profileCard
-                        .padding(.horizontal, NuruSpacing.space4)
-                        .offset(y: -56)
-                        .padding(.bottom, -56)
-                }
-                .frame(width: geo.size.width)
-                .clipped()
-
-                // Avatar (overlaps banner/card boundary)
-                // size: 80pt (= Android 80dp)
-                AvatarView(
-                    url:  profile?.picture,
-                    name: profile?.displayedName ?? "?",
-                    size: NuruSpacing.avatarXl
-                )
-                .background(Circle().fill(theme.bgPrimary).frame(width: 88, height: 88))
-                .frame(width: 88, height: 88)
-                .padding(.leading, 32)
-                .offset(y: 24)   // mirrors Android: offset(y = 24.dp) — avatar bridges banner/card boundary
+                // Card overlapping banner.  Keep the visual overlap, but do not
+                // force ProfileHeader to 280pt: long about text must contribute
+                // to layout height so tabs/posts are pushed down instead of being
+                // overdrawn.
+                profileCard
+                    .padding(.horizontal, NuruSpacing.space4)
+                    .offset(y: -56)
+                    .padding(.bottom, -56)
             }
-            .frame(width: geo.size.width, alignment: .topLeading)
-            .clipped()
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+
+            // Avatar (overlaps banner/card boundary)
+            // size: 80pt (= Android 80dp)
+            AvatarView(
+                url:  profile?.picture,
+                name: profile?.displayedName ?? "?",
+                size: NuruSpacing.avatarXl
+            )
+            .background(Circle().fill(theme.bgPrimary).frame(width: 88, height: 88))
+            .frame(width: 88, height: 88)
+            .padding(.leading, 32)
+            .offset(y: 24)   // mirrors Android: offset(y = 24.dp) — avatar bridges banner/card boundary
         }
-        .frame(height: 280)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .task(id: profile?.birthday) {
             await checkBirthday()
         }

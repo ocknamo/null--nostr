@@ -14,6 +14,7 @@ struct PostSheet: View {
     var initialText:  String = ""
     var initialMentionProfile: UserProfile? = nil
     var replyToId:    String? = nil
+    var replyToPubkey: String? = nil
     var onDismiss:    () -> Void = {}
     var onSuccess:    () -> Void = {}
 
@@ -836,7 +837,9 @@ struct PostSheet: View {
         }
         customTags.append(contentsOf: extractMentionPTags(from: content))
 
-        // targetRelays: nil = broadcast to all, non-nil = specific relays only
+        // targetRelays: nil = broadcast to all, non-nil = specific relays only.
+        // Do not fetch NIP-65 here; repository performs reply fan-out in the
+        // background after the first ACK so tapping 投稿 returns quickly.
         let targetRelayList: [String]? = selectedRelays.count != allRelays.count
             ? Array(selectedRelays) : nil
 
@@ -844,6 +847,7 @@ struct PostSheet: View {
             let event = try await repository.publishNote(
                 content:        content,
                 replyToId:      replyToId,
+                replyToPubkey:  replyToPubkey,
                 contentWarning: showCWInput && !contentWarning.isEmpty ? contentWarning : nil,
                 customTags:     customTags,
                 targetRelays:   targetRelayList,
