@@ -39,8 +39,8 @@ targets:
         UIAppFonts:
           - LineSeedJP-Rg.ttf
           - LineSeedJP-Bd.ttf
-        CFBundleShortVersionString: "1.0.2"
-        CFBundleVersion: "3"
+        CFBundleShortVersionString: "1.0.4"
+        CFBundleVersion: "5"
         CFBundleDisplayName: ぬるぬる
         CFBundleURLTypes:
           - CFBundleURLName: io.nurunuru.app
