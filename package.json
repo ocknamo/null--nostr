@@ -12,7 +12,8 @@
     "test:coverage": "vitest run --coverage",
     "build:rust": "cd rust-engine/nurunuru-napi && node ../../node_modules/.bin/napi build --release",
     "tokens": "node design-tokens/generate.mjs",
-    "tokens:check": "node design-tokens/generate.mjs --check"
+    "tokens:check": "node design-tokens/generate.mjs --check",
+    "wiki:lint": "node scripts/wiki-lint.mjs"
   },
   "dependencies": {
     "22": "^0.0.0",

@@ -1,0 +1,28 @@
+name: Wiki Lint
+
+on:
+  pull_request:
+    paths:
+      - 'AGENTS.md'
+      - 'docs/wiki/**'
+      - 'scripts/wiki-lint.mjs'
+      - 'package.json'
+      - '.github/workflows/wiki-lint.yml'
+  push:
+    branches: [ main ]
+    paths:
+      - 'AGENTS.md'
+      - 'docs/wiki/**'
+      - 'scripts/wiki-lint.mjs'
+      - 'package.json'
+      - '.github/workflows/wiki-lint.yml'
+
+jobs:
+  wiki-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm run wiki:lint

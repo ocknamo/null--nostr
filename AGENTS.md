@@ -10,6 +10,71 @@ null--nostr is a LINE-style Nostr client for the Japanese community. It runs as 
 
 ---
 
+## LLM Wiki
+
+This repository maintains an LLM-generated project wiki under [`docs/wiki/`](./docs/wiki/).
+
+### Purpose
+
+The wiki is a persistent knowledge base for null--nostr. It summarizes architecture,
+features, platform differences, NIP support, implementation notes, design decisions,
+and open questions. Treat `AGENTS.md` as the rules/schema for agents, and `docs/wiki/`
+as the expandable project knowledge base.
+
+### Source of truth
+
+The wiki is derived from source files, design documents, generated design-token outputs,
+and explicit user/developer decisions. When wiki content conflicts with source code,
+`design-tokens/constants.json`, build configuration, or platform guardrails, the source
+files and guardrails win.
+
+Primary sources include:
+
+- Source code: `lib/`, `components/`, `android/`, `ios/NuruNuru/`, `rust-engine/`
+- Design tokens: `design-tokens/constants.json`
+- Platform docs: `ios/GUARDRAILS.md`, `docs/sync/`, README files, build configs
+- Explicit decisions recorded in issues, PRs, or `docs/wiki/decisions/`
+
+### Required wiki files
+
+- `docs/wiki/index.md` — content-oriented catalog of wiki pages
+- `docs/wiki/log.md` — chronological append-only update log
+- `docs/wiki/overview.md` — high-level project overview
+- `docs/wiki/architecture.md` — cross-platform architecture summary
+
+### Update rules
+
+When making meaningful changes to architecture, features, platform behavior, NIP support,
+security constraints, design tokens, or Android/iOS/Web parity:
+
+1. Read `docs/wiki/index.md` first to find relevant pages.
+2. Update the relevant wiki page(s) in `docs/wiki/`.
+3. Update `docs/wiki/index.md` if pages are added, renamed, or significantly changed.
+4. Append an entry to `docs/wiki/log.md` using `## [YYYY-MM-DD] type | title`.
+5. Include source file references in wiki pages.
+6. Mark uncertain claims as `Open Questions` instead of presenting them as facts.
+
+### Page conventions
+
+Each wiki page should generally include:
+
+- Title
+- Summary
+- Current behavior
+- Platform notes where applicable
+- Source references
+- Related pages
+- Open questions, if any
+
+### Do not
+
+- Treat wiki pages as more authoritative than source code or design tokens.
+- Store secrets, private keys, credentials, tokens, or sensitive personal data in the wiki.
+- Invent implementation details without checking source files.
+- Bloat `AGENTS.md` with detailed feature specs; put detailed evolving knowledge in `docs/wiki/` and link from here when needed.
+
+---
+
 ## Commands
 
 ### Web (Next.js)
@@ -21,6 +86,7 @@ npm run test:coverage             # with coverage report
 npx vitest run src/__tests__/filename.test.ts   # single test
 npm run tokens                    # sync design-tokens/constants.json → Web + Android + iOS
 npm run tokens:check              # verify tokens are in sync (CI)
+npm run wiki:lint                 # lint docs/wiki links, required sections, and AGENTS links
 ```
 
 ### Android
@@ -39,7 +105,7 @@ cd ios && xcodebuild -scheme NuruNuru -destination 'platform=iOS Simulator,name=
 cd ios && xcodebuild -scheme NuruNuru -destination 'platform=iOS Simulator,name=iPhone 17' -skipPackagePluginValidation test
 open ios/NuruNuru.xcodeproj                    # open in Xcode
 ```
-Design doc: [ios/DESIGN.md](./ios/DESIGN.md) | Guardrails: [ios/GUARDRAILS.md](./ios/GUARDRAILS.md)
+iOS guardrails: [ios/GUARDRAILS.md](./ios/GUARDRAILS.md) | UI sync notes: [docs/wiki/ui/android-ios-sync.md](./docs/wiki/ui/android-ios-sync.md)
 
 ### Rust Engine (rebuild required when modifying lib.rs or engine.rs)
 ```bash
@@ -207,9 +273,9 @@ android/app/src/main/kotlin/io/nurunuru/app/
 - Minimum deployment target: iOS 17.0
 - Tab bar: `.safeAreaInset(edge: .bottom, spacing: 0)` — do NOT use ZStack+ignoresSafeArea pattern
 - Bottom nav icons: house/message/67/newspaper/square.grid.2x2 (NOT person.crop.circle for home)
-- PostActions: 3 buttons only (repost, like, zap) — no reply button; like icon = hand.thumbsup (not heart)
+- PostActions: no reply button. Current code shows like / repost / zap and may also show bookmark when a bookmark handler is supplied; like icon = thumbs-up (not heart).
 - Collapse text: "もっと見る" / "閉じる" (NOT "続きを読む") — matches Android exact copy
-- For pixel-perfect sync spec, see [ios/SYNC_PLAN.md](./ios/SYNC_PLAN.md)
+- For pixel-perfect sync notes, see [docs/wiki/ui/android-ios-sync.md](./docs/wiki/ui/android-ios-sync.md)
 
 ---
 
@@ -247,4 +313,4 @@ Routing logic in `NostrRepository.advancedSearch()`:
 
 ## Supported NIPs
 
-NIP-01, 02, 05, 07, 09, 11, 17, 19, 25, 27, 30, 32, 42, 44, 46, 50, 51, 57, 58, 59, 62, 65, 70, 71, 98
+Code-backed NIP list is maintained in `docs/wiki/nips/README.md`. Update that page after checking source files when NIP support changes.
