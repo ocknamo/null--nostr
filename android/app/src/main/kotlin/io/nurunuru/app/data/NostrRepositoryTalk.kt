@@ -5,6 +5,7 @@ import kotlinx.coroutines.*
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
 import uniffi.nurunuru.FfiEncryptedMessageData
+import java.util.UUID
 
 private fun mlsLogPrefix(value: String?): String {
     val v = value.orEmpty()
@@ -21,7 +22,31 @@ private fun mlsRedactedError(e: Throwable): String {
     }
 }
 
+private fun mlsProcessErrorKind(e: Throwable): String {
+    val lower = e.message.orEmpty().lowercase()
+    return when {
+        "invalid_base64" in lower || "invalid base64" in lower -> "invalid_base64"
+        "malformed_content_too_short" in lower || "too_short" in lower -> "malformed_content_too_short"
+        "missing_h_tag" in lower || "missing h" in lower -> "missing_h_tag"
+        "group_id_mismatch" in lower || "group mismatch" in lower || "wrong h" in lower -> "group_id_mismatch"
+        "invalid_kind" in lower || "invalid kind" in lower || "wrong kind" in lower -> "invalid_kind"
+        "invalid event" in lower || "not a nostr event" in lower || "bad signature" in lower || "invalid signature" in lower -> "invalid_event"
+        "json" in lower || "deserialize" in lower -> "invalid_json"
+        "state_not_ready" in lower || "state" in lower || "epoch" in lower || "pending" in lower || "proposal" in lower || "commit" in lower -> "state_not_ready"
+        "decrypt" in lower || "ratchet" in lower || "sender" in lower || "member" in lower || "not found" in lower || "missing" in lower -> "retryable_mls_state"
+        else -> "mls_error"
+    }
+}
+
 private fun mlsLogPrefixes(values: List<String>): List<String> = values.map { mlsLogPrefix(it) }
+
+private fun mlsDisplayContent(raw: String): String {
+    if (!raw.trimStart().startsWith("{")) return raw
+    return try {
+        Json.parseToJsonElement(raw).jsonObject["content"]?.jsonPrimitive?.contentOrNull ?: raw
+    } catch (_: Exception) { raw }
+}
+
 
 /**
  * Marmot/WhiteNoise interop relays.
@@ -105,7 +130,7 @@ suspend fun NostrRepository.getLocalMlsMessages(groupIdHex: String): List<MlsMes
                 MlsMessage(
                     id = "${msg.senderPubkey}_${msg.timestamp}",
                     senderPubkey = msg.senderPubkey,
-                    content = msg.content,
+                    content = mlsDisplayContent(msg.content),
                     timestamp = msg.timestamp.toLong(),
                     groupIdHex = groupIdHex,
                     senderProfile = profiles[msg.senderPubkey]
@@ -199,7 +224,11 @@ suspend fun NostrRepository.fetchMlsGroups(): List<MlsGroup> {
             // 2. Rust SQLite からグループ一覧（process success 後なので新規 join 済み group も含まれる）
             val ffiGroups = rustClient.mlsListGroups()
             val leftIds = cache.getLeftGroupIds()
-            val activeGroups = ffiGroups.filter { it.groupIdHex !in leftIds && isCurrentAccountMlsGroup(it.memberPubkeys) }
+            val activeGroups = ffiGroups.filter { ffi ->
+                ffi.groupIdHex !in leftIds &&
+                    isCurrentAccountMlsGroup(ffi.memberPubkeys) &&
+                    (!ffi.isDm || ffi.memberPubkeys.any { !it.equals(myPubkeyHex, ignoreCase = true) })
+            }
 
             // 3. メンバープロファイルエンリッチ
             val allPubkeys = activeGroups.flatMap { it.memberPubkeys }.distinct()
@@ -223,7 +252,7 @@ suspend fun NostrRepository.fetchMlsGroups(): List<MlsGroup> {
                     memberProfiles = ffi.memberPubkeys.mapNotNull { pk ->
                         profiles[pk]?.let { pk to it }
                     }.toMap(),
-                    lastMessage = lastMsg?.content ?: "",
+                    lastMessage = lastMsg?.content?.let { mlsDisplayContent(it) } ?: "",
                     lastMessageTime = lastMsg?.timestamp?.toLong() ?: ffi.createdAt.toLong()
                 )
             }.sortedByDescending { it.lastMessageTime }.also { result ->
@@ -256,13 +285,26 @@ suspend fun NostrRepository.fetchMlsMessages(groupIdHex: String, repairFull: Boo
             if (repairFull) {
                 mlsProcessedIds.remove(groupIdHex)
                 mlsMessageRetryQueues.remove(groupIdHex)
-                try { rustClient.mlsClearPendingCommit(groupIdHex) } catch (_: Exception) { }
+                mlsRetryableStateCounts.remove(groupIdHex)
+                mlsRetryableEventCooldownUntil.remove(groupIdHex)
+                // Do not clear pending commits as part of normal repair/catch-up.
+                // Clearing pending state before replay can make this client create
+                // application messages from an epoch peers have not observed. Explicit
+                // manual repair paths may still clear pending state when requested.
             }
             val processedIds = mlsProcessedIds.getOrPut(groupIdHex) {
                 java.util.concurrent.ConcurrentHashMap.newKeySet()
             }
-            val retryQueue = mlsMessageRetryQueues.getOrPut(groupIdHex) {
+            val retryQueue = if (repairFull) {
+                // Full repair must be deterministic and finite. Replaying stale retryQueue
+                // items after the fetched relay events can keep old out-of-order wrappers
+                // alive forever and make newly-created application messages diverge from
+                // the peer. Use the fresh relay result only.
                 java.util.concurrent.ConcurrentHashMap<String, NostrEvent>()
+            } else {
+                mlsMessageRetryQueues.getOrPut(groupIdHex) {
+                    java.util.concurrent.ConcurrentHashMap<String, NostrEvent>()
+                }
             }
 
             // 1. グループのリレーリストを取得。ログアウト/別アカウント後に
@@ -273,15 +315,23 @@ suspend fun NostrRepository.fetchMlsMessages(groupIdHex: String, repairFull: Boo
                 return@withContext emptyList()
             }
             val groupRelays = groupInfo.relays
+            val inboxRelays = resolveMlsInboxRelaysForMembers(groupInfo.memberPubkeys)
 
-            // デフォルトリレー + グループリレー + Marmot interop fallback を統合（重複排除）。
-            // iOS/WhiteNoise が group relay 外にも self-update/message を publish するケースを拾う。
-            val allRelays = mlsPublishRelays(groupRelays)
+            // デフォルトリレー + グループリレー + peer inbox + Marmot interop fallback を統合（重複排除）。
+            // iOS/WhiteNoise は group relay だけでなく sender/recipient inbox relay に Kind-445 を fanout する。
+            // Android 側も polling で peer inbox を読むことで iOS→Android が relay miss になる経路を防ぐ。
+            val allRelays = mlsPublishRelays(groupRelays + inboxRelays)
 
             android.util.Log.d("NostrRepository",
-                "fetchMlsMessages($groupIdHex): groupRelays=$groupRelays, allRelays=$allRelays")
+                "fetchMlsMessages($groupIdHex): groupRelays=$groupRelays, inboxRelays=$inboxRelays, allRelays=$allRelays")
 
             // 2. Kind-445 をグループのリレーから取得して未処理分を process
+            // After app restart, relay echoes that are older than the persisted MDK
+            // history can replay as state_not_ready and poison gap detection.
+            // If history exists, only process events newer than the history watermark.
+            val preHistoryWatermark = try {
+                rustClient.mlsGetMessageHistory(groupIdHex, 300u).maxOfOrNull { it.timestamp.toLong() } ?: 0L
+            } catch (_: Exception) { 0L }
             val filter = NostrClient.Filter(
                 kinds = listOf(NostrKind.MLS_GROUP_MESSAGE),
                 tags = mapOf("h" to listOf(groupIdHex)),
@@ -294,7 +344,10 @@ suspend fun NostrRepository.fetchMlsMessages(groupIdHex: String, repairFull: Boo
             } else {
                 client.fetchEvents(filter, timeoutMs = if (repairFull) 12_000 else 5_000)
             }.distinctBy { it.id }
+                .filter { event -> repairFull || (mlsRetryableEventCooldownUntil[groupIdHex]?.get(event.id) ?: 0L) <= System.currentTimeMillis() }
+                .filter { event -> preHistoryWatermark == 0L || event.createdAt >= (preHistoryWatermark - 5L) }
 
+            if (events.isNotEmpty()) recordMlsRelayHits(allRelays, events.size)
             android.util.Log.d("NostrRepository",
                 "fetchMlsMessages($groupIdHex): fetched ${events.size} Kind-445 events")
 
@@ -305,27 +358,53 @@ suspend fun NostrRepository.fetchMlsMessages(groupIdHex: String, repairFull: Boo
             var duplicates = 0
 
             fun processCandidate(event: NostrEvent): MlsProcessPolicy {
-                val shapePolicy = event.mlsKind445ShapePolicy(groupIdHex)
-                if (shapePolicy != null) return shapePolicy
+                val invalidReason = event.mlsKind445InvalidReason(groupIdHex)
+                if (invalidReason != null) {
+                    android.util.Log.w(
+                        "NostrRepository",
+                        "fetchMlsMessages($groupIdHex): drop invalid envelope id=${event.id} reason=$invalidReason h=${event.getTagValues("h")} author=${mlsLogPrefix(event.pubkey)} createdAt=${event.createdAt}"
+                    )
+                    return MlsProcessPolicy.Dropped
+                }
 
                 return try {
                     val eventJson = json.encodeToString(NostrEvent.serializer(), event)
-                    when (rustClient.mlsProcessMessageResult(groupIdHex, eventJson)) {
+                    when (val result = rustClient.mlsProcessMessageResult(groupIdHex, eventJson)) {
                         is uniffi.nurunuru.FfiMlsProcessResult.Application -> {
                             applied++
+                            android.util.Log.d(
+                                "NostrRepository",
+                                "fetchMlsMessages($groupIdHex): application id=${event.id} sender=${mlsLogPrefix(result.message.senderPubkey)} len=${result.message.content.length}"
+                            )
                             MlsProcessPolicy.Processed
                         }
                         is uniffi.nurunuru.FfiMlsProcessResult.StateUpdate -> {
-                            stateOnly++
-                            MlsProcessPolicy.StateUpdated
+                            val kind = result.kind
+                            android.util.Log.d(
+                                "NostrRepository",
+                                "fetchMlsMessages($groupIdHex): stateUpdate id=${event.id} kind=$kind"
+                            )
+                            when {
+                                kind.startsWith("unhandled:Unprocessable:missing_h_tag") ||
+                                    kind.startsWith("unhandled:Unprocessable:group_id_mismatch") ||
+                                    kind.startsWith("unhandled:Unprocessable:invalid_kind") -> MlsProcessPolicy.Dropped
+                                kind.startsWith("unhandled:Unprocessable") -> MlsProcessPolicy.Retryable
+                                else -> {
+                                    stateOnly++
+                                    MlsProcessPolicy.StateUpdated
+                                }
+                            }
                         }
                     }
                 } catch (e: Exception) {
-                    if (e.isRetryableMlsProcessError()) {
-                        MlsProcessPolicy.Retryable
-                    } else {
-                        MlsProcessPolicy.Dropped
-                    }
+                    val errKind = mlsProcessErrorKind(e)
+                    val permanent = e.isPermanentMlsProcessDropError()
+                    val action = if (permanent) "drop" else "retry"
+                    android.util.Log.w(
+                        "NostrRepository",
+                        "fetchMlsMessages($groupIdHex): process $action id=${event.id} err=$errKind h=${event.getTagValues("h")} author=${mlsLogPrefix(event.pubkey)} createdAt=${event.createdAt}"
+                    )
+                    if (permanent) MlsProcessPolicy.Dropped else MlsProcessPolicy.Retryable
                 }
             }
 
@@ -351,8 +430,18 @@ suspend fun NostrRepository.fetchMlsMessages(groupIdHex: String, repairFull: Boo
                         if (policy == MlsProcessPolicy.Dropped) dropped++
                     }
                     MlsProcessPolicy.Retryable -> {
-                        // relay out-of-order: do not mark processed; retry after state update or next fetch.
+                        // Relay out-of-order / state gap. Keep retryables in the active
+                        // pass queue even during repairFull so the later history-watermark
+                        // pruning can decide whether they are truly blocking. Previously
+                        // repairFull counted every retryable as a hard gap while the queue
+                        // was empty, so Talk stayed blocked even when local history was usable.
                         retryQueue[event.id] = event
+                        if (!repairFull) {
+                            val groupCooldowns = mlsRetryableEventCooldownUntil.getOrPut(groupIdHex) {
+                                java.util.concurrent.ConcurrentHashMap<String, Long>()
+                            }
+                            groupCooldowns[event.id] = System.currentTimeMillis() + 30_000L
+                        }
                         retryable++
                     }
                     MlsProcessPolicy.AlreadyProcessed -> Unit
@@ -390,7 +479,60 @@ suspend fun NostrRepository.fetchMlsMessages(groupIdHex: String, repairFull: Boo
                 "fetchMlsMessages($groupIdHex): applied=$applied stateOnly=$stateOnly dropped=$dropped retryable=$retryable duplicates=$duplicates retryQueued=${retryQueue.size}")
 
             // 3. Rust SQLite から全履歴（= single source of truth）
-            val history = rustClient.mlsGetMessageHistory(groupIdHex, 300u)
+            var history = rustClient.mlsGetMessageHistory(groupIdHex, 300u)
+            android.util.Log.d("NostrRepository", "fetchMlsMessages($groupIdHex): history count=${history.size}")
+
+            // Retryable state_not_ready can be a stale replay diagnostic for an
+            // already-persisted application message. Do not let old wrapper events
+            // permanently poison TalkVM send-target selection / send preflight.
+            // Only retryables newer than the local history watermark represent a
+            // real unresolved epoch gap that should block sending. This mirrors the
+            // iOS Talk implementation and fixes reinstall cases where Android keeps
+            // polling one old Kind-445 as state_not_ready while MDK history is usable.
+            val historyWatermark = history.maxOfOrNull { it.timestamp.toLong() } ?: 0L
+            val staleRetryIds = retryQueue.values
+                .filter { it.createdAt <= historyWatermark }
+                .map { it.id }
+                .toSet()
+            if (staleRetryIds.isNotEmpty()) {
+                // Remove stale retryables, not just from the counter. TalkVM uses
+                // mlsStateGapCount(), which also looks at retryQueue.size; leaving stale
+                // entries here kept gap=1 and caused Android sends to abort even after
+                // history count had advanced.
+                staleRetryIds.forEach { id ->
+                    retryQueue.remove(id)
+                    mlsRetryableEventCooldownUntil[groupIdHex]?.remove(id)
+                }
+            }
+            val blockingRetryQueued = retryQueue.values.count { it.createdAt > historyWatermark }
+            // Only retryables newer than local history should block sending. This applies
+            // to full repair too; otherwise historical state_not_ready diagnostics make
+            // mlsStateGapCount() remain >0 forever and Android aborts every send.
+            val blockingRetryable = blockingRetryQueued
+            if (retryable != blockingRetryable || staleRetryIds.isNotEmpty()) {
+                android.util.Log.d(
+                    "NostrRepository",
+                    "fetchMlsMessages($groupIdHex): stale retryables ignored for send block stale=" +
+                        staleRetryIds.size +
+                        " blocking=$blockingRetryQueued historyWatermark=$historyWatermark"
+                )
+            }
+            mlsRetryableStateCounts[groupIdHex] = blockingRetryable
+
+            // If this process previously marked Kind-445 events as processed but the MDK
+            // history is empty, the UI becomes permanently blank: later polls see only
+            // duplicates and never replay those events into SQLite. This happened after
+            // outbound send registered its own event id before it was visible in history.
+            // Clear the session-only skip cache and do one full replay.
+            if (!repairFull && history.isEmpty() && duplicates > 0 && processedIds.isNotEmpty()) {
+                android.util.Log.w(
+                    "NostrRepository",
+                    "fetchMlsMessages($groupIdHex): empty history with duplicates=$duplicates; clearing processedIds and replaying"
+                )
+                mlsProcessedIds.remove(groupIdHex)
+                retryQueue.clear()
+                return@withContext fetchMlsMessages(groupIdHex, repairFull = true)
+            }
 
             // 4. プロファイルエンリッチ
             val senderPubkeys = history.map { it.senderPubkey }.distinct()
@@ -400,7 +542,7 @@ suspend fun NostrRepository.fetchMlsMessages(groupIdHex: String, repairFull: Boo
                 MlsMessage(
                     id = "${msg.senderPubkey}_${msg.timestamp}",
                     senderPubkey = msg.senderPubkey,
-                    content = msg.content,
+                    content = mlsDisplayContent(msg.content),
                     timestamp = msg.timestamp.toLong(),
                     groupIdHex = groupIdHex,
                     senderProfile = profiles[msg.senderPubkey]
@@ -426,75 +568,23 @@ suspend fun NostrRepository.fetchMlsMessages(groupIdHex: String, repairFull: Boo
 private suspend fun NostrRepository.publishPendingMlsSelfUpdates(
     joinedGroupIds: Set<String> = emptySet()
 ) = withContext(Dispatchers.IO) {
-    val rustClient = client.getRustClient() ?: return@withContext
-
-    val retryGroupIds = try {
-        // thresholdSecs=0: Rust/MDK が self-update 必要と判断する group を全て retry 対象にする。
-        rustClient.mlsGroupsNeedingSelfUpdate(0uL)
-    } catch (e: Exception) {
-        android.util.Log.w("NostrRepository", "mlsGroupsNeedingSelfUpdate unavailable/failed: ${mlsRedactedError(e)}")
-        emptyList()
-    }
-
-    val targetGroupIds = (joinedGroupIds + retryGroupIds)
-        .map { it.trim() }
-        .filter { it.length == 64 && it.all { c -> c in '0'..'9' || c in 'a'..'f' || c in 'A'..'F' } }
-        .distinct()
-
-    if (targetGroupIds.isEmpty()) return@withContext
-
-    var success = 0
-    var failed = 0
-    for (groupIdHex in targetGroupIds) {
-        try {
-            val groupRelays = try {
-                rustClient.mlsGetGroupInfo(groupIdHex)?.relays ?: emptyList()
-            } catch (_: Exception) { emptyList() }
-            val recoveryCommit = rustClient.mlsCreateRecoveryCommit(groupIdHex)
-            val published = publishMlsKind445(recoveryCommit, mlsPublishRelays(groupRelays))
-            if (published) {
-                rustClient.mlsMergePendingCommit(groupIdHex)
-                prefs.setMlsSelfUpdateSuccessAt(groupIdHex, System.currentTimeMillis() / 1000)
-                success++
-                android.util.Log.d(
-                    "NostrRepository",
-                    "publishPendingMlsSelfUpdates: published+merged groupIdHex=$groupIdHex"
-                )
-            } else {
-                failed++
-                try { rustClient.mlsClearPendingCommit(groupIdHex) } catch (clearError: Exception) {
-                    android.util.Log.w(
-                        "NostrRepository",
-                        "publishPendingMlsSelfUpdates: clear pending failed groupIdHex=$groupIdHex: ${mlsRedactedError(clearError)}"
-                    )
-                }
-                android.util.Log.w(
-                    "NostrRepository",
-                    "publishPendingMlsSelfUpdates: publish failed; pending cleared for retry groupIdHex=$groupIdHex"
-                )
-            }
-        } catch (e: Exception) {
-            failed++
-            try { rustClient.mlsClearPendingCommit(groupIdHex) } catch (clearError: Exception) {
-                android.util.Log.w(
-                    "NostrRepository",
-                    "publishPendingMlsSelfUpdates: clear pending after error failed groupIdHex=$groupIdHex: ${mlsRedactedError(clearError)}"
-                )
-            }
-            android.util.Log.w(
-                "NostrRepository",
-                "publishPendingMlsSelfUpdates: failed groupIdHex=$groupIdHex: ${mlsRedactedError(e)}"
-            )
-        }
-    }
-
-    android.util.Log.d(
-        "NostrRepository",
-        "publishPendingMlsSelfUpdates: targets=${targetGroupIds.size} success=$success failed=$failed"
-    )
+    // Disabled for Marmot/WhiteNoise interop stability. Background self-update commits
+    // advance this device epoch and make peers miss later application messages.
+    android.util.Log.w("NostrRepository", "publishPendingMlsSelfUpdates: suppressed for interop joined=" + joinedGroupIds.size)
+    return@withContext
 }
 
 private val mlsMessageRetryQueues = java.util.concurrent.ConcurrentHashMap<String, MutableMap<String, NostrEvent>>()
+private val mlsRetryableStateCounts = java.util.concurrent.ConcurrentHashMap<String, Int>()
+private val mlsRetryableEventCooldownUntil = java.util.concurrent.ConcurrentHashMap<String, MutableMap<String, Long>>()
+private val mlsRelayHitScores = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+
+fun NostrRepository.hasMlsStateGaps(groupIdHex: String): Boolean = mlsStateGapCount(groupIdHex) > 0
+
+fun NostrRepository.mlsStateGapCount(groupIdHex: String): Int =
+    maxOf(mlsRetryableStateCounts[groupIdHex] ?: 0, mlsMessageRetryQueues[groupIdHex]?.size ?: 0)
+
 
 private enum class MlsProcessPolicy {
     Processed,
@@ -511,11 +601,18 @@ private fun String.isHex64(): Boolean =
  * Pre-FFI validation for Kind-445 envelope only. MLS payload is never logged or inspected here.
  * Drop malformed/wrong-group events idempotently; retry only events that have a valid envelope.
  */
-private fun NostrEvent.mlsKind445ShapePolicy(groupIdHex: String): MlsProcessPolicy? {
-    if (kind != NostrKind.MLS_GROUP_MESSAGE) return MlsProcessPolicy.Dropped
-    if (!id.isHex64() || !pubkey.isHex64() || !sig.isHex64()) return MlsProcessPolicy.Dropped
+private fun NostrEvent.mlsKind445InvalidReason(groupIdHex: String): String? {
+    if (kind != NostrKind.MLS_GROUP_MESSAGE) return "invalid_kind:${kind}"
+    if (!id.isHex64()) return "invalid_id"
+    if (!pubkey.isHex64()) return "invalid_pubkey"
+    // Some relay/client parsing paths can leave sig empty even for otherwise valid
+    // Nostr events. Do not pre-drop MLS Kind-445 here: Rust/MDK will validate the
+    // full event JSON and decide whether the envelope is processable. Pre-dropping
+    // caused all fetched MLS messages to be marked dropped=17 reason=invalid_sig,
+    // leaving Talk stuck on stale local history.
     val hTags = getTagValues("h")
-    if (hTags.none { it.equals(groupIdHex, ignoreCase = true) }) return MlsProcessPolicy.Dropped
+    if (hTags.isEmpty()) return "missing_h_tag"
+    if (hTags.none { it.equals(groupIdHex, ignoreCase = true) }) return "group_id_mismatch:${hTags.joinToString(",")}"
     return null
 }
 
@@ -523,44 +620,59 @@ private fun NostrEvent.mlsKind445ShapePolicy(groupIdHex: String): MlsProcessPoli
  * Classify FFI failures without logging payload/plaintext/secrets.
  * Retryable means relay out-of-order or local state not caught up yet; keep it out of processedIds.
  */
-private fun Exception.isRetryableMlsProcessError(): Boolean {
+private fun Exception.isPermanentMlsProcessDropError(): Boolean {
     val msg = (message ?: "").lowercase()
-    val droppedSignals = listOf(
-        "invalid event", "invalid kind", "wrong kind", "missing h", "wrong h", "group mismatch",
-        "bad signature", "invalid signature", "malformed", "deserialize", "json", "not a nostr event"
+    val permanentSignals = listOf(
+        "invalid_base64_content", "invalid base64", "malformed_content_too_short", "too_short",
+        "invalid kind", "wrong kind", "missing h", "wrong h", "group mismatch",
+        "bad signature", "invalid signature", "not a nostr event", "invalid event json"
     )
-    if (droppedSignals.any { msg.contains(it) }) return false
-
-    val retrySignals = listOf(
-        "epoch", "generation", "out of order", "pending", "state", "commit", "proposal",
-        "unknown sender", "sender", "member", "ratchet", "decrypt", "decryption", "welcome",
-        "not found", "does not exist", "missing", "stale", "future"
-    )
-    return retrySignals.any { msg.contains(it) }
+    return permanentSignals.any { msg.contains(it) }
 }
+
+private fun Exception.isRetryableMlsProcessError(): Boolean = !isPermanentMlsProcessDropError()
 
 suspend fun NostrRepository.sendMlsMessage(groupIdHex: String, content: String): Boolean {
     val rustClient = client.getRustClient() ?: return false
     return withContext(Dispatchers.IO) {
         try {
             // グループのリレーを動的追加（相手側クライアントが見れるように）
-            val groupRelays = try {
-                rustClient.mlsGetGroupInfo(groupIdHex)?.relays ?: emptyList()
-            } catch (_: Exception) { emptyList() }
+            val groupInfo = try { rustClient.mlsGetGroupInfo(groupIdHex) } catch (_: Exception) { null }
+            val groupRelays = groupInfo?.relays ?: emptyList()
+            val inboxRelays = resolveMlsInboxRelaysForMembers(groupInfo?.memberPubkeys.orEmpty())
+            val publishRelays = mlsPublishRelays(groupRelays + inboxRelays)
             for (relay in groupRelays) {
                 try { client.addRelay(relay) } catch (_: Exception) { }
             }
 
+            // Marmot MIP-02 interop: after Welcome/join, MDK can require a
+            // self-update before this installation's application messages are
+            // decryptable by the peer. Logs showed Android kind:445 events were
+            // fetched by iOS but stayed state_not_ready/redacted_error while
+            // iOS->Android worked. If Rust says this group needs self-update,
+            // publish+merge that commit first, wait a moment so relays order the
+            // commit before the following application message, then create the
+            // app message from the advanced epoch.
+            // Interop hardening: do NOT create/merge a self-update commit immediately
+            // before an application message. Peers may receive the following app message
+            // before the commit and then cannot decrypt it. iOS suppresses the same
+            // automatic self-update for WhiteNoise/Marmot interop.
+            val needsSelfUpdate = try {
+                rustClient.mlsGroupsNeedingSelfUpdate(0uL).any { it.equals(groupIdHex, ignoreCase = true) }
+            } catch (_: Exception) { false }
+            if (needsSelfUpdate) {
+                android.util.Log.w("NostrRepository", "sendMlsMessage: self-update needed but suppressed for interop group=" + groupIdHex)
+            }
+
             val ffiMsg = rustClient.mlsCreateMessage(groupIdHex, content)
-            val published = publishMlsKind445(ffiMsg, mlsPublishRelays(groupRelays))
+            val published = publishMlsKind445(ffiMsg, publishRelays)
             if (published) {
-                // 送信済みイベント ID を processedIds に登録 → relay 再取得時の二重復号防止
-                try {
-                    val eventObj = json.decodeFromString<NostrEvent>(ffiMsg.content)
-                    mlsProcessedIds.getOrPut(groupIdHex) {
-                        java.util.concurrent.ConcurrentHashMap.newKeySet()
-                    }.add(eventObj.id)
-                } catch (_: Exception) { }
+                // Do NOT pre-register the just-published event as processed. mlsCreateMessage()
+                // does not guarantee the application plaintext is already present in MDK
+                // history; if we skip our own relay echo, the sender UI can remain empty.
+                // The event will be marked processed only after mlsProcessMessageResult()
+                // stores/returns it during the next fetch.
+                android.util.Log.d("NostrRepository", "sendMlsMessage: published group=$groupIdHex relays=${mlsPublishRelays(groupRelays + inboxRelays).size}")
             }
             published
         } catch (e: Exception) {
@@ -582,19 +694,29 @@ suspend fun NostrRepository.createDmGroup(partnerPubkey: String): MlsGroup? {
             )
 
             val kpEvent = fetchKeyPackage(partnerPubkey, relays)
-            if (kpEvent != null) {
-                val kpJson = json.encodeToString(NostrEvent.serializer(),
-                    patchKeyPackageRelays(kpEvent, relays))
-                val addResult = rustClient.mlsAddMember(ffiGroup.groupIdHex, kpJson)
-                val addPublished = publishAddMemberCommitWelcomeAndMerge(
-                    groupIdHex = ffiGroup.groupIdHex,
-                    commitEventData = addResult.commitEventData,
-                    welcomeEventData = addResult.welcomeEventData,
-                    keyPackageEventId = kpEvent.id,
-                    publishRelays = mlsPublishRelays(ffiGroup.relays + relays),
-                    context = "createDmGroup"
+            if (kpEvent == null) {
+                android.util.Log.w(
+                    "NostrRepository",
+                    "createDmGroup: abort local-only DM; peer KeyPackage not found partner=" + mlsLogPrefix(partnerPubkey)
                 )
-                if (!addPublished) return@withContext null
+                cache.markGroupAsLeft(ffiGroup.groupIdHex)
+                return@withContext null
+            }
+            // MIP-00 identity/security: never mutate a peer-signed KeyPackage event.
+            val kpJson = json.encodeToString(NostrEvent.serializer(), kpEvent)
+            val addResult = rustClient.mlsAddMember(ffiGroup.groupIdHex, kpJson)
+            val inboxRelays = resolveMlsInboxRelaysForMembers(listOf(partnerPubkey))
+            val addPublished = publishAddMemberCommitWelcomeAndMerge(
+                groupIdHex = ffiGroup.groupIdHex,
+                commitEventData = addResult.commitEventData,
+                welcomeEventData = addResult.welcomeEventData,
+                keyPackageEventId = kpEvent.id,
+                publishRelays = mlsPublishRelays(ffiGroup.relays + relays + inboxRelays),
+                context = "createDmGroup"
+            )
+            if (!addPublished) {
+                cache.markGroupAsLeft(ffiGroup.groupIdHex)
+                return@withContext null
             }
 
             val freshGroup = try { rustClient.mlsGetGroupInfo(ffiGroup.groupIdHex) } catch (_: Exception) { null }
@@ -626,19 +748,21 @@ suspend fun NostrRepository.createGroupChat(name: String, memberPubkeys: List<St
                 name = name, adminPubkeys = listOf(myPubkeyHex), relays = relays
             )
 
+            val inboxRelays = resolveMlsInboxRelaysForMembers(memberPubkeys)
+
             // KeyPackage 取得: Kind 30443 + legacy 443。ローカル consumed set にある event id は再利用しない。
             for (memberPubkey in memberPubkeys.distinct()) {
                 val kpEvent = fetchKeyPackage(memberPubkey, relays) ?: continue
                 try {
-                    val kpJson = json.encodeToString(NostrEvent.serializer(),
-                        patchKeyPackageRelays(kpEvent, relays))
+                    // MIP-00 identity/security: never mutate a peer-signed KeyPackage event.
+                    val kpJson = json.encodeToString(NostrEvent.serializer(), kpEvent)
                     val addResult = rustClient.mlsAddMember(ffiGroup.groupIdHex, kpJson)
                     publishAddMemberCommitWelcomeAndMerge(
                         groupIdHex = ffiGroup.groupIdHex,
                         commitEventData = addResult.commitEventData,
                         welcomeEventData = addResult.welcomeEventData,
                         keyPackageEventId = kpEvent.id,
-                        publishRelays = mlsPublishRelays(ffiGroup.relays + relays),
+                        publishRelays = mlsPublishRelays(ffiGroup.relays + relays + inboxRelays),
                         context = "createGroupChat"
                     )
                 } catch (e: Exception) {
@@ -690,18 +814,19 @@ suspend fun NostrRepository.addMemberToGroup(groupIdHex: String, memberPubkey: S
         try {
             val relays = myMlsKeyPackageRelays().take(8)
             val kpEvent = fetchKeyPackage(memberPubkey, relays) ?: return@withContext false
-            val kpJson = json.encodeToString(NostrEvent.serializer(),
-                patchKeyPackageRelays(kpEvent, relays))
+            // MIP-00 identity/security: never mutate a peer-signed KeyPackage event.
+            val kpJson = json.encodeToString(NostrEvent.serializer(), kpEvent)
             val groupRelays = try {
                 rustClient.mlsGetGroupInfo(groupIdHex)?.relays ?: emptyList()
             } catch (_: Exception) { emptyList() }
+            val inboxRelays = resolveMlsInboxRelaysForMembers(listOf(memberPubkey))
             val addResult = rustClient.mlsAddMember(groupIdHex, kpJson)
             publishAddMemberCommitWelcomeAndMerge(
                 groupIdHex = groupIdHex,
                 commitEventData = addResult.commitEventData,
                 welcomeEventData = addResult.welcomeEventData,
                 keyPackageEventId = kpEvent.id,
-                publishRelays = mlsPublishRelays(groupRelays + relays),
+                publishRelays = mlsPublishRelays(groupRelays + relays + inboxRelays),
                 context = "addMemberToGroup"
             )
         } catch (e: Exception) {
@@ -755,7 +880,7 @@ fun NostrRepository.hideMlsGroupLocally(groupIdHex: String) {
 suspend fun NostrRepository.forceRepublishMyKeyPackageIfNeeded() {
     withContext(Dispatchers.IO) {
         try {
-            publishKeyPackage()
+            publishKeyPackage(forceNewMaterial = true)
             publishMlsRelayLists()
             android.util.Log.d("NostrRepository", "forceRepublishMyKeyPackageIfNeeded: republished key package + relay lists")
         } catch (e: Exception) {
@@ -769,7 +894,7 @@ private suspend fun NostrRepository.publishMlsRelayLists() {
     val inboxRelays = myMlsInboxRelays().take(12)
     val discoveryRelays = mlsDiscoveryRelays(keyPackageRelays + inboxRelays).take(20)
     if (keyPackageRelays.isEmpty() && inboxRelays.isEmpty()) return
-    val keyPackageTags = keyPackageRelays.map { listOf("relay", it) }
+    val keyPackageTags = keyPackageRelays.map { listOf("relay", it) } + listOf(listOf("alt", "MLS KeyPackage relay list"))
     val inboxTags = inboxRelays.map { listOf("relay", it) }
     for (relay in discoveryRelays) { try { client.addRelay(relay) } catch (_: Exception) { } }
     try {
@@ -791,25 +916,40 @@ suspend fun NostrRepository.ensureKeyPackagePublished() {
     withContext(Dispatchers.IO) {
         try {
             val consumedIds = prefs.mlsConsumedKeyPackageEventIds
-            val existing = client.fetchEvents(
+            val existing = client.fetchEventsFrom(
+                mlsDiscoveryRelays(),
                 NostrClient.Filter(
                     // Fetch both Marmot canonical 30443 and legacy 443 fallback.
                     kinds = listOf(NostrKind.MLS_KEY_PACKAGE, NostrKind.MLS_KEY_PACKAGE_LEGACY),
                     authors = listOf(pubkey), limit = 10
-                ), timeoutMs = 3_000
+                ), timeoutMs = 5_000
             ).filter { it.id.lowercase() !in consumedIds }
-            val latest = existing.maxByOrNull { it.createdAt }
+            val latest = existing
+                .filter { it.kind == NostrKind.MLS_KEY_PACKAGE }
+                .maxByOrNull { it.createdAt }
+                ?: existing.filter { it.kind == NostrKind.MLS_KEY_PACKAGE_LEGACY }.maxByOrNull { it.createdAt }
             val hasRelays = latest?.tags?.any { tag ->
                 tag.firstOrNull() == "relays" && tag.size > 1
             } ?: false
-            if (latest != null && hasRelays) {
-                if (prefs.mlsPublishedKeyPackageEventId?.equals(latest.id, ignoreCase = true) != true) {
-                    prefs.mlsPublishedKeyPackageEventId = latest.id
-                    prefs.mlsPublishedKeyPackageAt = latest.createdAt
-                }
+            val localPublishedId = prefs.mlsPublishedKeyPackageEventId
+            val localBackedRelayEvent = latest != null && hasRelays &&
+                localPublishedId?.equals(latest.id, ignoreCase = true) == true
+
+            // Do not trust arbitrary relay-visible KeyPackages as usable after reinstall,
+            // database reset, or old-build publication. A Welcome made from a stale public
+            // KeyPackage fails as missing_or_stale_key_package because the local MDK init_key
+            // material is not present. Only a KeyPackage we published from this installation
+            // (tracked by prefs.mlsPublishedKeyPackageEventId) is considered locally backed.
+            if (localBackedRelayEvent) {
+                publishMlsRelayLists()
                 return@withContext
             }
 
+            android.util.Log.d(
+                "NostrRepository",
+                "ensureKeyPackagePublished: publishing fresh local-backed KeyPackage latest=" +
+                    latest?.id.orEmpty() + " hasRelays=" + hasRelays + " local=" + localPublishedId.orEmpty()
+            )
             publishKeyPackage()
         } catch (e: Exception) {
             android.util.Log.w("NostrRepository", "ensureKeyPackagePublished: ${mlsRedactedError(e)}")
@@ -850,9 +990,10 @@ private suspend fun NostrRepository.rotateOwnKeyPackageAfterWelcome() {
         android.util.Log.w("NostrRepository", "rotateOwnKeyPackageAfterWelcome: best-effort delete failed: ${mlsRedactedError(e)}")
     }
 
+    val existingDTag = oldEvent?.takeIf { it.kind == NostrKind.MLS_KEY_PACKAGE }?.getTagValue("d")?.takeIf { it.isNotBlank() }
     prefs.mlsPublishedKeyPackageEventId = null
     prefs.mlsPublishedKeyPackageAt = 0L
-    publishKeyPackage()
+    publishKeyPackage(existingDTag = existingDTag)
 }
 
 // ─── Private Helpers ─────────────────────────────────────────────────────────
@@ -896,46 +1037,115 @@ private suspend fun NostrRepository.fetchKeyPackage(
     return best(client.fetchEventsFrom(discoveryRelays, kpFilter, timeoutMs = 6_000))
 }
 
-private fun patchKeyPackageRelays(kpEvent: NostrEvent, fallbackRelays: List<String>): NostrEvent {
-    val hasRelays = kpEvent.tags.any { tag -> tag.firstOrNull() == "relays" && tag.size > 1 }
-    if (hasRelays) return kpEvent
-    val relayTag = listOf("relays") + fallbackRelays
-    val patchedTags = kpEvent.tags.map { tag ->
-        if (tag.firstOrNull() == "relays") relayTag else tag
-    }.let { if (it.none { t -> t.firstOrNull() == "relays" }) it + listOf(relayTag) else it }
-    return kpEvent.copy(tags = patchedTags)
+
+/**
+ * Resolve recipient inbox relays (kind:10050) for Welcome/Kind-445 fanout.
+ * Mirrors Amethyst's computeRelayListToBroadcast fallback: prefer advertised inbox,
+ * then discovery/default relays. Empty/localhost/non-ws entries are ignored by canonicalMlsRelays().
+ */
+private suspend fun NostrRepository.resolveMlsInboxRelaysForMembers(pubkeys: List<String>): List<String> {
+    val targets = pubkeys.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+    if (targets.isEmpty()) return emptyList()
+    val filter = NostrClient.Filter(
+        kinds = listOf(NostrKind.DM_RELAY_LIST),
+        authors = targets,
+        limit = (targets.size * 3).coerceAtLeast(3)
+    )
+    val discoveryRelays = mlsDiscoveryRelays()
+    return try {
+        client.fetchEventsFrom(discoveryRelays, filter, timeoutMs = 5_000)
+            .sortedByDescending { it.createdAt }
+            .flatMap { ev -> ev.tags.filter { it.firstOrNull() == "relay" }.mapNotNull { it.getOrNull(1) } }
+            .let { canonicalMlsRelays(it) }
+    } catch (_: Exception) { emptyList() }
 }
 
-private suspend fun NostrRepository.publishKeyPackage() {
+
+private fun NostrRepository.mlsStableKeyPackageDTag(fallback: String? = null): String {
+    prefs.mlsKeyPackageStableDTag?.takeIf { it.isNotBlank() }?.let { return it }
+    val generated = fallback?.takeIf { it.isNotBlank() } ?: UUID.randomUUID().toString().lowercase()
+    prefs.mlsKeyPackageStableDTag = generated
+    return generated
+}
+
+private fun applyStableKeyPackageDTag(tags: List<List<String>>, dTag: String): List<List<String>> =
+    listOf(listOf("d", dTag)) + tags.filter { it.firstOrNull() != "d" }
+
+private suspend fun NostrRepository.publishKeyPackage(existingDTag: String? = null, forceNewMaterial: Boolean = false) {
     val rustClient = client.getRustClient() ?: return
     try {
         val kpData = rustClient.mlsCreateKeyPackage()
-        val tags = if (kpData.tags.any { it.firstOrNull() == "relays" && it.size > 1 }) {
-            kpData.tags
-        } else {
-            val relayUrls = myMlsKeyPackageRelays().take(12)
-            val relayTag = listOf("relays") + relayUrls
-            kpData.tags.map { tag ->
-                if (tag.firstOrNull() == "relays") relayTag else tag
-            }
-        }
-        // iOS parity: KeyPackages must be published to advertised KeyPackage relays,
-        // not only the general NIP-65 relay set. Rust publishEvent broadcasts to the
-        // currently connected relay pool, so add them before signing/publishing.
-        for (relay in myMlsKeyPackageRelays()) { try { client.addRelay(relay) } catch (_: Exception) { } }
+        val keyPackageRelays = myMlsKeyPackageRelays().take(12)
+        val discoveryRelays = mlsDiscoveryRelays(keyPackageRelays + myMlsInboxRelays()).take(20)
+        val relayTag = listOf("relays") + keyPackageRelays
+        val stableD = mlsStableKeyPackageDTag(existingDTag ?: kpData.dTag)
+        val tags30443 = applyStableKeyPackageDTag(kpData.tags.filter { it.firstOrNull() != "relays" }, stableD)
+            .let { base -> base + listOf(relayTag) }
+        val tags443 = (if (kpData.legacyTags.isNotEmpty()) kpData.legacyTags else tags30443.filter { it.firstOrNull() != "d" })
+            .filter { it.firstOrNull() != "relays" }
+            .let { base -> base + listOf(relayTag) }
 
-        val eventId = if (isExternalSigner()) {
-            val unsigned = rustClient.createUnsignedEvent(kpData.kind, kpData.content, tags, myPubkeyHex)
+        // Targeted discovery publish: add both KeyPackage relays and broad discovery relays
+        // before raw publishing so Amber/internal-signing paths reach Amethyst/WhiteNoise.
+        (keyPackageRelays + discoveryRelays).distinct().forEach { relay ->
+            try { client.addRelay(relay) } catch (_: Exception) { }
+        }
+
+        val eventId30443 = if (isExternalSigner()) {
+            val unsigned = rustClient.createUnsignedEvent(kpData.kind, kpData.content, tags30443, myPubkeyHex)
             signAndPublishGetId(unsigned)
         } else {
-            rustClient.publishEvent(kpData.kind, kpData.content, tags).takeIf { it.isNotEmpty() }
+            rustClient.publishEvent(kpData.kind, kpData.content, tags30443).takeIf { it.isNotEmpty() }
         }
+
+        // Marmot migration window (MDK 0.8 / spec May 2026): dual-publish a legacy
+        // kind:443 equivalent without the d tag so older WhiteNoise/Amethyst builds can invite us.
+        val eventId443 = try {
+            if (isExternalSigner()) {
+                val unsigned443 = rustClient.createUnsignedEvent(NostrKind.MLS_KEY_PACKAGE_LEGACY.toUInt(), kpData.content, tags443, myPubkeyHex)
+                signAndPublishGetId(unsigned443)
+            } else {
+                rustClient.publishEvent(NostrKind.MLS_KEY_PACKAGE_LEGACY.toUInt(), kpData.content, tags443).takeIf { it.isNotEmpty() }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("NostrRepository", "publishKeyPackage: legacy 443 publish failed: ${mlsRedactedError(e)}")
+            null
+        }
+
+        publishMlsRelayLists()
+
+        val eventId = eventId30443 ?: eventId443
         if (eventId != null) {
             prefs.mlsPublishedKeyPackageEventId = eventId
             prefs.mlsPublishedKeyPackageAt = System.currentTimeMillis() / 1000
         }
+        cleanupSupersededOwnKeyPackages(setOfNotNull(eventId30443, eventId443), stableD)
+        android.util.Log.d("NostrRepository", "publishKeyPackage: 30443=" + (eventId30443 != null) + " legacy443=" + (eventId443 != null) + " stableD=" + stableD + " forceNew=" + forceNewMaterial + " kpRelays=" + keyPackageRelays.size + " discovery=" + discoveryRelays.size)
     } catch (e: Exception) {
         android.util.Log.e("NostrRepository", "publishKeyPackage failed: ${mlsRedactedError(e)}")
+    }
+}
+
+private suspend fun NostrRepository.cleanupSupersededOwnKeyPackages(keepIds: Set<String>, stableD: String) {
+    val pubkey = prefs.publicKeyHex ?: return
+    val relays = mlsDiscoveryRelays(myMlsKeyPackageRelays() + myMlsInboxRelays()).take(12)
+    val filter = NostrClient.Filter(kinds = listOf(NostrKind.MLS_KEY_PACKAGE, NostrKind.MLS_KEY_PACKAGE_LEGACY), authors = listOf(pubkey), limit = 80)
+    try {
+        val events = client.fetchEventsFrom(relays, filter, timeoutMs = 5_000).distinctBy { it.id }
+        var deleted = 0
+        for (ev in events) {
+            if (ev.id in keepIds || ev.id.lowercase() in prefs.mlsConsumedKeyPackageEventIds) continue
+            val superseded = ev.kind == NostrKind.MLS_KEY_PACKAGE && ev.getTagValue("d") != stableD
+            val legacy = ev.kind == NostrKind.MLS_KEY_PACKAGE_LEGACY
+            if (superseded || legacy) {
+                try { deleteEvent(ev.id, "superseded MLS KeyPackage") } catch (_: Exception) { }
+                prefs.addMlsConsumedKeyPackageEventId(ev.id)
+                deleted++
+            }
+        }
+        if (deleted > 0) android.util.Log.d("NostrRepository", "cleanupSupersededOwnKeyPackages: deleted=" + deleted)
+    } catch (e: Exception) {
+        android.util.Log.w("NostrRepository", "cleanupSupersededOwnKeyPackages: " + mlsRedactedError(e))
     }
 }
 
@@ -968,7 +1178,25 @@ private fun NostrRepository.mlsDiscoveryRelays(extra: List<String> = emptyList()
     canonicalMlsRelays(extra + prefs.relays.toList() + myMlsKeyPackageRelays() + myMlsInboxRelays() + MLS_INTEROP_RELAYS)
 
 private fun NostrRepository.mlsPublishRelays(groupRelays: List<String> = emptyList()): List<String> =
-    canonicalMlsRelays(groupRelays + prefs.relays.toList() + myMlsInboxRelays() + MLS_INTEROP_RELAYS)
+    scoreAndSortMlsRelays(canonicalMlsRelays(groupRelays + prefs.relays.toList() + myMlsInboxRelays() + MLS_INTEROP_RELAYS))
+
+private fun scoreAndSortMlsRelays(relays: List<String>): List<String> {
+    val priority = mapOf(
+        "wss://yabu.me" to 100,
+        "wss://r.kojira.io" to 95,
+        "wss://relay.damus.io" to 90,
+        "wss://nos.lol" to 85,
+        "wss://relay.primal.net" to 80,
+        "wss://relay-jp.nostr.wirednet.jp" to 60,
+        "wss://relay.nostr.wirednet.jp" to -50
+    )
+    return relays.sortedWith(compareByDescending<String> { (mlsRelayHitScores[it] ?: 0) + (priority[it] ?: 0) }.thenBy { it })
+}
+
+private fun recordMlsRelayHits(relays: List<String>, eventCount: Int) {
+    if (eventCount <= 0) return
+    relays.forEach { relay -> mlsRelayHitScores.merge(relay, eventCount) { a, b -> (a + b).coerceAtMost(10_000) } }
+}
 
 private data class MlsRawEventSummary(
     val id: String,

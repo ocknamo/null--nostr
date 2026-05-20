@@ -273,18 +273,29 @@ function EmbeddedProfile({ pubkey, relays }) {
   )
 }
 
+// Format integer count: 1234 -> "1K" (iOS PostActions.swift と同じ整形)
+function formatActionCount(n) {
+  if (!n || n <= 0) return ''
+  if (n >= 1000) return `${Math.floor(n / 1000)}K`
+  return String(n)
+}
+
 // Main PostItem component
 export default function PostItem({
   post,
   profile,
   profiles,
   likeCount = 0,
+  repostCount = 0,
+  zapAmount = 0,
   hasLiked = false,
   hasReposted = false,
+  hasBookmarked = false,
   myReactionId = null,
   myRepostId = null,
   isLiking = false,
   isZapping = false,
+  isBookmarking = false,
   onLike,
   onUnlike,
   onRepost,
@@ -292,6 +303,9 @@ export default function PostItem({
   onZap,
   onZapLongPress,
   onZapLongPressEnd,
+  onBookmark,
+  onRepostLongPress,
+  onPostLongPress,
   onAvatarClick,
   onHashtagClick,
   onMute,
@@ -318,6 +332,12 @@ export default function PostItem({
   const menuButtonRef = useRef(null)
   const longPressTimerRef = useRef(null)
   const longPressTriggeredRef = useRef(false)
+  const zapLongPressTimerRef = useRef(null)
+  const zapLongPressTriggeredRef = useRef(false)
+  const repostLongPressTimerRef = useRef(null)
+  const repostLongPressTriggeredRef = useRef(false)
+  const postLongPressTimerRef = useRef(null)
+  const postLongPressTriggeredRef = useRef(false)
   const displayProfile = isRepost ? profiles?.[post.pubkey] : profile
 
   // Extract content warning tag (NIP-36)
@@ -725,11 +745,112 @@ export default function PostItem({
   }
 
   const handleRepostClick = () => {
+    // 長押しでquoteが発火した直後はクリックを抑制(iOS simultaneousGesture相当)
+    if (repostLongPressTriggeredRef.current) {
+      repostLongPressTriggeredRef.current = false
+      return
+    }
     if (hasReposted && myRepostId && onUnrepost) {
       onUnrepost(post, myRepostId)
     } else if (!hasReposted && onRepost) {
       onRepost(post)
     }
+  }
+
+  const handleRepostLongPressStart = () => {
+    repostLongPressTriggeredRef.current = false
+    if (repostLongPressTimerRef.current) {
+      clearTimeout(repostLongPressTimerRef.current)
+      repostLongPressTimerRef.current = null
+    }
+    if (onRepostLongPress) {
+      repostLongPressTimerRef.current = setTimeout(() => {
+        repostLongPressTriggeredRef.current = true
+        onRepostLongPress(post)
+      }, 500)
+    }
+  }
+
+  const handleRepostLongPressEnd = () => {
+    if (repostLongPressTimerRef.current) {
+      clearTimeout(repostLongPressTimerRef.current)
+      repostLongPressTimerRef.current = null
+    }
+  }
+
+  // 投稿全体の長押し → 返信モーダル (iOS PostRow .onLongPressGesture と同じ)
+  // ボタン/リンク/画像/動画など子インタラクティブ要素上では発火させない
+  const handlePostLongPressStart = (e) => {
+    if (!onPostLongPress) return
+    const target = e.target
+    if (target && typeof target.closest === 'function') {
+      if (target.closest('button, a, input, textarea, select, video, img, [role="button"]')) {
+        return
+      }
+    }
+    postLongPressTriggeredRef.current = false
+    if (postLongPressTimerRef.current) {
+      clearTimeout(postLongPressTimerRef.current)
+      postLongPressTimerRef.current = null
+    }
+    postLongPressTimerRef.current = setTimeout(() => {
+      postLongPressTriggeredRef.current = true
+      onPostLongPress(post)
+    }, 500)
+  }
+
+  const handlePostLongPressEnd = () => {
+    if (postLongPressTimerRef.current) {
+      clearTimeout(postLongPressTimerRef.current)
+      postLongPressTimerRef.current = null
+    }
+  }
+
+  // コンテキストメニュー(右クリック / モバイル長押し標準動作)も返信モーダルとして扱う
+  const handlePostContextMenu = (e) => {
+    if (!onPostLongPress) return
+    const target = e.target
+    if (target && typeof target.closest === 'function') {
+      if (target.closest('button, a, input, textarea, select, video, img, [role="button"]')) {
+        return
+      }
+    }
+    e.preventDefault()
+    onPostLongPress(post)
+  }
+
+  const handleBookmarkClick = () => {
+    if (onBookmark) onBookmark(post, hasBookmarked)
+  }
+
+  const handleZapClick = () => {
+    if (zapLongPressTriggeredRef.current) {
+      zapLongPressTriggeredRef.current = false
+      return
+    }
+    onZap?.(post)
+  }
+
+  const handleZapLongPressStart = () => {
+    zapLongPressTriggeredRef.current = false
+    if (zapLongPressTimerRef.current) {
+      clearTimeout(zapLongPressTimerRef.current)
+      zapLongPressTimerRef.current = null
+    }
+    if (onZapLongPress) {
+      zapLongPressTimerRef.current = setTimeout(() => {
+        zapLongPressTriggeredRef.current = true
+      }, 500)
+      onZapLongPress(post)
+    }
+  }
+
+  const handleZapLongPressEnd = () => {
+    if (zapLongPressTimerRef.current) {
+      clearTimeout(zapLongPressTimerRef.current)
+      zapLongPressTimerRef.current = null
+    }
+    onZapLongPressEnd?.()
   }
 
   const handleReport = () => {
@@ -755,7 +876,17 @@ export default function PostItem({
   }
 
   return (
-    <article className="px-4 py-3 lg:px-5 lg:py-4 relative transition-colors hover:bg-[var(--bg-secondary)]/30">
+    <article
+      className="px-4 py-3 lg:px-5 lg:py-4 relative transition-colors hover:bg-[var(--bg-secondary)]/30"
+      onTouchStart={handlePostLongPressStart}
+      onTouchEnd={handlePostLongPressEnd}
+      onTouchMove={handlePostLongPressEnd}
+      onTouchCancel={handlePostLongPressEnd}
+      onMouseDown={handlePostLongPressStart}
+      onMouseUp={handlePostLongPressEnd}
+      onMouseLeave={handlePostLongPressEnd}
+      onContextMenu={handlePostContextMenu}
+    >
       {/* Repost indicator */}
       {isRepost && repostedBy && (
         <div className="flex items-center gap-2 mb-2 text-[var(--text-tertiary)] text-xs">
@@ -1016,11 +1147,11 @@ export default function PostItem({
             </div>
           )}
           
-          {/* Actions */}
+          {/* Actions — iOS PostActions.swift と同じ 4 ボタン (Like / Repost / Zap=₿ / Bookmark) */}
           {showActions && (
             <div className="flex items-center justify-between mt-3">
-              <div className="flex items-center gap-8">
-                {/* Like - Thumbs Up (long-press for custom emoji reaction) */}
+              <div className="flex items-center gap-5">
+                {/* Like — thumbs-up (NIP-25). 長押しでカスタム絵文字リアクション */}
                 <button
                   onClick={handleLikeClick}
                   onTouchStart={handleLikeLongPressStart}
@@ -1030,21 +1161,36 @@ export default function PostItem({
                   onMouseUp={handleLikeLongPressEnd}
                   onMouseLeave={handleLikeLongPressEnd}
                   onContextMenu={(e) => e.preventDefault()}
-                  className={`action-btn flex items-center gap-1.5 text-sm ${
+                  aria-label="いいね"
+                  className={`action-btn flex items-center gap-1 text-sm ${
                     hasLiked ? 'text-[var(--line-green)]' : 'text-[var(--text-tertiary)]'
                   } ${isLiking ? 'like-animation' : ''}`}
                 >
-                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill={hasLiked ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.8">
+                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill={hasLiked ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M14 9V5a3 3 0 00-3-3l-4 9v11h11.28a2 2 0 002-1.7l1.38-9a2 2 0 00-2-2.3H14zM7 22H4a2 2 0 01-2-2v-7a2 2 0 012-2h3"/>
                   </svg>
-                  {likeCount > 0 && <span>{likeCount}</span>}
+                  {likeCount > 0 && <span>{formatActionCount(likeCount)}</span>}
                 </button>
 
-                {/* Repost */}
+                {/* Repost (NIP-18 Kind 6) — タップでリポスト、長押しで引用ポスト */}
                 <button
                   onClick={handleRepostClick}
-                  className={`action-btn flex items-center gap-1.5 text-sm ${
-                    hasReposted ? 'text-green-500' : 'text-[var(--text-tertiary)]'
+                  onTouchStart={handleRepostLongPressStart}
+                  onTouchEnd={handleRepostLongPressEnd}
+                  onTouchCancel={handleRepostLongPressEnd}
+                  onMouseDown={handleRepostLongPressStart}
+                  onMouseUp={handleRepostLongPressEnd}
+                  onMouseLeave={handleRepostLongPressEnd}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    if (onRepostLongPress) {
+                      repostLongPressTriggeredRef.current = true
+                      onRepostLongPress(post)
+                    }
+                  }}
+                  aria-label="リポスト"
+                  className={`action-btn flex items-center gap-1 text-sm ${
+                    hasReposted ? 'text-[var(--line-green)]' : 'text-[var(--text-tertiary)]'
                   }`}
                 >
                   <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -1053,26 +1199,50 @@ export default function PostItem({
                     <polyline points="7 23 3 19 7 15"/>
                     <path d="M21 13v2a4 4 0 01-4 4H3"/>
                   </svg>
+                  {repostCount > 0 && <span>{formatActionCount(repostCount)}</span>}
                 </button>
 
-                {/* Zap */}
+                {/* Zap — Bitcoin ₿ ロゴ (iOS BitcoinIcon と同じ). タップで quick zap, 長押しで金額入力 */}
                 <button
-                  onClick={() => onZap?.(post)}
-                  onTouchStart={() => onZapLongPress?.(post)}
-                  onTouchEnd={() => onZapLongPressEnd?.()}
-                  onMouseDown={() => onZapLongPress?.(post)}
-                  onMouseUp={() => onZapLongPressEnd?.()}
-                  onMouseLeave={() => onZapLongPressEnd?.()}
-                  className={`action-btn flex items-center gap-1.5 text-sm text-[var(--text-tertiary)] ${
-                    isZapping ? 'zap-animation text-yellow-500' : ''
+                  onClick={handleZapClick}
+                  onTouchStart={handleZapLongPressStart}
+                  onTouchEnd={handleZapLongPressEnd}
+                  onTouchCancel={handleZapLongPressEnd}
+                  onMouseDown={handleZapLongPressStart}
+                  onMouseUp={handleZapLongPressEnd}
+                  onMouseLeave={handleZapLongPressEnd}
+                  aria-label="ザップ"
+                  className={`action-btn flex items-center gap-1 text-sm text-[var(--text-tertiary)] ${
+                    isZapping ? 'zap-animation text-[var(--color-zap)]' : ''
                   }`}
                 >
-                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill={isZapping ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    {/* Bitcoin official ₿ — outline circle + filled glyph */}
+                    <circle cx="12" cy="12" r="10"/>
+                    <path
+                      d="M15.5 10.6c.16-1.1-.65-1.7-1.85-2.1l.39-1.55-.95-.24-.38 1.51c-.25-.06-.5-.12-.76-.18l.38-1.52-.95-.24-.39 1.56c-.2-.05-.41-.09-.61-.14l-1.31-.33-.25 1.01s.7.16.69.17c.39.1.46.35.45.55l-.44 1.78c.03.01.06.02.1.03l-.1-.03-.62 2.49c-.05.12-.17.3-.43.23 0 0-.69-.17-.69-.17l-.47 1.09 1.24.31c.23.06.46.12.68.18l-.39 1.58.95.24.39-1.56c.26.07.51.14.76.2l-.39 1.55.95.24.39-1.57c1.62.31 2.85.18 3.36-1.28.42-1.18-.02-1.86-.87-2.3.62-.14 1.09-.55 1.21-1.39zm-2.17 3.05c-.3 1.18-2.28.54-2.93.38l.52-2.09c.65.16 2.72.49 2.41 1.71zm.29-3.07c-.27 1.07-1.92.53-2.46.39l.47-1.9c.54.13 2.27.39 1.99 1.51z"
+                      fill="currentColor"
+                      stroke="none"
+                    />
+                  </svg>
+                  {zapAmount > 0 && <span>{formatActionCount(zapAmount)}</span>}
+                </button>
+
+                {/* Bookmark — NIP-51 Kind 10003. タップで追加/解除 (iOS BookmarkIcon と同じ) */}
+                <button
+                  onClick={handleBookmarkClick}
+                  disabled={isBookmarking || !onBookmark}
+                  aria-label="ブックマーク"
+                  className={`action-btn flex items-center text-sm ${
+                    hasBookmarked ? 'text-[var(--line-green)]' : 'text-[var(--text-tertiary)]'
+                  } ${isBookmarking ? 'opacity-50' : ''}`}
+                >
+                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill={hasBookmarked ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/>
                   </svg>
                 </button>
               </div>
-              
+
               {/* Client tag (via) */}
               {clientTag && (
                 <span className="text-[10px] text-[var(--text-tertiary)] opacity-60">

@@ -308,6 +308,13 @@ class AppPreferences(context: Context) {
         get() = plainPrefs.getLong(KEY_MLS_PUBLISHED_KEY_PACKAGE_AT, 0L)
         set(value) = plainPrefs.edit().putLong(KEY_MLS_PUBLISHED_KEY_PACKAGE_AT, value).apply()
 
+    var mlsKeyPackageStableDTag: String?
+        get() = plainPrefs.getString(KEY_MLS_KEY_PACKAGE_STABLE_D_TAG, null)
+        set(value) {
+            if (value.isNullOrBlank()) plainPrefs.edit().remove(KEY_MLS_KEY_PACKAGE_STABLE_D_TAG).apply()
+            else plainPrefs.edit().putString(KEY_MLS_KEY_PACKAGE_STABLE_D_TAG, value).apply()
+        }
+
     var mlsConsumedKeyPackageEventIds: Set<String>
         get() = plainPrefs.getStringSet(KEY_MLS_CONSUMED_KEY_PACKAGE_EVENT_IDS, emptySet()) ?: emptySet()
         set(value) = plainPrefs.edit()
@@ -399,6 +406,7 @@ class AppPreferences(context: Context) {
         private const val KEY_MLS_SELF_UPDATE_SUCCESS_PREFIX = "mls_self_update_success_at_"
         private const val KEY_MLS_PUBLISHED_KEY_PACKAGE_EVENT_ID = "mls_published_key_package_event_id"
         private const val KEY_MLS_PUBLISHED_KEY_PACKAGE_AT = "mls_published_key_package_at"
+        private const val KEY_MLS_KEY_PACKAGE_STABLE_D_TAG = "mls_keypackage_stable_d_tag_v1"
         private const val KEY_MLS_CONSUMED_KEY_PACKAGE_EVENT_IDS = "mls_consumed_key_package_event_ids"
         private const val KEY_MLS_KEY_PACKAGE_RELAYS = "mls_key_package_relays"
         private const val KEY_MLS_INBOX_RELAYS = "mls_inbox_relays"

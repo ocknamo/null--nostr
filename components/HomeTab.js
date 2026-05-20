@@ -21,6 +21,13 @@ import {
   fetchProfilesBatch,
   getAllCachedProfiles,
   fetchFollowListCached,
+  fetchBookmarkEventIds,
+  addBookmark,
+  removeBookmark,
+  fetchZapTotals,
+  fetchRepostCounts,
+  fetchLightningInvoice,
+  copyToClipboard,
   DEFAULT_RELAY,
   RELAYS
 } from '@/lib/nostr'
@@ -29,6 +36,8 @@ import { setCachedProfile, getCachedProfile, setCachedFollowList } from '@/lib/c
 import PostItem from './PostItem'
 import LongFormPostItem from './LongFormPostItem'
 import UserProfileView from './UserProfileView'
+import BookmarkListModal from './BookmarkListModal'
+import SettingsModal from './SettingsModal'
 import EmojiPicker from './EmojiPicker'
 import { NOSTR_KINDS } from '@/lib/constants'
 import BadgeDisplay, { clearBadgeCache } from './BadgeDisplay'
@@ -187,6 +196,9 @@ const HomeTab = forwardRef(function HomeTab({ pubkey, onLogout, onStartDM, onHas
   })
   const [showPostModal, setShowPostModal] = useState(false)
   const [newPost, setNewPost] = useState('')
+  // 引用ポスト (リポスト長押し) と 返信 (投稿長押し) のターゲット — iOS PostSheet と同じ NIP-10/NIP-18
+  const [quotePost, setQuotePost] = useState(null)
+  const [replyToPost, setReplyToPost] = useState(null)
   const [imageFiles, setImageFiles] = useState([])
   const [imagePreviews, setImagePreviews] = useState([])
   const [uploadingPostImage, setUploadingPostImage] = useState(false)
@@ -197,10 +209,15 @@ const HomeTab = forwardRef(function HomeTab({ pubkey, onLogout, onStartDM, onHas
   const [userReposts, setUserReposts] = useState(new Set())
   const [userReactionIds, setUserReactionIds] = useState({}) // eventId -> reactionEventId
   const [userRepostIds, setUserRepostIds] = useState({}) // eventId -> repostEventId
+  const [repostCounts, setRepostCounts] = useState({}) // eventId -> repost count
+  const [zapAmounts, setZapAmounts] = useState({}) // eventId -> total zap sats
+  const [userBookmarks, setUserBookmarks] = useState(new Set()) // bookmarked event ids
+  const [bookmarkingId, setBookmarkingId] = useState(null) // in-flight bookmark toggle
   const [likedPosts, setLikedPosts] = useState([]) // Posts user has liked
   const [activeSection, setActiveSection] = useState('posts') // 'posts' or 'likes'
   const [likeAnimating, setLikeAnimating] = useState(null)
   const [zapAnimating, setZapAnimating] = useState(null)
+  const [zapInFlight, setZapInFlight] = useState(false)
   const [copied, setCopied] = useState(false)
   const [viewingProfile, setViewingProfile] = useState(null)
   const [uploadingPicture, setUploadingPicture] = useState(false)
@@ -211,6 +228,8 @@ const HomeTab = forwardRef(function HomeTab({ pubkey, onLogout, onStartDM, onHas
   const [showCWInput, setShowCWInput] = useState(false) // Toggle CW input visibility
   const [showRecorder, setShowRecorder] = useState(false)
   const [recordedVideo, setRecordedVideo] = useState(null)
+  const [showBookmarkList, setShowBookmarkList] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
 
   // Speech to Text
   const handleTranscript = useCallback((text) => {
@@ -494,13 +513,16 @@ const HomeTab = forwardRef(function HomeTab({ pubkey, onLogout, onStartDM, onHas
 
       setPosts(allPosts)
 
-      // Fetch reactions for all posts (own posts + liked posts)
+      // Fetch reactions / reposts / zaps / bookmarks in parallel
+      // (iOS NostrRepository+Timeline.swift enrichPosts と同じ並列フェッチ)
       const allPostIds = [...allPosts.map(p => p.id), ...likedPostIds]
       if (allPostIds.length > 0) {
-        const reactionEvents = await fetchEvents(
-          { kinds: [7], '#e': allPostIds, limit: 500 },
-          RELAYS
-        )
+        const [reactionEvents, repostAgg, zapTotals, bookmarkIds] = await Promise.all([
+          fetchEvents({ kinds: [7], '#e': allPostIds, limit: 500 }, RELAYS),
+          fetchRepostCounts(allPostIds, pubkey),
+          fetchZapTotals(allPostIds),
+          pubkey ? fetchBookmarkEventIds(pubkey) : Promise.resolve([])
+        ])
 
         const reactionCounts = {}
         const myReactions = new Set()
@@ -520,23 +542,11 @@ const HomeTab = forwardRef(function HomeTab({ pubkey, onLogout, onStartDM, onHas
         setReactions(reactionCounts)
         setUserReactions(myReactions)
         setUserReactionIds(myReactionIds)
-
-        // Fetch user's reposts to track repost IDs
-        const myRepostEvents = await fetchEvents(
-          { kinds: [6], authors: [pubkey], limit: 100 },
-          RELAYS
-        )
-        const myReposts = new Set()
-        const myRepostIdsMap = {}
-        for (const repost of myRepostEvents) {
-          const targetId = repost.tags.find(t => t[0] === 'e')?.[1]
-          if (targetId) {
-            myReposts.add(targetId)
-            myRepostIdsMap[targetId] = repost.id
-          }
-        }
-        setUserReposts(myReposts)
-        setUserRepostIds(myRepostIdsMap)
+        setRepostCounts(repostAgg.counts)
+        setUserReposts(new Set(Object.keys(repostAgg.myRepostIds)))
+        setUserRepostIds(repostAgg.myRepostIds)
+        setZapAmounts(zapTotals)
+        setUserBookmarks(new Set(bookmarkIds))
       }
     } catch (e) {
       console.error('Failed to load posts:', e)
@@ -739,11 +749,33 @@ const HomeTab = forwardRef(function HomeTab({ pubkey, onLogout, onStartDM, onHas
         }
       }
 
+      // 引用ポスト (NIP-18): content 末尾に nostr:nevent... を埋め込む
+      if (quotePost) {
+        try {
+          const nevent = nip19.neventEncode({ id: quotePost.id })
+          content = content ? `${content}\n\nnostr:${nevent}` : `nostr:${nevent}`
+        } catch (e) {
+          console.error('Failed to encode nevent for quote:', e)
+        }
+      }
+
       const event = createEventTemplate(1, content)
       event.pubkey = pubkey
 
       // Add client tag
       event.tags = [...event.tags, ['client', 'nullnull']]
+
+      // 返信 (NIP-10): e + p タグ
+      if (replyToPost) {
+        event.tags.push(['e', replyToPost.id, '', 'reply'])
+        event.tags.push(['p', replyToPost.pubkey])
+      }
+
+      // 引用 (NIP-18): q + p タグ
+      if (quotePost) {
+        event.tags.push(['q', quotePost.id])
+        event.tags.push(['p', quotePost.pubkey])
+      }
 
       // Add emoji tags if any
       if (emojiTags.length > 0) {
@@ -792,7 +824,10 @@ const HomeTab = forwardRef(function HomeTab({ pubkey, onLogout, onStartDM, onHas
       const success = await publishEvent(signedEvent)
 
       if (success) {
-        setPosts([signedEvent, ...posts])
+        // 返信/引用ポストは自分のタイムラインに直接出すと文脈が崩れるので、新規投稿のみ追加
+        if (!replyToPost && !quotePost) {
+          setPosts([signedEvent, ...posts])
+        }
         setNewPost('')
         setImageFiles([])
         setImagePreviews([])
@@ -801,6 +836,8 @@ const HomeTab = forwardRef(function HomeTab({ pubkey, onLogout, onStartDM, onHas
         setContentWarning('')
         setShowCWInput(false)
         setShowPostModal(false)
+        setReplyToPost(null)
+        setQuotePost(null)
       }
     } catch (e) {
       console.error('Failed to post:', e)
@@ -907,6 +944,10 @@ const HomeTab = forwardRef(function HomeTab({ pubkey, onLogout, onStartDM, onHas
       if (success) {
         setUserReposts(prev => new Set([...prev, event.id]))
         setUserRepostIds(prev => ({ ...prev, [event.id]: signed.id }))
+        setRepostCounts(prev => ({
+          ...prev,
+          [event.id]: (prev[event.id] || 0) + 1
+        }))
       }
     } catch (e) {
       console.error('Failed to repost:', e)
@@ -931,21 +972,100 @@ const HomeTab = forwardRef(function HomeTab({ pubkey, onLogout, onStartDM, onHas
           delete newIds[event.id]
           return newIds
         })
+        setRepostCounts(prev => ({
+          ...prev,
+          [event.id]: Math.max(0, (prev[event.id] || 1) - 1)
+        }))
       }
     } catch (e) {
       console.error('Failed to unrepost:', e)
     }
   }
 
-  const handleZap = (event) => {
+  // Default zap amount (sats) — TimelineTab と同じ localStorage キーを共有
+  const getDefaultZapAmount = () => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('defaultZapAmount')
+      return saved ? parseInt(saved, 10) : 21
+    }
+    return 21
+  }
+
+  // Quick zap (single tap) — TimelineTab.handleZap と同じ動作で iOS Quick Zap に揃える
+  const handleZap = async (event) => {
     const postProfile = profiles[event.pubkey]
     if (!postProfile?.lud16) {
       alert('この投稿者はLightningアドレスを設定していません')
       return
     }
     setZapAnimating(event.id)
-    setTimeout(() => setZapAnimating(null), 300)
-    alert(`⚡ Zap送信\n\n対象: ${postProfile.name || shortenPubkey(event.pubkey)}\nLN: ${postProfile.lud16}`)
+    setTimeout(() => setZapAnimating(null), 600)
+
+    const amount = getDefaultZapAmount()
+    if (zapInFlight) return
+    try {
+      setZapInFlight(true)
+      const result = await fetchLightningInvoice(postProfile.lud16, amount)
+      if (result.invoice) {
+        const copied = await copyToClipboard(result.invoice)
+        if (copied) {
+          alert(`⚡ ${amount} sats のインボイスをコピーしました！\n\nお好きなLightningウォレットで支払いできます。`)
+        } else {
+          prompt('インボイスをコピーしてください:', result.invoice)
+        }
+      }
+    } catch (e) {
+      console.error('Failed to create invoice:', e)
+      alert(`インボイスの作成に失敗しました: ${e.message}`)
+    } finally {
+      setZapInFlight(false)
+    }
+  }
+
+  // Bookmark toggle (NIP-51 Kind 10003) — iOS NostrRepository+Bookmarks の add/remove と同じ振る舞い
+  const handleBookmark = async (event, wasBookmarked) => {
+    if (!pubkey || !event?.id) return
+    if (bookmarkingId === event.id) return
+    setBookmarkingId(event.id)
+    try {
+      if (wasBookmarked) {
+        const { ids } = await removeBookmark(pubkey, event.id)
+        setUserBookmarks(new Set(ids))
+      } else {
+        const { ids } = await addBookmark(pubkey, event.id)
+        setUserBookmarks(new Set(ids))
+      }
+    } catch (e) {
+      console.error('Bookmark toggle failed:', e)
+      alert(e.message || 'ブックマーク更新に失敗しました')
+    } finally {
+      setBookmarkingId(null)
+    }
+  }
+
+  // リポスト長押し → 引用ポスト (iOS PostRow onRepostLongPress → showQuoteSheet 相当)
+  const handleRepostLongPress = (event) => {
+    if (!event) return
+    setReplyToPost(null)
+    setQuotePost(event)
+    setShowPostModal(true)
+  }
+
+  // 投稿長押し → 返信モーダル (iOS PostRow .onLongPressGesture → showPostDetail 相当)
+  const handlePostLongPress = (event) => {
+    if (!event) return
+    setQuotePost(null)
+    setReplyToPost(event)
+    setShowPostModal(true)
+  }
+
+  // モーダルを閉じるとき replyTo / quotePost もクリア
+  const closePostModal = () => {
+    setShowPostModal(false)
+    setReplyToPost(null)
+    setQuotePost(null)
+    setImageFiles([])
+    setImagePreviews([])
   }
 
   const handleDelete = async (eventId) => {
@@ -971,12 +1091,29 @@ const HomeTab = forwardRef(function HomeTab({ pubkey, onLogout, onStartDM, onHas
       <header className="sticky top-0 z-40 header-blur border-b border-[var(--border-color)]">
         <div className="flex items-center justify-between px-4 h-12">
           <h1 className="text-lg font-semibold text-[var(--text-primary)]">ホーム</h1>
-          <button
-            onClick={onLogout}
-            className="text-sm text-[var(--text-secondary)] action-btn"
-          >
-            ログアウト
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setShowBookmarkList(true)}
+              aria-label="ブックマーク"
+              title="ブックマーク"
+              className="w-10 h-10 flex items-center justify-center text-[var(--text-secondary)] action-btn rounded-full"
+            >
+              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M5 4a1 1 0 011-1h12a1 1 0 011 1v17l-7-4-7 4V4z"/>
+              </svg>
+            </button>
+            <button
+              onClick={() => setShowSettings(true)}
+              aria-label="設定"
+              title="設定"
+              className="w-10 h-10 flex items-center justify-center text-[var(--text-secondary)] action-btn rounded-full"
+            >
+              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/>
+              </svg>
+            </button>
+          </div>
         </div>
       </header>
 
@@ -1390,16 +1527,18 @@ const HomeTab = forwardRef(function HomeTab({ pubkey, onLogout, onStartDM, onHas
 
       {/* Post Modal */}
       {showPostModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center modal-overlay" onClick={() => { setShowPostModal(false); setImageFiles([]); setImagePreviews([]) }}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center modal-overlay" onClick={closePostModal}>
           <div
             className="w-full h-full sm:h-auto sm:max-w-lg bg-[var(--bg-primary)] sm:rounded-2xl flex flex-col overflow-hidden animate-scaleIn"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between p-4 border-b border-[var(--border-color)] flex-shrink-0">
-              <button onClick={() => { setShowPostModal(false); setImageFiles([]); setImagePreviews([]) }} className="text-[var(--text-secondary)] action-btn whitespace-nowrap flex-shrink-0">
+              <button onClick={closePostModal} className="text-[var(--text-secondary)] action-btn whitespace-nowrap flex-shrink-0">
                 キャンセル
               </button>
-              <span className="font-semibold text-[var(--text-primary)] whitespace-nowrap flex-shrink-0">新規投稿</span>
+              <span className="font-semibold text-[var(--text-primary)] whitespace-nowrap flex-shrink-0">
+                {replyToPost ? '返信' : quotePost ? '引用投稿' : '新規投稿'}
+              </span>
               <button
                 onClick={handlePost}
                 disabled={posting || uploadingPostImage || (!newPost.trim() && imageFiles.length === 0)}
@@ -1409,6 +1548,27 @@ const HomeTab = forwardRef(function HomeTab({ pubkey, onLogout, onStartDM, onHas
               </button>
             </div>
             <div className="flex-1 p-4 pb-20 sm:pb-4 flex flex-col overflow-y-auto">
+              {/* 返信/引用ターゲット表示 */}
+              {(replyToPost || quotePost) && (
+                <div className="mb-3 p-3 rounded-lg border border-[var(--border-color)] bg-[var(--bg-secondary)]/50">
+                  <div className="flex items-center gap-2 mb-1.5 text-xs text-[var(--text-tertiary)]">
+                    {replyToPost ? (
+                      <>
+                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 00-4-4H4"/></svg>
+                        <span>返信先</span>
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>
+                        <span>引用元</span>
+                      </>
+                    )}
+                  </div>
+                  <p className="text-sm text-[var(--text-secondary)] line-clamp-3 whitespace-pre-wrap break-words">
+                    {(replyToPost || quotePost).content}
+                  </p>
+                </div>
+              )}
               {/* Video Preview */}
               {recordedVideo && (
                 <div className="mb-4 relative aspect-square w-full max-w-[300px] mx-auto overflow-hidden rounded-xl bg-black">
@@ -1469,7 +1629,7 @@ const HomeTab = forwardRef(function HomeTab({ pubkey, onLogout, onStartDM, onHas
                       ? 'text-transparent caret-[var(--text-primary)] absolute inset-0 z-10'
                       : 'text-[var(--text-primary)] relative'
                   }`}
-                  placeholder="いまどうしてる？"
+                  placeholder={replyToPost ? '返信を入力...' : quotePost ? 'コメントを追加...' : 'いまどうしてる？'}
                   autoFocus
                 />
                 {/* Visible preview layer - show when there are hashtags, emojis, or active STT */}
@@ -1721,8 +1881,10 @@ const HomeTab = forwardRef(function HomeTab({ pubkey, onLogout, onStartDM, onHas
                 const likeCount = reactions[post.id] || 0
                 const hasLiked = userReactions.has(post.id)
                 const hasReposted = userReposts.has(post.id)
+                const hasBookmarked = userBookmarks.has(post.id)
                 const isLiking = likeAnimating === post.id
                 const isZapping = zapAnimating === post.id
+                const isBookmarking = bookmarkingId === post.id
                 const ItemComponent = post.kind === NOSTR_KINDS.LONG_FORM ? LongFormPostItem : PostItem
 
                 return (
@@ -1736,17 +1898,24 @@ const HomeTab = forwardRef(function HomeTab({ pubkey, onLogout, onStartDM, onHas
                       profile={postProfile}
                       profiles={profiles}
                       likeCount={likeCount}
+                      repostCount={repostCounts[post.id] || 0}
+                      zapAmount={zapAmounts[post.id] || 0}
                       hasLiked={hasLiked}
                       hasReposted={hasReposted}
+                      hasBookmarked={hasBookmarked}
                       myReactionId={userReactionIds[post.id]}
                       myRepostId={userRepostIds[post.id]}
                       isLiking={isLiking}
                       isZapping={isZapping}
+                      isBookmarking={isBookmarking}
                       onLike={handleLike}
                       onUnlike={handleUnlike}
                       onRepost={handleRepost}
                       onUnrepost={handleUnrepost}
                       onZap={handleZap}
+                      onBookmark={handleBookmark}
+                      onRepostLongPress={handleRepostLongPress}
+                      onPostLongPress={handlePostLongPress}
                       onHashtagClick={onHashtagClick}
                       onDelete={handleDelete}
                       myPubkey={pubkey}
@@ -1782,8 +1951,10 @@ const HomeTab = forwardRef(function HomeTab({ pubkey, onLogout, onStartDM, onHas
                 const likeCount = reactions[post.id] || 0
                 const hasLiked = userReactions.has(post.id)
                 const hasReposted = userReposts.has(post.id)
+                const hasBookmarked = userBookmarks.has(post.id)
                 const isLiking = likeAnimating === post.id
                 const isZapping = zapAnimating === post.id
+                const isBookmarking = bookmarkingId === post.id
                 const ItemComponent = post.kind === NOSTR_KINDS.LONG_FORM ? LongFormPostItem : PostItem
 
                 return (
@@ -1797,17 +1968,24 @@ const HomeTab = forwardRef(function HomeTab({ pubkey, onLogout, onStartDM, onHas
                       profile={postProfile}
                       profiles={profiles}
                       likeCount={likeCount}
+                      repostCount={repostCounts[post.id] || 0}
+                      zapAmount={zapAmounts[post.id] || 0}
                       hasLiked={hasLiked}
                       hasReposted={hasReposted}
+                      hasBookmarked={hasBookmarked}
                       myReactionId={userReactionIds[post.id]}
                       myRepostId={userRepostIds[post.id]}
                       isLiking={isLiking}
                       isZapping={isZapping}
+                      isBookmarking={isBookmarking}
                       onLike={handleLike}
                       onUnlike={handleUnlike}
                       onRepost={handleRepost}
                       onUnrepost={handleUnrepost}
                       onZap={handleZap}
+                      onBookmark={handleBookmark}
+                      onRepostLongPress={handleRepostLongPress}
+                      onPostLongPress={handlePostLongPress}
                       onHashtagClick={onHashtagClick}
                       myPubkey={pubkey}
                       onAvatarClick={(targetPubkey) => {
@@ -1823,6 +2001,32 @@ const HomeTab = forwardRef(function HomeTab({ pubkey, onLogout, onStartDM, onHas
           )
         )}
       </div>
+
+      {/* Bookmark List Modal */}
+      {showBookmarkList && (
+        <BookmarkListModal
+          pubkey={pubkey}
+          onClose={() => setShowBookmarkList(false)}
+          onProfileClick={(targetPubkey) => {
+            setShowBookmarkList(false)
+            if (targetPubkey !== pubkey) {
+              setViewingProfile(targetPubkey)
+            }
+          }}
+          onHashtagClick={(hashtag) => {
+            setShowBookmarkList(false)
+            if (onHashtagClick) onHashtagClick(hashtag)
+          }}
+        />
+      )}
+
+      {/* Settings Modal (iOS AppSettingsView parity: プライバシー / 利用規約 / ログアウト) */}
+      {showSettings && (
+        <SettingsModal
+          onClose={() => setShowSettings(false)}
+          onLogout={onLogout}
+        />
+      )}
 
       {/* User Profile View */}
       {viewingProfile && (

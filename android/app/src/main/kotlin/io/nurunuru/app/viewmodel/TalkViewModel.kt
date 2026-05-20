@@ -12,13 +12,18 @@ import io.nurunuru.app.data.models.MlsMessage
 import io.nurunuru.app.data.models.UserProfile
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
 
 /**
  * Android Talk ViewModel for Marmot MLS conversations.
@@ -64,6 +69,25 @@ class TalkViewModel(
     private var didInitialLoad = false
     private var loadGroupsInFlight = false
     private var openingGroupInFlight = false
+    // Raw MLS groups from Rust/relays. UI collapses duplicate conversations by participant
+    // set, but open/send must still be able to scan every sibling group id.
+    private var allMlsGroups: List<MlsGroup> = emptyList()
+    private val autoRecoveredDivergedDmPartners = mutableSetOf<String>()
+    private val canonicalDmGroupByConversationKey = mutableMapOf<String, String>()
+    private val mlsGroupRetryCooldownUntil = mutableMapOf<String, Long>()
+    private val mlsPollHealth = mutableMapOf<String, MlsPollHealth>()
+    private var lastMessageActivityAt = System.currentTimeMillis()
+
+    private data class MlsPollHealth(
+        var polls: Int = 0,
+        var relaySweeps: Int = 0,
+        var errors: Int = 0,
+        var lastFetched: Int = 0,
+        var lastNormalized: Int = 0,
+        var lastGapCount: Int = 0,
+        var lastRelaySweep: Boolean = false
+    )
+
 
     /** Called by TalkScreen when the tab is actually shown. */
     fun loadGroupsIfNeeded() {
@@ -79,6 +103,7 @@ class TalkViewModel(
     fun clearStateAfterCacheClear() {
         messageStreamJob?.cancel()
         messageStreamJob = null
+        allMlsGroups = emptyList()
         _uiState.update {
             it.copy(
                 groups = emptyList(),
@@ -96,13 +121,18 @@ class TalkViewModel(
         if (loadGroupsInFlight) return
         loadGroupsInFlight = true
         viewModelScope.launch {
-            val cached = repository.getCachedMlsGroups().sortedByDescending { it.lastMessageTime }
-            _uiState.update { it.copy(groups = cached, isLoading = true, error = null) }
+            val cachedRaw = repository.getCachedMlsGroups().sortedByDescending { it.lastMessageTime }
+            allMlsGroups = cachedRaw
+            _uiState.update { it.copy(groups = collapseConversationGroups(cachedRaw), isLoading = true, error = null) }
             try {
-                val fetched = repository.fetchMlsGroups().sortedByDescending { it.lastMessageTime }
+                val fetchedRaw = repository.fetchMlsGroups().sortedByDescending { it.lastMessageTime }
+                allMlsGroups = fetchedRaw
+                val fetched = collapseConversationGroups(fetchedRaw)
                 _uiState.update { state ->
                     val active = state.activeGroup?.let { current ->
-                        fetched.firstOrNull { it.groupIdHex == current.groupIdHex } ?: current
+                        allMlsGroups.firstOrNull { it.groupIdHex == current.groupIdHex }
+                            ?: remapCollapsedConversation(current, fetched)
+                            ?: current
                     }
                     state.copy(groups = fetched, activeGroup = active, isLoading = false)
                 }
@@ -116,7 +146,7 @@ class TalkViewModel(
 
     fun openGroup(groupIdHex: String) {
         if (openingGroupInFlight) return
-        val requested = _uiState.value.groups.firstOrNull { it.groupIdHex == groupIdHex } ?: return
+        val requested = allGroupsForLookup().firstOrNull { it.groupIdHex == groupIdHex } ?: return
         openingGroupInFlight = true
         _uiState.update {
             it.copy(
@@ -136,51 +166,53 @@ class TalkViewModel(
                     _uiState.update { it.copy(messages = dedupeMessages(finalMessages), messagesLoading = false) }
                 }
 
-                // WhiteNoise/Marmot interop: if multiple DM groups with the same partner
-                // exist, prefer the group whose local/repair history contains peer messages.
-                if (requested.isDm) {
-                    val partner = requested.memberPubkeys.firstOrNull { it != myPubkeyHex }
-                    val candidates = (_uiState.value.groups.filter { candidate ->
-                        candidate.isDm && (partner == null || candidate.memberPubkeys.contains(partner))
-                    } + requested)
-                        .distinctBy { it.groupIdHex }
-                        .sortedWith(compareByDescending<MlsGroup> { it.lastMessageTime }.thenBy { it.groupIdHex })
-                        .take(8)
+                // UX rule: group id changes must not create a separate Talk when the
+                // participant public keys are the same. Scan sibling group ids with the
+                // same conversation key, choose the best send target, and merge all local
+                // histories into one visible Talk.
+                val candidates = siblingConversationGroups(requested)
+                    .sortedWith(compareByDescending<MlsGroup> { it.lastMessageTime }.thenBy { it.groupIdHex })
+                    .take(12)
 
-                    val scanned = candidates.map { candidate ->
-                        var local = if (candidate.groupIdHex == requested.groupIdHex) {
-                            finalMessages
-                        } else {
-                            repository.getLocalMlsMessages(candidate.groupIdHex)
-                        }
-                        if (local.none { it.senderPubkey != myPubkeyHex }) {
-                            try {
-                                local = withTimeout(30_000) {
-                                    repository.fetchMlsMessages(candidate.groupIdHex, repairFull = true)
-                                }
-                            } catch (_: Exception) {
-                                local
+                val scanned = candidates.map { candidate ->
+                    var local = if (candidate.groupIdHex == requested.groupIdHex) {
+                        finalMessages
+                    } else {
+                        repository.getLocalMlsMessages(candidate.groupIdHex)
+                    }
+                    if (local.none { it.senderPubkey != myPubkeyHex }) {
+                        try {
+                            local = withTimeout(30_000) {
+                                repository.fetchMlsMessages(candidate.groupIdHex, repairFull = true)
                             }
+                        } catch (_: Exception) {
+                            local
                         }
-                        candidate to local
                     }
-
-                    scanned.maxWithOrNull(compareBy<Pair<MlsGroup, List<MlsMessage>>> { entry ->
-                        entry.second.count { it.senderPubkey != myPubkeyHex }
-                    }.thenBy { entry ->
-                        entry.second.filter { it.senderPubkey != myPubkeyHex }.maxOfOrNull { it.timestamp } ?: 0L
-                    }.thenBy { entry ->
-                        entry.second.size
-                    }.thenBy { entry ->
-                        entry.second.maxOfOrNull { it.timestamp } ?: 0L
-                    }.thenBy { entry ->
-                        entry.first.lastMessageTime
-                    })?.let { best ->
-                        finalGroup = best.first
-                        finalMessages = best.second
-                    }
+                    candidate to local
                 }
 
+                scanned.maxWithOrNull(compareBy<Pair<MlsGroup, List<MlsMessage>>> { entry ->
+                    entry.second.count { it.senderPubkey != myPubkeyHex }
+                }.thenBy { entry ->
+                    entry.second.filter { it.senderPubkey != myPubkeyHex }.maxOfOrNull { it.timestamp } ?: 0L
+                }.thenBy { entry ->
+                    entry.second.size
+                }.thenBy { entry ->
+                    entry.second.maxOfOrNull { it.timestamp } ?: 0L
+                }.thenBy { entry ->
+                    entry.first.lastMessageTime
+                })?.let { best ->
+                    finalGroup = best.first
+                }
+                finalMessages = scanned.flatMap { it.second }
+                if (finalGroup.isDm) {
+                }
+
+                if (finalGroup.isDm && repository.mlsStateGapCount(finalGroup.groupIdHex) > 0) {
+                    finalGroup = recoverGapDmOnOpenIfNeeded(finalGroup)
+                    finalMessages = repository.getLocalMlsMessages(finalGroup.groupIdHex)
+                }
                 _uiState.update {
                     it.copy(
                         activeGroupId = finalGroup.groupIdHex,
@@ -212,12 +244,47 @@ class TalkViewModel(
         }
     }
 
+    private suspend fun selectCanonicalDmGroup(group: MlsGroup, allowPinned: Boolean = true): Pair<MlsGroup, String> {
+        val key = conversationKey(group)
+        val siblings = siblingConversationGroups(group)
+        val pinned = if (allowPinned) canonicalDmGroupByConversationKey[key]?.let { pinnedId -> siblings.firstOrNull { it.groupIdHex == pinnedId } } else null
+        if (pinned != null) return pinned to "canonical-pin"
+        val best = siblings.map { candidate ->
+            val local = repository.getLocalMlsMessages(candidate.groupIdHex)
+            val peerCount = local.count { it.senderPubkey != myPubkeyHex }
+            val myCount = local.count { it.senderPubkey == myPubkeyHex }
+            val latestPeer = local.filter { it.senderPubkey != myPubkeyHex }.maxOfOrNull { it.timestamp } ?: 0L
+            val latestAny = local.maxOfOrNull { it.timestamp } ?: 0L
+            candidate to listOf(if (peerCount > 0) 1L else 0L, if (myCount > 0) 1L else 0L, peerCount.toLong(), latestPeer, myCount.toLong(), local.size.toLong(), latestAny, if (candidate.groupIdHex == group.groupIdHex) 1L else 0L)
+        }.maxWithOrNull { a, b ->
+            val av = a.second; val bv = b.second
+            for (i in av.indices) { val c = av[i].compareTo(bv[i]); if (c != 0) return@maxWithOrNull c }
+            a.first.groupIdHex.compareTo(b.first.groupIdHex)
+        }?.first ?: group
+        val bestLocal = repository.getLocalMlsMessages(best.groupIdHex)
+        if (bestLocal.any { it.senderPubkey != myPubkeyHex }) canonicalDmGroupByConversationKey[key] = best.groupIdHex
+        return best to "peer-history"
+    }
+
     fun sendMessage(groupIdHex: String, content: String) {
         val trimmed = content.trim()
         if (trimmed.isBlank()) return
 
         viewModelScope.launch {
-            var group = _uiState.value.activeGroup ?: _uiState.value.groups.firstOrNull { it.groupIdHex == groupIdHex } ?: return@launch
+            var group = _uiState.value.activeGroup ?: allGroupsForLookup().firstOrNull { it.groupIdHex == groupIdHex } ?: return@launch
+
+            // DM convergence: prefer a gap-free pinned canonical group or the
+            // sibling that already has peer messages. Gap-bearing pins are invalidated.
+            if (group.isDm) {
+                val (best, reason) = selectCanonicalDmGroup(group, allowPinned = true)
+                if (best.groupIdHex != group.groupIdHex) {
+                    android.util.Log.w("TalkVM", "sendMessage: remap DM send target old=" + group.groupIdHex + " new=" + best.groupIdHex + " reason=" + reason)
+                    group = best
+                    _uiState.update { it.copy(activeGroupId = best.groupIdHex, activeGroup = best) }
+                    startMessageStream(best.groupIdHex)
+                }
+            }
+
 
             // Last-chance DM canonicalization: do not send to a self-only orphan duplicate.
             if (group.isDm && _uiState.value.messages.none { it.senderPubkey != myPubkeyHex } && siblingDmGroupIds(group).size > 1) {
@@ -226,19 +293,92 @@ class TalkViewModel(
                 group = _uiState.value.activeGroup ?: group
             }
 
-            // Critical Marmot interop rule: catch up before creating an application message.
+            // Catch up before send. If the current DM still has state gaps, never
+            // send into the old split epoch: that creates messages visible only locally.
             try {
-                val caughtUp = withTimeout(30_000) {
-                    repository.fetchMlsMessages(group.groupIdHex, repairFull = true)
+                val preGapCount = repository.mlsStateGapCount(group.groupIdHex)
+                val caughtUp = withTimeout(15_000) {
+                    // Send preflight must be non-destructive. A full repair replay clears
+                    // pending state and replays old wrappers; logs showed this created a
+                    // large transient gap immediately before Android sent, producing
+                    // kind:445 messages that iOS fetched but could only report as
+                    // state_not_ready. Normal polling/receive already keeps this group
+                    // current; do an incremental catch-up here and let remaining
+                    // non-stale gaps block the send rather than creating a ghost bubble.
+                    repository.fetchMlsMessages(group.groupIdHex, repairFull = false)
                 }
                 if (shouldReplaceMessages(_uiState.value.messages, caughtUp)) {
-                    _uiState.update { it.copy(messages = dedupeMessages(caughtUp)) }
+                    _uiState.update { it.copy(messages = dedupeMessages(_uiState.value.messages + caughtUp)) }
+                }
+                var postGapCount = repository.mlsStateGapCount(group.groupIdHex)
+                val partner = group.memberPubkeys.firstOrNull { it != myPubkeyHex }
+                // If incremental polling still sees a gap, do one relay-backed full replay
+                // before deciding to block. Logs from 23:10 showed Android had usable peer
+                // history but kept two stale state_not_ready wrappers in the retry queue,
+                // causing send abort while iOS considered the same group gap-free.
+                if (group.isDm && partner != null && postGapCount > 0) {
+                    val repaired = withTimeout(30_000) {
+                        repository.fetchMlsMessages(group.groupIdHex, repairFull = true)
+                    }
+                    if (shouldReplaceMessages(_uiState.value.messages, repaired)) {
+                        _uiState.update { it.copy(messages = dedupeMessages(_uiState.value.messages + repaired)) }
+                    }
+                    val repairedGap = repository.mlsStateGapCount(group.groupIdHex)
+                    android.util.Log.d(
+                        "TalkVM",
+                        "sendMessage: fullRepairBeforeBlock group=" + group.groupIdHex +
+                            " beforeGap=" + postGapCount + " afterGap=" + repairedGap +
+                            " repaired=" + repaired.size
+                    )
+                    postGapCount = repairedGap
+                }
+                val gapCount = postGapCount
+                android.util.Log.d(
+                    "TalkVM",
+                    "sendMessage: preflight group=" + group.groupIdHex +
+                        " preGap=" + preGapCount + " postGap=" + postGapCount + " gapCount=" + gapCount
+                )
+                if (group.isDm && partner != null && gapCount > 0) {
+                    canonicalDmGroupByConversationKey.remove(conversationKey(group))
+                    val (fallback, fallbackReason) = selectCanonicalDmGroup(group, allowPinned = false)
+                    val fallbackGap = repository.mlsStateGapCount(fallback.groupIdHex)
+                    if (fallback.groupIdHex != group.groupIdHex && fallbackGap == 0) {
+                        android.util.Log.w("TalkVM", "sendMessage: gap canonical replaced old=" + group.groupIdHex + " new=" + fallback.groupIdHex + " reason=" + fallbackReason)
+                        group = fallback
+                        _uiState.update { it.copy(activeGroupId = fallback.groupIdHex, activeGroup = fallback) }
+                        startMessageStream(fallback.groupIdHex)
+                    } else {
+                        val peerHistoryCount = _uiState.value.messages.count { it.senderPubkey != myPubkeyHex }
+                        val localHistoryCount = _uiState.value.messages.size
+                        if (peerHistoryCount > 0 || localHistoryCount > 0) {
+                            // Keep using the established DM. A residual gap here is usually an old relay replay;
+                            // creating a new group makes iOS/Android watch different talks.
+                            android.util.Log.w(
+                                "TalkVM",
+                                "sendMessage: ignoring residual MLS gap on established DM group=" + group.groupIdHex +
+                                    " gapCount=" + gapCount + " fallback=" + fallback.groupIdHex +
+                                    " fallbackGap=" + fallbackGap + " peerHistory=" + peerHistoryCount +
+                                    " localHistory=" + localHistoryCount
+                            )
+                        } else {
+                            _uiState.update { it.copy(error = "同期中です。少し待って再送してください") }
+                            android.util.Log.w(
+                                "TalkVM",
+                                "sendMessage: abort empty DM unresolved MLS gap group=" + group.groupIdHex +
+                                    " gapCount=" + gapCount + " fallback=" + fallback.groupIdHex +
+                                    " fallbackGap=" + fallbackGap
+                            )
+                            return@launch
+                        }
+                    }
                 }
             } catch (_: Exception) {
                 _uiState.update { it.copy(error = "同期中です。少し待ってから再送してください") }
                 return@launch
             }
 
+
+            lastMessageActivityAt = System.currentTimeMillis()
             val tempId = "local_${System.currentTimeMillis()}"
             val optimistic = MlsMessage(
                 id = tempId,
@@ -252,8 +392,19 @@ class TalkViewModel(
             try {
                 val success = withTimeout(30_000) { repository.sendMlsMessage(group.groupIdHex, trimmed) }
                 if (success) {
-                    val latest = repository.getLocalMlsMessages(group.groupIdHex).ifEmpty {
-                        repository.fetchMlsMessages(group.groupIdHex)
+                    lastMessageActivityAt = System.currentTimeMillis()
+                    val latest = if (group.isDm) {
+                        siblingConversationGroups(group).flatMap { g ->
+                            if (g.groupIdHex == group.groupIdHex) {
+                                repository.getLocalMlsMessages(g.groupIdHex).ifEmpty { repository.fetchMlsMessages(g.groupIdHex) }
+                            } else {
+                                repository.getLocalMlsMessages(g.groupIdHex)
+                            }
+                        }
+                    } else {
+                        repository.getLocalMlsMessages(group.groupIdHex).ifEmpty {
+                            repository.fetchMlsMessages(group.groupIdHex)
+                        }
                     }
                     _uiState.update { it.copy(messages = dedupeMessages(latest), error = null) }
                 } else {
@@ -291,23 +442,25 @@ class TalkViewModel(
                 // Interop safety: publish/refresh my KeyPackage and Marmot relay lists first.
                 repository.forceRepublishMyKeyPackageIfNeeded()
 
-                val currentGroups = if (_uiState.value.groups.isEmpty()) {
+                val currentGroups = if (allMlsGroups.isEmpty()) {
                     val fetched = repository.fetchMlsGroups()
-                    _uiState.update { it.copy(groups = fetched) }
+                    allMlsGroups = fetched
+                    _uiState.update { it.copy(groups = collapseConversationGroups(fetched)) }
                     fetched
                 } else {
-                    _uiState.value.groups
+                    allMlsGroups
                 }
-                val existing = currentGroups.firstOrNull { g -> g.isDm && g.memberPubkeys.contains(partnerPubkey) }
-                if (existing != null) {
-                    _uiState.update { it.copy(isLoading = false) }
-                    openGroup(existing.groupIdHex)
-                    return@launch
+                val existingDmGroups = currentGroups.filter { g -> g.isDm && g.memberPubkeys.contains(partnerPubkey) }
+                if (existingDmGroups.isNotEmpty()) {
+                    android.util.Log.w("TalkVM", "createDmConversation: force fresh DM; hiding split existing groups=" + existingDmGroups.map { it.groupIdHex.take(12) })
+                    existingDmGroups.forEach { repository.hideMlsGroupLocally(it.groupIdHex) }
+                    allMlsGroups = currentGroups.filterNot { g -> g.isDm && g.memberPubkeys.contains(partnerPubkey) }
                 }
 
                 val group = repository.createDmGroup(partnerPubkey)
                 if (group != null) {
-                    _uiState.update { it.copy(groups = (listOf(group) + currentGroups).distinctBy { g -> g.groupIdHex }, isLoading = false) }
+                    allMlsGroups = listOf(group)
+                    _uiState.update { it.copy(groups = listOf(group), isLoading = false) }
                     openGroup(group.groupIdHex)
                 } else {
                     _uiState.update { it.copy(isLoading = false, error = "相手のキーパッケージが見つかりません") }
@@ -325,7 +478,8 @@ class TalkViewModel(
             try {
                 val group = repository.createGroupChat(name, memberPubkeys)
                 if (group != null) {
-                    val groups = (listOf(group) + _uiState.value.groups).distinctBy { it.groupIdHex }
+                    allMlsGroups = (listOf(group) + allGroupsForLookup()).distinctBy { it.groupIdHex }
+                    val groups = collapseConversationGroups(allMlsGroups)
                     _uiState.update { it.copy(groups = groups, isLoading = false) }
                     openGroup(group.groupIdHex)
                 } else {
@@ -352,13 +506,14 @@ class TalkViewModel(
             }
             val partner = group.memberPubkeys.firstOrNull { it != myPubkeyHex }
             val groups = if (group.isDm && partner != null) {
-                _uiState.value.groups.filterNot { it.isDm && it.memberPubkeys.contains(partner) }
+                allGroupsForLookup().filterNot { it.isDm && it.memberPubkeys.contains(partner) }
             } else {
-                _uiState.value.groups.filter { it.groupIdHex != group.groupIdHex }
+                allGroupsForLookup().filter { it.groupIdHex != group.groupIdHex }
             }
+            allMlsGroups = groups
             _uiState.update {
                 it.copy(
-                    groups = groups,
+                    groups = collapseConversationGroups(groups),
                     activeGroupId = null,
                     activeGroup = null,
                     messages = emptyList(),
@@ -404,6 +559,15 @@ class TalkViewModel(
         }
     }
 
+    private suspend fun recoverGapDmOnOpenIfNeeded(group: MlsGroup): MlsGroup {
+        // Do not auto-create a new DM on transient/replayed MLS gaps.
+        // Auto fresh-DM churn caused Android to move to a group iOS was not watching.
+        if (group.isDm && repository.mlsStateGapCount(group.groupIdHex) > 0) {
+            android.util.Log.w("TalkVM", "recoverGapDmOnOpenIfNeeded: suppressed auto fresh DM group=" + group.groupIdHex)
+        }
+        return group
+    }
+
     private fun startMessageStream(groupIdHex: String) {
         messageStreamJob?.cancel()
         messageStreamJob = viewModelScope.launch {
@@ -411,16 +575,29 @@ class TalkViewModel(
                 delay(3_000)
                 if (_uiState.value.activeGroupId != groupIdHex) break
                 try {
-                    val messages = repository.fetchMlsMessages(groupIdHex)
-                    val normalized = dedupeMessages(messages)
-                    if (shouldReplaceMessages(_uiState.value.messages, normalized)) {
-                        _uiState.update { it.copy(messages = normalized) }
+                    val base = _uiState.value.activeGroup ?: allGroupsForLookup().firstOrNull { it.groupIdHex == groupIdHex }
+                    val messages = if (base != null) {
+                        val siblings = siblingConversationGroups(base).sortedWith(compareByDescending<MlsGroup> { it.lastMessageTime }.thenBy { it.groupIdHex }).take(24)
+                        coroutineScope { siblings.map { g -> async(Dispatchers.IO) { repository.fetchMlsMessages(g.groupIdHex) } }.awaitAll() }.flatten()
+                    } else repository.fetchMlsMessages(groupIdHex)
+                    val normalized = dedupeMessages(_uiState.value.messages + messages)
+                    val health = mlsPollHealth.getOrPut(groupIdHex) { MlsPollHealth() }
+                    health.polls++; health.relaySweeps++; health.lastFetched = messages.size; health.lastNormalized = normalized.size; health.lastGapCount = repository.mlsStateGapCount(groupIdHex); health.lastRelaySweep = true
+                    android.util.Log.d("TalkVM", "poll group=" + groupIdHex + " fetched=" + messages.size + " normalized=" + normalized.size + " current=" + _uiState.value.messages.size + " siblings=" + (base?.let { siblingConversationGroups(it).size } ?: 1) + " relayFetchAll=true health=" + mlsHealthSummary(groupIdHex))
+                    if (base != null && base.isDm && health.lastGapCount > 0 && normalized.isNotEmpty()) {
+                        recoverGapDmOnOpenIfNeeded(base)
+                        break
                     }
-                } catch (_: Exception) {
-                    // Keep polling non-fatal.
-                }
+                    if (shouldReplaceMessages(_uiState.value.messages, normalized)) _uiState.update { it.copy(messages = normalized) }
+                } catch (_: Exception) { mlsPollHealth.getOrPut(groupIdHex) { MlsPollHealth() }.errors++ }
             }
         }
+    }
+
+    private fun mlsHealthSummary(groupIdHex: String): String {
+        val h = mlsPollHealth[groupIdHex] ?: return "polls=0"
+        val cooldownLeft = maxOf(0L, (mlsGroupRetryCooldownUntil[groupIdHex] ?: 0L) - System.currentTimeMillis())
+        return "polls=${h.polls},sweeps=${h.relaySweeps},errors=${h.errors},fetched=${h.lastFetched},shown=${h.lastNormalized},gap=${h.lastGapCount},relaySweep=${h.lastRelaySweep},cooldownMs=$cooldownLeft"
     }
 
     fun repairCurrentGroup() {
@@ -468,15 +645,44 @@ class TalkViewModel(
     fun toggleLegacy() { _uiState.update { it.copy(showLegacy = !it.showLegacy) } }
     fun clearError() { _uiState.update { it.copy(error = null) } }
 
-    private fun siblingDmGroupIds(group: MlsGroup): List<String> {
-        val partner = group.memberPubkeys.firstOrNull { it != myPubkeyHex } ?: return emptyList()
-        return _uiState.value.groups
-            .filter { it.isDm && it.memberPubkeys.contains(partner) }
-            .map { it.groupIdHex }
+    private fun allGroupsForLookup(): List<MlsGroup> =
+        (allMlsGroups + _uiState.value.groups).distinctBy { it.groupIdHex }
+
+    private fun conversationKey(group: MlsGroup): String {
+        val members = group.memberPubkeys.map { it.lowercase() }.distinct().sorted()
+        return if (group.isDm) {
+            "dm:" + (members.firstOrNull { it != myPubkeyHex.lowercase() } ?: members.joinToString("|"))
+        } else {
+            "group:" + members.joinToString("|")
+        }
     }
 
+    private fun visibleConversationGroups(input: List<MlsGroup>): List<MlsGroup> =
+        input.filter { group -> !group.isDm || group.memberPubkeys.any { !it.equals(myPubkeyHex, ignoreCase = true) } }
+
+    private fun collapseConversationGroups(input: List<MlsGroup>): List<MlsGroup> =
+        visibleConversationGroups(input).groupBy { conversationKey(it) }
+            .values
+            .map { entries ->
+                entries.maxWithOrNull(compareBy<MlsGroup> { it.lastMessageTime }.thenBy { it.createdAt }.thenBy { it.groupIdHex })
+                    ?: entries.first()
+            }
+            .sortedWith(compareByDescending<MlsGroup> { it.lastMessageTime }.thenBy { it.groupIdHex })
+
+    private fun remapCollapsedConversation(group: MlsGroup, collapsed: List<MlsGroup>): MlsGroup? =
+        collapsed.firstOrNull { conversationKey(it) == conversationKey(group) }
+
+    private fun siblingConversationGroups(group: MlsGroup): List<MlsGroup> {
+        val key = conversationKey(group)
+        return allGroupsForLookup().filter { conversationKey(it) == key }
+            .distinctBy { it.groupIdHex }
+    }
+
+    private fun siblingDmGroupIds(group: MlsGroup): List<String> =
+        siblingConversationGroups(group).filter { it.isDm }.map { it.groupIdHex }
+
     private fun dedupeMessages(input: List<MlsMessage>): List<MlsMessage> =
-        input.associateBy { "${it.groupIdHex}|${it.senderPubkey}|${it.timestamp}|${it.content.trim()}" }
+        input.associateBy { "${it.senderPubkey}|${it.timestamp}|${it.content.trim()}" }
             .values
             .sortedWith(compareBy<MlsMessage> { it.timestamp }.thenBy { it.id })
 

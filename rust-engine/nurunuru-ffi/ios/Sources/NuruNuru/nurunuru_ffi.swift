@@ -536,27 +536,27 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
  * Holds a Tokio runtime for blocking-async bridging.
  */
 public protocol NuruNuruClientProtocol: AnyObject, Sendable {
-    
+
     /**
      * Add a relay and immediately connect to it.
      */
-    func addRelay(url: String) throws 
-    
+    func addRelay(url: String) throws
+
     /**
      * Connect to all configured relays.
      */
-    func connect() 
-    
+    func connect()
+
     /**
      * Return current relay connection statistics.
      */
     func connectionStats()  -> FfiConnectionStats
-    
+
     /**
      * Create an **unsigned** event of any kind for external signing.
      */
     func createUnsignedEvent(kind: UInt32, content: String, tags: [[String]], creatorPubkeyHex: String) throws  -> String
-    
+
     /**
      * Create an **unsigned** kind-1 text note JSON for external signing.
      *
@@ -564,34 +564,34 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * then the signed result given to `publish_raw_event`.
      */
     func createUnsignedNote(pubkeyHex: String, content: String) throws  -> String
-    
+
     /**
      * Create an **unsigned** text note with tags JSON for external signing.
      */
     func createUnsignedNoteWithTags(content: String, tags: [[String]], creatorPubkeyHex: String) throws  -> String
-    
+
     /**
      * Create an **unsigned** reaction (kind 7) JSON for external signing.
      */
     func createUnsignedReaction(eventIdHex: String, authorPubkeyHex: String, emoji: String, creatorPubkeyHex: String) throws  -> String
-    
+
     /**
      * Create an **unsigned** repost (kind 6) JSON for external signing.
      */
     func createUnsignedRepost(eventJson: String, creatorPubkeyHex: String) throws  -> String
-    
+
     /**
      * Delete an event (Kind 5, NIP-09).
      *
      * Returns the deletion event ID hex.
      */
     func deleteEvent(eventIdHex: String, reason: String?) throws  -> String
-    
+
     /**
      * Disconnect from all relays.
      */
-    func disconnect() throws 
-    
+    func disconnect() throws
+
     /**
      * Fetch events from connected relays using a NIP-01 JSON filter.
      *
@@ -606,7 +606,7 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * `timeout_secs` controls how long to wait for relay responses.
      */
     func fetchEventsFromRelay(filterJson: String, timeoutSecs: UInt32) throws  -> [String]
-    
+
     /**
      * Fetch events from specific relays only.
      *
@@ -615,12 +615,12 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * relays outside the default set.
      */
     func fetchEventsFromRelays(filterJson: String, relayUrls: [String], timeoutSecs: UInt32) throws  -> [String]
-    
+
     /**
      * Fetch the follow list for a user. Returns pubkey hex strings.
      */
     func fetchFollowList(pubkeyHex: String) throws  -> [String]
-    
+
     /**
      * Fetch the follow timeline for a set of authors (Kind 1 text notes).
      *
@@ -632,7 +632,12 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * follow list first via `fetch_follow_list` or the local app cache.
      */
     func fetchFollowTimeline(authors: [String], limit: UInt32) throws  -> [String]
-    
+
+    /**
+     * Fast follow timeline for first paint. No engagement/profile/quote enrich.
+     */
+    func fetchFollowTimelineFast(authors: [String], limit: UInt32, timeoutSecs: UInt32) throws  -> [String]
+
     /**
      * Connect to relays and fetch the global timeline (Kind 1 text notes,
      * no author filter). Returns up to `limit` events as serialised JSON
@@ -643,12 +648,17 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * Call `connect()` first so the relays are ready.
      */
     func fetchGlobalTimeline(limit: UInt32) throws  -> [String]
-    
+
+    /**
+     * Fast global timeline for first paint. Returns raw displayable events only.
+     */
+    func fetchGlobalTimelineFast(limit: UInt32, timeoutSecs: UInt32) throws  -> [String]
+
     /**
      * Fetch a user profile (kind 0 metadata). Returns `None` if not found.
      */
     func fetchProfile(pubkeyHex: String) throws  -> FfiUserProfile?
-    
+
     /**
      * Batch-fetch user profiles (kind 0 metadata).
      *
@@ -660,7 +670,7 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * profile event on any relay will be absent from the result.
      */
     func fetchProfiles(pubkeys: [String]) throws  -> [FfiUserProfile]
-    
+
     /**
      * Fetch the recommended "For You" timeline.
      *
@@ -673,32 +683,32 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * `user_geohash` — optional geohash from app settings (e.g. `"xn76u"`).
      */
     func fetchRecommendedTimeline(limit: UInt32, userGeohash: String?) throws  -> [String]
-    
+
     /**
      * Follow a user (publishes an updated kind-3 contact list).
      */
-    func followUser(targetPubkeyHex: String) throws 
-    
+    func followUser(targetPubkeyHex: String) throws
+
     /**
      * Format a Unix timestamp as a Japanese relative string (e.g. "3分").
      */
     func formatTimestamp(timestamp: UInt64)  -> String
-    
+
     /**
      * Get the recommended feed. Returns scored event metadata.
      */
     func getRecommendedFeed(limit: UInt32) throws  -> [FfiScoredPost]
-    
+
     /**
      * Set the current user's public key and load follow/mute lists.
      */
-    func login(pubkeyHex: String) throws 
-    
+    func login(pubkeyHex: String) throws
+
     /**
      * Mark a post as "not interested" to suppress it from the feed.
      */
-    func markNotInterested(eventId: String, authorPubkey: String) 
-    
+    func markNotInterested(eventId: String, authorPubkey: String)
+
     /**
      * Add a member to a group using their Kind-30443 KeyPackage event JSON.
      *
@@ -708,19 +718,19 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * The welcome's `gift_wrapped_event_json` is ready for `publish_raw_event`.
      */
     func mlsAddMember(groupIdHex: String, keyPackageEventJson: String) throws  -> FfiAddMemberResult
-    
+
     /**
      * Clear (rollback) pending MLS commit for recovery from stuck state.
      *
      * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
-    func mlsClearPendingCommit(groupIdHex: String) throws 
-    
+    func mlsClearPendingCommit(groupIdHex: String) throws
+
     /**
      * Create a new MLS group.
      */
     func mlsCreateGroup(name: String, adminPubkeys: [String], relays: [String]) throws  -> FfiMlsGroupInfo
-    
+
     /**
      * Generate a fresh MLS KeyPackage and return Kind-30443 event data (Marmot MIP-00).
      *
@@ -728,38 +738,38 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * signs it (internal key or Amber), then publishes via `publish_raw_event`.
      */
     func mlsCreateKeyPackage() throws  -> FfiKeyPackageEventData
-    
+
     /**
      * Encrypt an application message for a group (Kind 445 event data).
      *
      * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     func mlsCreateMessage(groupIdHex: String, content: String) throws  -> FfiEncryptedMessageData
-    
+
     /**
      * Create a recovery self-update commit event for stuck pending proposals.
      *
      * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     func mlsCreateRecoveryCommit(groupIdHex: String) throws  -> FfiEncryptedMessageData
-    
+
     /**
      * Delete consumed KeyPackage private/init-key material using the exact hash_ref returned at creation.
      */
-    func mlsDeleteConsumedKeyPackageByHashRef(hashRef: Data) throws 
-    
+    func mlsDeleteConsumedKeyPackageByHashRef(hashRef: Data) throws
+
     /**
      * Delete consumed KeyPackage private/init-key material from local MLS storage (MIP-02).
      */
-    func mlsDeleteConsumedKeyPackageFromEventJson(keyPackageEventJson: String) throws 
-    
+    func mlsDeleteConsumedKeyPackageFromEventJson(keyPackageEventJson: String) throws
+
     /**
      * Get metadata for a single MLS group.
      *
      * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     func mlsGetGroupInfo(groupIdHex: String) throws  -> FfiMlsGroupInfo
-    
+
     /**
      * Retrieve decrypted message history for a group from MDK's local SQLite.
      * Use this on app startup to restore history without re-processing relay events.
@@ -767,7 +777,7 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     func mlsGetMessageHistory(groupIdHex: String, limit: UInt64) throws  -> [FfiDecryptedMessage]
-    
+
     /**
      * Return Nostr group IDs (64-char hex Kind-445 `h` tag values) that need self-update.
      *
@@ -776,19 +786,19 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * can be passed directly to `mls_create_recovery_commit(group_id_hex)`.
      */
     func mlsGroupsNeedingSelfUpdate(thresholdSecs: UInt64) throws  -> [String]
-    
+
     /**
      * Leave a group. Returns the Kind-445 commit event data to publish.
      *
      * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     func mlsLeaveGroup(groupIdHex: String) throws  -> FfiEncryptedMessageData
-    
+
     /**
      * List all MLS groups the user belongs to.
      */
     func mlsListGroups() throws  -> [FfiMlsGroupInfo]
-    
+
     /**
      * Merge the pending MLS commit after successfully publishing the commit event to relays.
      *
@@ -798,51 +808,51 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      *
      * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
-    func mlsMergePendingCommit(groupIdHex: String) throws 
-    
+    func mlsMergePendingCommit(groupIdHex: String) throws
+
     /**
      * Backward-compatible wrapper used by older clients.
      *
      * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     func mlsProcessMessage(groupIdHex: String, eventJson: String) throws  -> FfiDecryptedMessage
-    
+
     /**
      * Process an incoming Kind-445 event and return a structured result.
      *
      * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     func mlsProcessMessageResult(groupIdHex: String, eventJson: String) throws  -> FfiMlsProcessResult
-    
+
     /**
      * Process an incoming Welcome event and join the group.
      *
      * Accepts both Kind 1059 (NIP-59 gift-wrapped, Marmot) and Kind 444 (legacy).
      */
     func mlsProcessWelcome(welcomeEventJson: String) throws  -> FfiMlsGroupInfo
-    
+
     /**
      * Remove a member from a group. Returns the Kind-445 commit event data.
      *
      * group_id_hex argument: external group id is Nostr group id, wrapper resolves to internal MLS group id.
      */
     func mlsRemoveMember(groupIdHex: String, memberPubkey: String) throws  -> FfiEncryptedMessageData
-    
+
     /**
      * Strictly validate a KeyPackage event JSON (MIP-00).
      *
      * Verifies required tags/capabilities and checks `i` tag against computed
      * KeyPackageRef by parsing the content through MDK.
      */
-    func mlsValidateKeyPackageEvent(keyPackageEventJson: String) throws 
-    
+    func mlsValidateKeyPackageEvent(keyPackageEventJson: String) throws
+
     /**
      * NIP-04 decrypt a message from a sender (legacy DM, Kind 4).
      *
      * Only available for internal-signer clients.
      */
     func nip04Decrypt(senderPubkeyHex: String, ciphertext: String) throws  -> String
-    
+
     /**
      * NIP-04 encrypt a message for a recipient (legacy DM, Kind 4).
      *
@@ -850,21 +860,21 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * Returns the ciphertext string suitable for use as a Kind-4 event content.
      */
     func nip04Encrypt(recipientPubkeyHex: String, plaintext: String) throws  -> String
-    
+
     /**
      * NIP-44 decrypt a message from a sender.
      *
      * Only available for internal-signer clients.
      */
     func nip44Decrypt(senderPubkeyHex: String, ciphertext: String) throws  -> String
-    
+
     /**
      * NIP-44 encrypt a message for a recipient (NIP-17 gift-wrap, seals, etc.).
      *
      * Only available for internal-signer clients.
      */
     func nip44Encrypt(recipientPubkeyHex: String, plaintext: String) throws  -> String
-    
+
     /**
      * Drain up to `max_count` buffered live events. Returns serialised JSON
      * strings. Returns an empty vec when no new events have arrived.
@@ -872,7 +882,7 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * Safe to call on a background thread; will return immediately.
      */
     func pollLiveEvents(subId: String, maxCount: UInt32)  -> [String]
-    
+
     /**
      * Generic event publisher for kinds without a dedicated method.
      *
@@ -883,13 +893,13 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * Returns the published event ID hex.
      */
     func publishEvent(kind: UInt32, content: String, tags: [[String]]) throws  -> String
-    
+
     /**
      * Publish a text note (kind 1). Returns the event ID hex.
      * For internal signers only — the engine signs with the stored private key.
      */
     func publishNote(content: String) throws  -> String
-    
+
     /**
      * Publish a text note with tags (Kind 1).
      *
@@ -897,7 +907,7 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * `[["e","<event-id>","","reply"],["p","<pubkey>"]]`
      */
     func publishNoteWithTags(content: String, tags: [[String]]) throws  -> String
-    
+
     /**
      * Publish a text note to specific relays only (NIP-70 relay selection).
      *
@@ -905,7 +915,7 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * will receive the event. Returns the signed event ID hex.
      */
     func publishNoteWithTagsToRelays(content: String, tags: [[String]], relayUrls: [String]) throws  -> String
-    
+
     /**
      * Publish an already-signed Nostr event JSON to all connected relays.
      *
@@ -914,7 +924,7 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * signed JSON here. Returns the event ID hex on success.
      */
     func publishRawEvent(eventJson: String) throws  -> String
-    
+
     /**
      * Query the local nostrdb cache by author pubkeys.
      *
@@ -922,14 +932,14 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * newest-first, up to `limit` results.
      */
     func queryLocal(authors: [String], limit: UInt32) throws  -> [String]
-    
+
     /**
      * Query the local nostrdb cache for the global timeline (no author filter).
      *
      * Returns serialised JSON strings of kind-1 events, newest-first, up to `limit`.
      */
     func queryLocalGlobal(limit: UInt32) throws  -> [String]
-    
+
     /**
      * React to an event (Kind 7, NIP-25).
      *
@@ -937,12 +947,12 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * emoji shortcode.  Returns the reaction event ID hex.
      */
     func react(eventIdHex: String, authorPubkeyHex: String, emoji: String) throws  -> String
-    
+
     /**
      * Record an engagement action (like / repost / reply) for personalisation.
      */
-    func recordEngagement(action: String, authorPubkey: String) 
-    
+    func recordEngagement(action: String, authorPubkey: String)
+
     /**
      * Repost an event (Kind 6, NIP-18).
      *
@@ -951,12 +961,12 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * Returns the repost event ID hex.
      */
     func repost(eventJson: String) throws  -> String
-    
+
     /**
      * Full-text search (NIP-50). Returns matching event ID hex strings.
      */
     func search(query: String, limit: UInt32) throws  -> [String]
-    
+
     /**
      * Send an encrypted DM (NIP-17).
      *
@@ -964,8 +974,8 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * conversations.  This method is kept for backwards compatibility during
      * the NIP-17 → NIP-EE migration period.
      */
-    func sendDm(recipientHex: String, content: String) throws 
-    
+    func sendDm(recipientHex: String, content: String) throws
+
     /**
      * Start a persistent relay subscription for live events.
      *
@@ -977,17 +987,17 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * with `since = now` so only new events (posted after this call) arrive.
      */
     func startLiveSubscription(authors: [String]) throws  -> String
-    
+
     /**
      * Cancel a live subscription and release all associated resources.
      */
-    func stopLiveSubscription(subId: String) throws 
-    
+    func stopLiveSubscription(subId: String) throws
+
     /**
      * Unfollow a user (publishes an updated kind-3 contact list).
      */
-    func unfollowUser(targetPubkeyHex: String) throws 
-    
+    func unfollowUser(targetPubkeyHex: String) throws
+
     /**
      * Update user profile (Kind 0, NIP-01).
      *
@@ -997,7 +1007,7 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * Returns the published event ID hex.
      */
     func updateProfile(metadataJson: String) throws  -> String
-    
+
 }
 /**
  * FFI-safe wrapper around the NuruNuru engine.
@@ -1065,7 +1075,7 @@ public convenience init(secretKeyHex: String)throws  {
         try! rustCall { uniffi_uniffi_nurunuru_fn_free_nurunuruclient(pointer, $0) }
     }
 
-    
+
     /**
      * Create a read-only client for users who sign externally (NIP-07 / Amber / NIP-46).
      *
@@ -1081,9 +1091,9 @@ public static func newReadOnly(pubkeyHex: String)throws  -> NuruNuruClient  {
     )
 })
 }
-    
 
-    
+
+
     /**
      * Add a relay and immediately connect to it.
      */
@@ -1093,7 +1103,7 @@ open func addRelay(url: String)throws   {try rustCallWithError(FfiConverterTypeN
     )
 }
 }
-    
+
     /**
      * Connect to all configured relays.
      */
@@ -1102,7 +1112,7 @@ open func connect()  {try! rustCall() {
     )
 }
 }
-    
+
     /**
      * Return current relay connection statistics.
      */
@@ -1112,7 +1122,7 @@ open func connectionStats() -> FfiConnectionStats  {
     )
 })
 }
-    
+
     /**
      * Create an **unsigned** event of any kind for external signing.
      */
@@ -1126,7 +1136,7 @@ open func createUnsignedEvent(kind: UInt32, content: String, tags: [[String]], c
     )
 })
 }
-    
+
     /**
      * Create an **unsigned** kind-1 text note JSON for external signing.
      *
@@ -1141,7 +1151,7 @@ open func createUnsignedNote(pubkeyHex: String, content: String)throws  -> Strin
     )
 })
 }
-    
+
     /**
      * Create an **unsigned** text note with tags JSON for external signing.
      */
@@ -1154,7 +1164,7 @@ open func createUnsignedNoteWithTags(content: String, tags: [[String]], creatorP
     )
 })
 }
-    
+
     /**
      * Create an **unsigned** reaction (kind 7) JSON for external signing.
      */
@@ -1168,7 +1178,7 @@ open func createUnsignedReaction(eventIdHex: String, authorPubkeyHex: String, em
     )
 })
 }
-    
+
     /**
      * Create an **unsigned** repost (kind 6) JSON for external signing.
      */
@@ -1180,7 +1190,7 @@ open func createUnsignedRepost(eventJson: String, creatorPubkeyHex: String)throw
     )
 })
 }
-    
+
     /**
      * Delete an event (Kind 5, NIP-09).
      *
@@ -1194,7 +1204,7 @@ open func deleteEvent(eventIdHex: String, reason: String?)throws  -> String  {
     )
 })
 }
-    
+
     /**
      * Disconnect from all relays.
      */
@@ -1203,7 +1213,7 @@ open func disconnect()throws   {try rustCallWithError(FfiConverterTypeNuruNuruFf
     )
 }
 }
-    
+
     /**
      * Fetch events from connected relays using a NIP-01 JSON filter.
      *
@@ -1225,7 +1235,7 @@ open func fetchEventsFromRelay(filterJson: String, timeoutSecs: UInt32)throws  -
     )
 })
 }
-    
+
     /**
      * Fetch events from specific relays only.
      *
@@ -1242,7 +1252,7 @@ open func fetchEventsFromRelays(filterJson: String, relayUrls: [String], timeout
     )
 })
 }
-    
+
     /**
      * Fetch the follow list for a user. Returns pubkey hex strings.
      */
@@ -1253,7 +1263,7 @@ open func fetchFollowList(pubkeyHex: String)throws  -> [String]  {
     )
 })
 }
-    
+
     /**
      * Fetch the follow timeline for a set of authors (Kind 1 text notes).
      *
@@ -1272,7 +1282,20 @@ open func fetchFollowTimeline(authors: [String], limit: UInt32)throws  -> [Strin
     )
 })
 }
-    
+
+    /**
+     * Fast follow timeline for first paint. No engagement/profile/quote enrich.
+     */
+open func fetchFollowTimelineFast(authors: [String], limit: UInt32, timeoutSecs: UInt32)throws  -> [String]  {
+    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeNuruNuruFfiError_lift) {
+    uniffi_uniffi_nurunuru_fn_method_nurunuruclient_fetch_follow_timeline_fast(self.uniffiClonePointer(),
+        FfiConverterSequenceString.lower(authors),
+        FfiConverterUInt32.lower(limit),
+        FfiConverterUInt32.lower(timeoutSecs),$0
+    )
+})
+}
+
     /**
      * Connect to relays and fetch the global timeline (Kind 1 text notes,
      * no author filter). Returns up to `limit` events as serialised JSON
@@ -1289,7 +1312,19 @@ open func fetchGlobalTimeline(limit: UInt32)throws  -> [String]  {
     )
 })
 }
-    
+
+    /**
+     * Fast global timeline for first paint. Returns raw displayable events only.
+     */
+open func fetchGlobalTimelineFast(limit: UInt32, timeoutSecs: UInt32)throws  -> [String]  {
+    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeNuruNuruFfiError_lift) {
+    uniffi_uniffi_nurunuru_fn_method_nurunuruclient_fetch_global_timeline_fast(self.uniffiClonePointer(),
+        FfiConverterUInt32.lower(limit),
+        FfiConverterUInt32.lower(timeoutSecs),$0
+    )
+})
+}
+
     /**
      * Fetch a user profile (kind 0 metadata). Returns `None` if not found.
      */
@@ -1300,7 +1335,7 @@ open func fetchProfile(pubkeyHex: String)throws  -> FfiUserProfile?  {
     )
 })
 }
-    
+
     /**
      * Batch-fetch user profiles (kind 0 metadata).
      *
@@ -1318,7 +1353,7 @@ open func fetchProfiles(pubkeys: [String])throws  -> [FfiUserProfile]  {
     )
 })
 }
-    
+
     /**
      * Fetch the recommended "For You" timeline.
      *
@@ -1338,7 +1373,7 @@ open func fetchRecommendedTimeline(limit: UInt32, userGeohash: String?)throws  -
     )
 })
 }
-    
+
     /**
      * Follow a user (publishes an updated kind-3 contact list).
      */
@@ -1348,7 +1383,7 @@ open func followUser(targetPubkeyHex: String)throws   {try rustCallWithError(Ffi
     )
 }
 }
-    
+
     /**
      * Format a Unix timestamp as a Japanese relative string (e.g. "3分").
      */
@@ -1359,7 +1394,7 @@ open func formatTimestamp(timestamp: UInt64) -> String  {
     )
 })
 }
-    
+
     /**
      * Get the recommended feed. Returns scored event metadata.
      */
@@ -1370,7 +1405,7 @@ open func getRecommendedFeed(limit: UInt32)throws  -> [FfiScoredPost]  {
     )
 })
 }
-    
+
     /**
      * Set the current user's public key and load follow/mute lists.
      */
@@ -1380,7 +1415,7 @@ open func login(pubkeyHex: String)throws   {try rustCallWithError(FfiConverterTy
     )
 }
 }
-    
+
     /**
      * Mark a post as "not interested" to suppress it from the feed.
      */
@@ -1391,7 +1426,7 @@ open func markNotInterested(eventId: String, authorPubkey: String)  {try! rustCa
     )
 }
 }
-    
+
     /**
      * Add a member to a group using their Kind-30443 KeyPackage event JSON.
      *
@@ -1408,7 +1443,7 @@ open func mlsAddMember(groupIdHex: String, keyPackageEventJson: String)throws  -
     )
 })
 }
-    
+
     /**
      * Clear (rollback) pending MLS commit for recovery from stuck state.
      *
@@ -1420,7 +1455,7 @@ open func mlsClearPendingCommit(groupIdHex: String)throws   {try rustCallWithErr
     )
 }
 }
-    
+
     /**
      * Create a new MLS group.
      */
@@ -1433,7 +1468,7 @@ open func mlsCreateGroup(name: String, adminPubkeys: [String], relays: [String])
     )
 })
 }
-    
+
     /**
      * Generate a fresh MLS KeyPackage and return Kind-30443 event data (Marmot MIP-00).
      *
@@ -1446,7 +1481,7 @@ open func mlsCreateKeyPackage()throws  -> FfiKeyPackageEventData  {
     )
 })
 }
-    
+
     /**
      * Encrypt an application message for a group (Kind 445 event data).
      *
@@ -1460,7 +1495,7 @@ open func mlsCreateMessage(groupIdHex: String, content: String)throws  -> FfiEnc
     )
 })
 }
-    
+
     /**
      * Create a recovery self-update commit event for stuck pending proposals.
      *
@@ -1473,7 +1508,7 @@ open func mlsCreateRecoveryCommit(groupIdHex: String)throws  -> FfiEncryptedMess
     )
 })
 }
-    
+
     /**
      * Delete consumed KeyPackage private/init-key material using the exact hash_ref returned at creation.
      */
@@ -1483,7 +1518,7 @@ open func mlsDeleteConsumedKeyPackageByHashRef(hashRef: Data)throws   {try rustC
     )
 }
 }
-    
+
     /**
      * Delete consumed KeyPackage private/init-key material from local MLS storage (MIP-02).
      */
@@ -1493,7 +1528,7 @@ open func mlsDeleteConsumedKeyPackageFromEventJson(keyPackageEventJson: String)t
     )
 }
 }
-    
+
     /**
      * Get metadata for a single MLS group.
      *
@@ -1506,7 +1541,7 @@ open func mlsGetGroupInfo(groupIdHex: String)throws  -> FfiMlsGroupInfo  {
     )
 })
 }
-    
+
     /**
      * Retrieve decrypted message history for a group from MDK's local SQLite.
      * Use this on app startup to restore history without re-processing relay events.
@@ -1521,7 +1556,7 @@ open func mlsGetMessageHistory(groupIdHex: String, limit: UInt64)throws  -> [Ffi
     )
 })
 }
-    
+
     /**
      * Return Nostr group IDs (64-char hex Kind-445 `h` tag values) that need self-update.
      *
@@ -1536,7 +1571,7 @@ open func mlsGroupsNeedingSelfUpdate(thresholdSecs: UInt64)throws  -> [String]  
     )
 })
 }
-    
+
     /**
      * Leave a group. Returns the Kind-445 commit event data to publish.
      *
@@ -1549,7 +1584,7 @@ open func mlsLeaveGroup(groupIdHex: String)throws  -> FfiEncryptedMessageData  {
     )
 })
 }
-    
+
     /**
      * List all MLS groups the user belongs to.
      */
@@ -1559,7 +1594,7 @@ open func mlsListGroups()throws  -> [FfiMlsGroupInfo]  {
     )
 })
 }
-    
+
     /**
      * Merge the pending MLS commit after successfully publishing the commit event to relays.
      *
@@ -1575,7 +1610,7 @@ open func mlsMergePendingCommit(groupIdHex: String)throws   {try rustCallWithErr
     )
 }
 }
-    
+
     /**
      * Backward-compatible wrapper used by older clients.
      *
@@ -1589,7 +1624,7 @@ open func mlsProcessMessage(groupIdHex: String, eventJson: String)throws  -> Ffi
     )
 })
 }
-    
+
     /**
      * Process an incoming Kind-445 event and return a structured result.
      *
@@ -1603,7 +1638,7 @@ open func mlsProcessMessageResult(groupIdHex: String, eventJson: String)throws  
     )
 })
 }
-    
+
     /**
      * Process an incoming Welcome event and join the group.
      *
@@ -1616,7 +1651,7 @@ open func mlsProcessWelcome(welcomeEventJson: String)throws  -> FfiMlsGroupInfo 
     )
 })
 }
-    
+
     /**
      * Remove a member from a group. Returns the Kind-445 commit event data.
      *
@@ -1630,7 +1665,7 @@ open func mlsRemoveMember(groupIdHex: String, memberPubkey: String)throws  -> Ff
     )
 })
 }
-    
+
     /**
      * Strictly validate a KeyPackage event JSON (MIP-00).
      *
@@ -1643,7 +1678,7 @@ open func mlsValidateKeyPackageEvent(keyPackageEventJson: String)throws   {try r
     )
 }
 }
-    
+
     /**
      * NIP-04 decrypt a message from a sender (legacy DM, Kind 4).
      *
@@ -1657,7 +1692,7 @@ open func nip04Decrypt(senderPubkeyHex: String, ciphertext: String)throws  -> St
     )
 })
 }
-    
+
     /**
      * NIP-04 encrypt a message for a recipient (legacy DM, Kind 4).
      *
@@ -1672,7 +1707,7 @@ open func nip04Encrypt(recipientPubkeyHex: String, plaintext: String)throws  -> 
     )
 })
 }
-    
+
     /**
      * NIP-44 decrypt a message from a sender.
      *
@@ -1686,7 +1721,7 @@ open func nip44Decrypt(senderPubkeyHex: String, ciphertext: String)throws  -> St
     )
 })
 }
-    
+
     /**
      * NIP-44 encrypt a message for a recipient (NIP-17 gift-wrap, seals, etc.).
      *
@@ -1700,7 +1735,7 @@ open func nip44Encrypt(recipientPubkeyHex: String, plaintext: String)throws  -> 
     )
 })
 }
-    
+
     /**
      * Drain up to `max_count` buffered live events. Returns serialised JSON
      * strings. Returns an empty vec when no new events have arrived.
@@ -1715,7 +1750,7 @@ open func pollLiveEvents(subId: String, maxCount: UInt32) -> [String]  {
     )
 })
 }
-    
+
     /**
      * Generic event publisher for kinds without a dedicated method.
      *
@@ -1734,7 +1769,7 @@ open func publishEvent(kind: UInt32, content: String, tags: [[String]])throws  -
     )
 })
 }
-    
+
     /**
      * Publish a text note (kind 1). Returns the event ID hex.
      * For internal signers only — the engine signs with the stored private key.
@@ -1746,7 +1781,7 @@ open func publishNote(content: String)throws  -> String  {
     )
 })
 }
-    
+
     /**
      * Publish a text note with tags (Kind 1).
      *
@@ -1761,7 +1796,7 @@ open func publishNoteWithTags(content: String, tags: [[String]])throws  -> Strin
     )
 })
 }
-    
+
     /**
      * Publish a text note to specific relays only (NIP-70 relay selection).
      *
@@ -1777,7 +1812,7 @@ open func publishNoteWithTagsToRelays(content: String, tags: [[String]], relayUr
     )
 })
 }
-    
+
     /**
      * Publish an already-signed Nostr event JSON to all connected relays.
      *
@@ -1792,7 +1827,7 @@ open func publishRawEvent(eventJson: String)throws  -> String  {
     )
 })
 }
-    
+
     /**
      * Query the local nostrdb cache by author pubkeys.
      *
@@ -1807,7 +1842,7 @@ open func queryLocal(authors: [String], limit: UInt32)throws  -> [String]  {
     )
 })
 }
-    
+
     /**
      * Query the local nostrdb cache for the global timeline (no author filter).
      *
@@ -1820,7 +1855,7 @@ open func queryLocalGlobal(limit: UInt32)throws  -> [String]  {
     )
 })
 }
-    
+
     /**
      * React to an event (Kind 7, NIP-25).
      *
@@ -1836,7 +1871,7 @@ open func react(eventIdHex: String, authorPubkeyHex: String, emoji: String)throw
     )
 })
 }
-    
+
     /**
      * Record an engagement action (like / repost / reply) for personalisation.
      */
@@ -1847,7 +1882,7 @@ open func recordEngagement(action: String, authorPubkey: String)  {try! rustCall
     )
 }
 }
-    
+
     /**
      * Repost an event (Kind 6, NIP-18).
      *
@@ -1862,7 +1897,7 @@ open func repost(eventJson: String)throws  -> String  {
     )
 })
 }
-    
+
     /**
      * Full-text search (NIP-50). Returns matching event ID hex strings.
      */
@@ -1874,7 +1909,7 @@ open func search(query: String, limit: UInt32)throws  -> [String]  {
     )
 })
 }
-    
+
     /**
      * Send an encrypted DM (NIP-17).
      *
@@ -1889,7 +1924,7 @@ open func sendDm(recipientHex: String, content: String)throws   {try rustCallWit
     )
 }
 }
-    
+
     /**
      * Start a persistent relay subscription for live events.
      *
@@ -1907,7 +1942,7 @@ open func startLiveSubscription(authors: [String])throws  -> String  {
     )
 })
 }
-    
+
     /**
      * Cancel a live subscription and release all associated resources.
      */
@@ -1917,7 +1952,7 @@ open func stopLiveSubscription(subId: String)throws   {try rustCallWithError(Ffi
     )
 }
 }
-    
+
     /**
      * Unfollow a user (publishes an updated kind-3 contact list).
      */
@@ -1927,7 +1962,7 @@ open func unfollowUser(targetPubkeyHex: String)throws   {try rustCallWithError(F
     )
 }
 }
-    
+
     /**
      * Update user profile (Kind 0, NIP-01).
      *
@@ -1943,7 +1978,7 @@ open func updateProfile(metadataJson: String)throws  -> String  {
     )
 })
 }
-    
+
 
 }
 
@@ -2043,7 +2078,7 @@ public struct FfiConverterTypeFfiAddMemberResult: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiAddMemberResult {
         return
             try FfiAddMemberResult(
-                commitEventData: FfiConverterTypeFfiEncryptedMessageData.read(from: &buf), 
+                commitEventData: FfiConverterTypeFfiEncryptedMessageData.read(from: &buf),
                 welcomeEventData: FfiConverterTypeFfiWelcomeEventData.read(from: &buf)
         )
     }
@@ -2113,7 +2148,7 @@ public struct FfiConverterTypeFfiConnectionStats: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiConnectionStats {
         return
             try FfiConnectionStats(
-                connectedRelays: FfiConverterUInt32.read(from: &buf), 
+                connectedRelays: FfiConverterUInt32.read(from: &buf),
                 totalRelays: FfiConverterUInt32.read(from: &buf)
         )
     }
@@ -2151,7 +2186,7 @@ public struct FfiDecryptedMessage {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(senderPubkey: String, content: String, timestamp: UInt64, 
+    public init(senderPubkey: String, content: String, timestamp: UInt64,
         /**
          * Nostr group id hex / Kind 445 h tag value.
          */groupIdHex: String) {
@@ -2201,9 +2236,9 @@ public struct FfiConverterTypeFfiDecryptedMessage: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiDecryptedMessage {
         return
             try FfiDecryptedMessage(
-                senderPubkey: FfiConverterString.read(from: &buf), 
-                content: FfiConverterString.read(from: &buf), 
-                timestamp: FfiConverterUInt64.read(from: &buf), 
+                senderPubkey: FfiConverterString.read(from: &buf),
+                content: FfiConverterString.read(from: &buf),
+                timestamp: FfiConverterUInt64.read(from: &buf),
                 groupIdHex: FfiConverterString.read(from: &buf)
         )
     }
@@ -2281,8 +2316,8 @@ public struct FfiConverterTypeFfiEncryptedMessageData: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiEncryptedMessageData {
         return
             try FfiEncryptedMessageData(
-                content: FfiConverterString.read(from: &buf), 
-                tags: FfiConverterSequenceSequenceString.read(from: &buf), 
+                content: FfiConverterString.read(from: &buf),
+                tags: FfiConverterSequenceSequenceString.read(from: &buf),
                 ephemeralPubkey: FfiConverterString.read(from: &buf)
         )
     }
@@ -2338,16 +2373,16 @@ public struct FfiKeyPackageEventData {
     public init(
         /**
          * Event kind: 30443 (Marmot MIP-00, addressable)
-         */kind: UInt32, content: String, 
+         */kind: UInt32, content: String,
         /**
          * Canonical kind:30443 tags (includes `d`)
-         */tags: [[String]], 
+         */tags: [[String]],
         /**
          * Legacy kind:443 tags (excludes `d`) for migration dual-publish.
-         */legacyTags: [[String]], 
+         */legacyTags: [[String]],
         /**
          * Canonical d-tag identifier for keypackage slot replacement.
-         */dTag: String, 
+         */dTag: String,
         /**
          * Serialized MDK KeyPackage hash_ref for exact local init-key cleanup after Welcome accept.
          */hashRef: Data) {
@@ -2407,11 +2442,11 @@ public struct FfiConverterTypeFfiKeyPackageEventData: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiKeyPackageEventData {
         return
             try FfiKeyPackageEventData(
-                kind: FfiConverterUInt32.read(from: &buf), 
-                content: FfiConverterString.read(from: &buf), 
-                tags: FfiConverterSequenceSequenceString.read(from: &buf), 
-                legacyTags: FfiConverterSequenceSequenceString.read(from: &buf), 
-                dTag: FfiConverterString.read(from: &buf), 
+                kind: FfiConverterUInt32.read(from: &buf),
+                content: FfiConverterString.read(from: &buf),
+                tags: FfiConverterSequenceSequenceString.read(from: &buf),
+                legacyTags: FfiConverterSequenceSequenceString.read(from: &buf),
+                dTag: FfiConverterString.read(from: &buf),
                 hashRef: FfiConverterData.read(from: &buf)
         )
     }
@@ -2472,7 +2507,7 @@ public struct FfiMlsGroupInfo {
          *
          * This is the external group id used across FFI/App boundaries; it is not
          * MDK/OpenMLS's internal MLS group id.
-         */groupIdHex: String, name: String, description: String, adminPubkeys: [String], memberPubkeys: [String], relays: [String], createdAt: UInt64, epoch: UInt64, 
+         */groupIdHex: String, name: String, description: String, adminPubkeys: [String], memberPubkeys: [String], relays: [String], createdAt: UInt64, epoch: UInt64,
         /**
          * MIP-01 v3 disappearing message duration in seconds.
          * None => disabled.
@@ -2553,15 +2588,15 @@ public struct FfiConverterTypeFfiMlsGroupInfo: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiMlsGroupInfo {
         return
             try FfiMlsGroupInfo(
-                groupIdHex: FfiConverterString.read(from: &buf), 
-                name: FfiConverterString.read(from: &buf), 
-                description: FfiConverterString.read(from: &buf), 
-                adminPubkeys: FfiConverterSequenceString.read(from: &buf), 
-                memberPubkeys: FfiConverterSequenceString.read(from: &buf), 
-                relays: FfiConverterSequenceString.read(from: &buf), 
-                createdAt: FfiConverterUInt64.read(from: &buf), 
-                epoch: FfiConverterUInt64.read(from: &buf), 
-                disappearingMessageSecs: FfiConverterOptionUInt64.read(from: &buf), 
+                groupIdHex: FfiConverterString.read(from: &buf),
+                name: FfiConverterString.read(from: &buf),
+                description: FfiConverterString.read(from: &buf),
+                adminPubkeys: FfiConverterSequenceString.read(from: &buf),
+                memberPubkeys: FfiConverterSequenceString.read(from: &buf),
+                relays: FfiConverterSequenceString.read(from: &buf),
+                createdAt: FfiConverterUInt64.read(from: &buf),
+                epoch: FfiConverterUInt64.read(from: &buf),
+                disappearingMessageSecs: FfiConverterOptionUInt64.read(from: &buf),
                 isDm: FfiConverterBool.read(from: &buf)
         )
     }
@@ -2651,9 +2686,9 @@ public struct FfiConverterTypeFfiScoredPost: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiScoredPost {
         return
             try FfiScoredPost(
-                eventId: FfiConverterString.read(from: &buf), 
-                pubkey: FfiConverterString.read(from: &buf), 
-                score: FfiConverterDouble.read(from: &buf), 
+                eventId: FfiConverterString.read(from: &buf),
+                pubkey: FfiConverterString.read(from: &buf),
+                score: FfiConverterDouble.read(from: &buf),
                 createdAt: FfiConverterUInt64.read(from: &buf)
         )
     }
@@ -2755,12 +2790,12 @@ public struct FfiConverterTypeFfiUserProfile: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiUserProfile {
         return
             try FfiUserProfile(
-                name: FfiConverterString.read(from: &buf), 
-                displayName: FfiConverterString.read(from: &buf), 
-                about: FfiConverterString.read(from: &buf), 
-                picture: FfiConverterString.read(from: &buf), 
-                nip05: FfiConverterString.read(from: &buf), 
-                lud16: FfiConverterString.read(from: &buf), 
+                name: FfiConverterString.read(from: &buf),
+                displayName: FfiConverterString.read(from: &buf),
+                about: FfiConverterString.read(from: &buf),
+                picture: FfiConverterString.read(from: &buf),
+                nip05: FfiConverterString.read(from: &buf),
+                lud16: FfiConverterString.read(from: &buf),
                 pubkey: FfiConverterString.read(from: &buf)
         )
     }
@@ -2806,10 +2841,10 @@ public struct FfiWelcomeEventData {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(recipientPubkey: String, 
+    public init(recipientPubkey: String,
         /**
          * NIP-59 gift-wrapped event JSON (Kind 1059), ready for `publish_raw_event`.
-         */giftWrappedEventJson: String, 
+         */giftWrappedEventJson: String,
         /**
          * Inner rumor JSON (Kind 444, unsigned) — for local storage/debugging.
          */innerRumorJson: String, tags: [[String]]) {
@@ -2859,9 +2894,9 @@ public struct FfiConverterTypeFfiWelcomeEventData: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiWelcomeEventData {
         return
             try FfiWelcomeEventData(
-                recipientPubkey: FfiConverterString.read(from: &buf), 
-                giftWrappedEventJson: FfiConverterString.read(from: &buf), 
-                innerRumorJson: FfiConverterString.read(from: &buf), 
+                recipientPubkey: FfiConverterString.read(from: &buf),
+                giftWrappedEventJson: FfiConverterString.read(from: &buf),
+                innerRumorJson: FfiConverterString.read(from: &buf),
                 tags: FfiConverterSequenceSequenceString.read(from: &buf)
         )
     }
@@ -2893,7 +2928,7 @@ public func FfiConverterTypeFfiWelcomeEventData_lower(_ value: FfiWelcomeEventDa
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
 public enum FfiMlsProcessResult {
-    
+
     case application(message: FfiDecryptedMessage
     )
     case stateUpdate(kind: String
@@ -2914,30 +2949,30 @@ public struct FfiConverterTypeFfiMlsProcessResult: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiMlsProcessResult {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        
+
         case 1: return .application(message: try FfiConverterTypeFfiDecryptedMessage.read(from: &buf)
         )
-        
+
         case 2: return .stateUpdate(kind: try FfiConverterString.read(from: &buf)
         )
-        
+
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: FfiMlsProcessResult, into buf: inout [UInt8]) {
         switch value {
-        
-        
+
+
         case let .application(message):
             writeInt(&buf, Int32(1))
             FfiConverterTypeFfiDecryptedMessage.write(message, into: &buf)
-            
-        
+
+
         case let .stateUpdate(kind):
             writeInt(&buf, Int32(2))
             FfiConverterString.write(kind, into: &buf)
-            
+
         }
     }
 }
@@ -2968,8 +3003,8 @@ extension FfiMlsProcessResult: Equatable, Hashable {}
 
 public enum NuruNuruFfiError: Swift.Error {
 
-    
-    
+
+
     case RuntimeError(String
     )
     case KeyError(String
@@ -2994,9 +3029,9 @@ public struct FfiConverterTypeNuruNuruFfiError: FfiConverterRustBuffer {
         let variant: Int32 = try readInt(&buf)
         switch variant {
 
-        
 
-        
+
+
         case 1: return .RuntimeError(
             try FfiConverterString.read(from: &buf)
             )
@@ -3015,28 +3050,28 @@ public struct FfiConverterTypeNuruNuruFfiError: FfiConverterRustBuffer {
     public static func write(_ value: NuruNuruFfiError, into buf: inout [UInt8]) {
         switch value {
 
-        
 
-        
-        
+
+
+
         case let .RuntimeError(v1):
             writeInt(&buf, Int32(1))
             FfiConverterString.write(v1, into: &buf)
-            
-        
+
+
         case let .KeyError(v1):
             writeInt(&buf, Int32(2))
             FfiConverterString.write(v1, into: &buf)
-            
-        
+
+
         case let .EngineError(v1):
             writeInt(&buf, Int32(3))
             FfiConverterString.write(v1, into: &buf)
-            
-        
+
+
         case .MlsStateUpdate:
             writeInt(&buf, Int32(4))
-        
+
         }
     }
 }
@@ -3368,7 +3403,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_follow_timeline() != 38806) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_follow_timeline_fast() != 32831) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_global_timeline() != 34592) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_global_timeline_fast() != 9225) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_fetch_profile() != 36544) {

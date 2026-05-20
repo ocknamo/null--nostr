@@ -283,7 +283,17 @@ private fun GroupChatScreen(
         topBar = {
             TopAppBar(
                 windowInsets = WindowInsets.statusBars,
-                title = { Text(title, fontWeight = FontWeight.SemiBold) },
+                title = {
+                    Column {
+                        Text(title, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        Text(
+                            "gid:" + group.groupIdHex.take(12) + " msg:" + messages.size,
+                            fontSize = 10.sp,
+                            color = LocalNuruColors.current.textTertiary,
+                            maxLines = 1
+                        )
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = { viewModel.closeGroup() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "戻る")
@@ -331,6 +341,7 @@ private fun GroupChatScreen(
                 },
                 onImageAttach = { imagePickerLauncher.launch("image/*") },
                 isSending = isSending,
+                activeGroupIdHex = uiState.activeGroup?.groupIdHex ?: group.groupIdHex,
                 myPubkeyHex = myPubkeyHex,
                 repository = repository
             )

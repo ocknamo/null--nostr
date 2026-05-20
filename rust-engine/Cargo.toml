@@ -20,16 +20,14 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
-# MIP-01 v3 (disappearing_message_secs) support is not in crates.io 0.7.1 yet.
-# Pin MDK crates to upstream git commit from branch:
-#   disappearing-messages-1-extension-v3
-# commit: e19dedf8b7b2e1d705de750e0513b69ebeb3a690
-mdk-core = { git = "https://github.com/marmot-protocol/mdk.git", rev = "e19dedf8b7b2e1d705de750e0513b69ebeb3a690", package = "mdk-core" }
-mdk-sqlite-storage = { git = "https://github.com/marmot-protocol/mdk.git", rev = "e19dedf8b7b2e1d705de750e0513b69ebeb3a690", package = "mdk-sqlite-storage" }
+# Pin MDK crates to upstream main for current Marmot MIP-00/01/02/03 support.
+# commit: 592a582cf421f87292fba11e5e23a3861b2ec9e0
+mdk-core = { git = "https://github.com/marmot-protocol/mdk.git", rev = "592a582cf421f87292fba11e5e23a3861b2ec9e0", package = "mdk-core" }
+mdk-sqlite-storage = { git = "https://github.com/marmot-protocol/mdk.git", rev = "592a582cf421f87292fba11e5e23a3861b2ec9e0", package = "mdk-sqlite-storage" }
 # Android cross-compilation of MDK's SQLCipher requires vendored OpenSSL;
 # otherwise libsqlite3-sys looks for host OpenSSL headers and FFI .so builds fail.
 rusqlite = { version = "0.37.0", features = ["bundled-sqlcipher-vendored-openssl"] }
-mdk-storage-traits = { git = "https://github.com/marmot-protocol/mdk.git", rev = "e19dedf8b7b2e1d705de750e0513b69ebeb3a690", package = "mdk-storage-traits" }
+mdk-storage-traits = { git = "https://github.com/marmot-protocol/mdk.git", rev = "592a582cf421f87292fba11e5e23a3861b2ec9e0", package = "mdk-storage-traits" }
 hex = "0.4"
 base64 = "0.22"
 

@@ -62,6 +62,7 @@ final class AppPreferences {
         static let mlsKeyPackageEventJsonById = "nurunuru_mls_keypackage_event_json_by_id"
         static let mlsKeyPackageHashRefById = "nurunuru_mls_keypackage_hash_ref_by_id"
         static let mlsConsumedKeyPackageEventIds = "nurunuru_mls_consumed_keypackage_event_ids"
+        static let mlsKeyPackageStableDTag = "nurunuru_mls_keypackage_stable_d_tag_v1"
         static let mlsRejectedWelcomeRetryAfterById = "nurunuru_mls_rejected_welcome_retry_after_by_id_v2"
         static let mlsKeyPackageRelays = "nurunuru_mls_key_package_relays"
         static let mlsInboxRelays = "nurunuru_mls_inbox_relays"
@@ -331,6 +332,17 @@ final class AppPreferences {
         }
     }
 
+    /// Stable d tag for Marmot kind:30443 KeyPackage.
+    /// Keep exactly one replaceable KeyPackage slot per install/account so debug reinstall
+    /// churn does not leave hundreds of active KPs on relays.
+    var mlsKeyPackageStableDTag: String? {
+        get { defaults.string(forKey: Keys.mlsKeyPackageStableDTag) }
+        set {
+            if let newValue, !newValue.isEmpty { defaults.set(newValue, forKey: Keys.mlsKeyPackageStableDTag) }
+            else { defaults.removeObject(forKey: Keys.mlsKeyPackageStableDTag) }
+        }
+    }
+
     /// KeyPackage event ids already consumed by MLS Welcome processing.
     /// Relay deletion is best-effort, so this local set is the source of truth
     /// for avoiding KeyPackage reuse after app relaunch.
@@ -399,6 +411,7 @@ final class AppPreferences {
          Keys.mlsKeyPackageEventJsonById,
          Keys.mlsKeyPackageHashRefById,
          Keys.mlsConsumedKeyPackageEventIds,
+         Keys.mlsKeyPackageStableDTag,
          Keys.mlsRejectedWelcomeRetryAfterById,
          Keys.mlsKeyPackageRelays,
          Keys.mlsInboxRelays].forEach { defaults.removeObject(forKey: $0) }

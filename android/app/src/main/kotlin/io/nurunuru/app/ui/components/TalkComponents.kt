@@ -242,6 +242,7 @@ fun MessageInputBar(
     onSendMessage: (String) -> Unit,
     onImageAttach: () -> Unit,
     isSending: Boolean,
+    activeGroupIdHex: String = "",
     myPubkeyHex: String = "",
     repository: io.nurunuru.app.data.NostrRepository? = null
 ) {
@@ -413,6 +414,13 @@ fun MessageInputBar(
                 }
             }
 
+            Text(
+                text = "send:" + activeGroupIdHex.take(12),
+                style = MaterialTheme.typography.labelSmall,
+                color = nuruColors.textTertiary,
+                maxLines = 1
+            )
+
             // 送信ボタン
             Box(
                 modifier = Modifier
@@ -420,6 +428,7 @@ fun MessageInputBar(
                     .clip(CircleShape)
                     .background(sendBg)
                     .clickable(enabled = hasText && !isSending) {
+                        android.util.Log.d("TalkInput", "send tapped gid=" + activeGroupIdHex + " len=" + inputText.length)
                         onSendMessage(inputText)
                         inputText = ""
                     },
@@ -493,7 +502,7 @@ fun GroupItem(
                 }
             }
             Text(
-                text = group.lastMessage.ifBlank {
+                text = "gid:" + group.groupIdHex.take(12) + "  " + group.lastMessage.ifBlank {
                 if (group.isDm) "暗号化メッセージ" else "${group.memberPubkeys.size}人のグループ"
             },
                 style = MaterialTheme.typography.bodySmall,

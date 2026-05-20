@@ -10,6 +10,17 @@ import Foundation
 ///   - Marmot MIP-00〜03 準拠。WhiteNoise 互換。
 extension NostrRepository {
 
+
+    private func mlsDisplayContent(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.first == "{", let data = raw.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let content = obj["content"] as? String else {
+            return raw
+        }
+        return content
+    }
+
     private func mlsLogPrefix(_ value: String) -> String {
         value.count <= 8 ? value : String(value.prefix(8)) + "…"
     }
@@ -60,6 +71,7 @@ extension NostrRepository {
             "wss://r.kojira.io",
             "wss://relay.nostr.wirednet.jp",
             "wss://relay-jp.nostr.wirednet.jp",
+            "wss://relay.nostr.band",
             "wss://purplepag.es"
         ]
     }
@@ -356,7 +368,7 @@ extension NostrRepository {
             return MlsMessage(
                 id: stableMessageId(groupIdHex: groupIdHex, senderPubkey: msg.senderPubkey, timestamp: Int64(msg.timestamp), content: msg.content),
                 senderPubkey: msg.senderPubkey,
-                content: msg.content,
+                content: mlsDisplayContent(msg.content),
                 timestamp: Int64(msg.timestamp),
                 groupIdHex: groupIdHex,
                 senderProfile: sender
@@ -408,15 +420,10 @@ extension NostrRepository {
         let baselineHistory = (try? ffi.mlsGetMessageHistory(groupIdHex: groupIdHex, limit: 300)) ?? []
         let baselineLatestTs = baselineHistory.map { Int64($0.timestamp) }.max() ?? 0
 
-        // Fast local-first path: if we already have local/cached messages, never do a
-        // full replay from foreground polling. Full replay after state_not_ready was
-        // the main reason Talk became unusably slow and peer messages disappeared.
-        let cachedVisible = mergeHistoryAndLive(history: baselineHistory, live: cachedApplicationsAtStart)
-            .filter { !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        if !repairFull, !cachedVisible.isEmpty, mlsRetryableStateCount[groupIdHex, default: 0] >= 8 {
-            AppLogger.log("MLS", "fetchMlsMessages: fast local return history=\(baselineHistory.count) cached=\(cachedApplicationsAtStart.count) retryable=\(mlsRetryableStateCount[groupIdHex, default: 0]) group=\(groupIdHex)")
-            return mapFfiMessagesToMlsMessages(cachedVisible, groupIdHex: groupIdHex)
-        }
+        // Do not return stale local history only. Android/iOS interop can leave old
+        // retryable diagnostics in the session while new peer kind:445 events are already
+        // available on relays. Polling must still fetch recent relay events so Android ->
+        // iOS messages appear.
 
         _ = try? ffi.mlsMergePendingCommit(groupIdHex: groupIdHex)
 
@@ -424,8 +431,13 @@ extension NostrRepository {
         // unbounded replay path, used when a DM has diverged and local history contains
         // only my messages. This keeps normal chat rendering fast while still allowing
         // recovery from the broken "initially OK then only local messages" state.
-        let safetyWindowSecs: Int64 = 90
-        let sinceForFetch: Int64? = repairFull ? nil : (baselineLatestTs > 0 ? max(0, baselineLatestTs - safetyWindowSecs) : max(0, nowSec - 600))
+        // Keep a wider incremental window for cross-client MLS interop.
+        // Android may publish through a relay whose delivery is delayed, and local MDK
+        // history can advance with our own sent bubble before the peer event is fetched.
+        // A 90s window caused iOS polling to miss Android kind:445 events after active
+        // conversation sends; 10 minutes is still bounded but covers relay lag/retry.
+        let safetyWindowSecs: Int64 = 600
+        let sinceForFetch: Int64? = repairFull ? nil : (baselineLatestTs > 0 ? max(0, baselineLatestTs - safetyWindowSecs) : max(0, nowSec - 900))
         let isFullReplay = repairFull
         if repairFull {
             retryCooldowns.removeAll()
@@ -525,9 +537,9 @@ extension NostrRepository {
                         // retryable unprocessable は processedIds に入れず、後続 state update 後または次回 fetch で再試行する。
                         if kind.hasPrefix("unhandled:Unprocessable") {
                             retryableIds.insert(ev.id)
-                            retryCooldowns[ev.id] = nowSec + (repairFull ? 60 : 300)
+                            retryCooldowns[ev.id] = nowSec + (repairFull ? 60 : 30)
                             if retryLoggedIds.insert(ev.id).inserted {
-                                AppLogger.log("MLS", "fetchMlsMessages: retryable state-update kind=\(kind) id=\(ev.id) cooldown=\(repairFull ? 60 : 300)s repair=\(repairFull)")
+                                AppLogger.log("MLS", "fetchMlsMessages: retryable state-update kind=\(kind) id=\(ev.id) cooldown=\(repairFull ? 60 : 30)s repair=\(repairFull)")
                             }
                         } else {
                             processedIds.insert(ev.id)
@@ -542,11 +554,40 @@ extension NostrRepository {
                         }
                     }
                 } catch {
-                    // out-of-order / pending state は processedIds に入れず retry queue に残す。
-                    retryableIds.insert(ev.id)
-                    retryCooldowns[ev.id] = nowSec + 300
-                    if retryLoggedIds.insert(ev.id).inserted {
-                        AppLogger.log("MLS", "fetchMlsMessages: process failed (will retry) id=\(ev.id) cooldown=300s err=\(mlsRedactedError(error))")
+                    // Live-chat correctness: the event has already arrived from relays.
+                    // Do one local pending-state cleanup and immediate retry before hiding
+                    // it behind cooldown. This prevents Android->iOS messages from being
+                    // fetched but not displayed after a transient MDK pending-state error.
+                    do {
+                        try? ffi.mlsMergePendingCommit(groupIdHex: groupIdHex)
+                        try? ffi.mlsClearPendingCommit(groupIdHex: groupIdHex)
+                        let retryResult = try ffi.mlsProcessMessageResult(groupIdHex: groupIdHex, eventJSON: eventJSON)
+                        switch retryResult {
+                        case .application(let msg):
+                            liveDecrypted.append(msg)
+                            mlsApplicationMessageCache[groupIdHex, default: [:]][ev.id] = msg
+                            processedIds.insert(ev.id)
+                            retryCooldowns.removeValue(forKey: ev.id)
+                            retryableIds.remove(ev.id)
+                            appliedCount += 1
+                            AppLogger.log("MLS", "fetchMlsMessages: application retry id=\(ev.id) sender=\(mlsLogPrefix(msg.senderPubkey)) len=\(msg.content.count)")
+                        case .stateUpdate(let kind):
+                            if kind.hasPrefix("unhandled:Unprocessable") { throw error }
+                            processedIds.insert(ev.id)
+                            retryCooldowns.removeValue(forKey: ev.id)
+                            retryableIds.remove(ev.id)
+                            stateOnlyCount += 1
+                            stateUpdateProcessedInPass = true
+                            try? ffi.mlsMergePendingCommit(groupIdHex: groupIdHex)
+                            AppLogger.log("MLS", "fetchMlsMessages: state-only retry kind=\(kind) id=\(ev.id)")
+                        }
+                    } catch {
+                        // out-of-order / pending state は processedIds に入れず retry queue に残す。
+                        retryableIds.insert(ev.id)
+                        retryCooldowns[ev.id] = nowSec + (repairFull ? 60 : 30)
+                        if retryLoggedIds.insert(ev.id).inserted {
+                            AppLogger.log("MLS", "fetchMlsMessages: process failed (will retry) id=\(ev.id) cooldown=\(repairFull ? 60 : 30)s err=\(mlsRedactedError(error))")
+                        }
                     }
                 }
             }
@@ -582,7 +623,10 @@ extension NostrRepository {
         mlsAppliedEventIds[groupIdHex] = processedIds
         mlsProcessedIds[groupIdHex] = processedIds
         mlsRetryableEventCooldownUntil[groupIdHex] = retryCooldowns.filter { $0.value > nowSec }
-        mlsRetryableStateCount[groupIdHex] = blockingRetryableCount
+        // Do not let old replay diagnostics permanently poison the send path. Both
+        // Android and iOS can display persisted history while older wrapper events still
+        // replay as state_not_ready; treat retryable state as telemetry only here.
+        mlsRetryableStateCount[groupIdHex] = 0
         mlsDidFullCatchUp.insert(groupIdHex)
 
         _ = try? ffi.mlsMergePendingCommit(groupIdHex: groupIdHex)
@@ -610,7 +654,7 @@ extension NostrRepository {
             MlsMessage(
                 id: stableMessageId(groupIdHex: groupIdHex, senderPubkey: msg.senderPubkey, timestamp: Int64(msg.timestamp), content: msg.content),
                 senderPubkey: msg.senderPubkey,
-                content: msg.content,
+                content: mlsDisplayContent(msg.content),
                 timestamp: Int64(msg.timestamp),
                 groupIdHex: groupIdHex,
                 senderProfile: profileMap[msg.senderPubkey]
@@ -654,6 +698,11 @@ extension NostrRepository {
         }
     }
 
+
+    func hasMlsStateGaps(groupIdHex: String) -> Bool {
+        (mlsRetryableStateCount[groupIdHex] ?? 0) > 0
+    }
+
     // MARK: - Send Message
 
     /// MLS グループにメッセージを送信する (Kind 445)。
@@ -693,16 +742,15 @@ extension NostrRepository {
         // performs an explicit relay catch-up before send; mlsCreateMessage is the
         // only source of truth for whether the post-catch-up state can send.
 
-        // If catch-up still has retryable state_not_ready items, the local epoch is
-        // not proven current. Do not create an application message that WhiteNoise may
-        // be unable to decrypt. The UI will ask the user to wait/retry after repair.
+        // Stale retryable/self-update diagnostics must not hard-block user sends.
+        // Let MDK/OpenMLS be the authority: mlsCreateMessage() will throw if the local
+        // state truly cannot create an application message. Hard-blocking here caused
+        // iOS to be unable to send even while Android history was visible.
         if (mlsRetryableStateCount[groupIdHex] ?? 0) > 0 {
-            AppLogger.log("MLS", "sendMlsMessage[MARMOT]: blocked due to retryable state_not_ready group=\(groupIdHex) count=\(mlsRetryableStateCount[groupIdHex] ?? 0)")
-            throw MlsError.groupStateStuck
+            AppLogger.log("MLS", "sendMlsMessage[MARMOT]: continuing despite retryable state_not_ready group=\(groupIdHex) count=\(mlsRetryableStateCount[groupIdHex] ?? 0)")
         }
         if mlsSelfUpdatePublishedThisSession.contains(groupIdHex) {
-            AppLogger.log("MLS", "sendMlsMessage[MARMOT]: blocked after local self-update publish pending WhiteNoise interop group=\(groupIdHex)")
-            throw MlsError.groupStateStuck
+            AppLogger.log("MLS", "sendMlsMessage[MARMOT]: continuing after local self-update publish group=\(groupIdHex)")
         }
 
         let data: FfiEncryptedMessageData
@@ -996,6 +1044,20 @@ extension NostrRepository {
         }
     }
 
+    private func mlsStableKeyPackageDTag(fallback: String = "") -> String {
+        if let existing = prefs.mlsKeyPackageStableDTag, !existing.isEmpty { return existing }
+        let generated = fallback.isEmpty ? UUID().uuidString.lowercased() : fallback
+        prefs.mlsKeyPackageStableDTag = generated
+        return generated
+    }
+
+    private func applyStableKeyPackageDTag(_ tags: [[String]], fallback: String = "") -> [[String]] {
+        let dTag = mlsStableKeyPackageDTag(fallback: fallback)
+        var out = tags.filter { $0.first != "d" }
+        out.insert(["d", dTag], at: 0)
+        return out
+    }
+
     private func publishKeyPackage(ffi: MlsFFIBridge) async throws {
         let kpData = try ffi.mlsCreateKeyPackage()
         // Gossip model: publish KeyPackages to our advertised KeyPackage relays,
@@ -1007,7 +1069,7 @@ extension NostrRepository {
         let discoveryRelays = mlsDiscoveryRelayUrls(keyPackageRelays + inboxRelays)
         await client.connect(relayUrls: discoveryRelays)
 
-        var tags30443 = kpData.tags.map { t -> [String] in
+        var tags30443 = applyStableKeyPackageDTag(kpData.tags, fallback: kpData.dTag).map { t -> [String] in
             t.first == "relays" ? ["relays"] + keyPackageRelays : t
         }
         if !tags30443.contains(where: { $0.first == "relays" }) {
@@ -1044,6 +1106,7 @@ extension NostrRepository {
 
         AppLogger.log("MLS", "publishKeyPackage: published kind=\(kpData.kind) legacy443=true keyPackageRelays=\(keyPackageRelays.count) inboxRelays=\(inboxRelays.count) discoveryRelays=\(discoveryRelays.count) kp=\(keyPackageRelays.joined(separator: ",")) inbox=\(inboxRelays.joined(separator: ","))")
         keyPackagePublished = true
+        Task { await self.cleanupSupersededOwnKeyPackages(keepIds: [signed30443.id, signed443.id]) }
     }
 
     private func publishSignedMlsDiscoveryEvent(_ event: NostrEvent, to relays: [String], context: String) async throws {
@@ -1064,6 +1127,29 @@ extension NostrRepository {
             hashMap[id] = hashRef
             prefs.mlsKeyPackageHashRefById = hashMap
         }
+    }
+
+    private func cleanupSupersededOwnKeyPackages(keepIds: Set<String>) async {
+        guard let myPubkey = prefs.publicKeyHex else { return }
+        let relays = mlsDiscoveryRelayUrls(myMlsKeyPackageRelays() + myMlsInboxRelays())
+        let f = NostrFilter(ids: nil, authors: [myPubkey], kinds: [NostrKind.mlsKeyPackage, NostrKind.mlsKeyPackageLegacy], since: nil, until: nil, limit: 80, tags: nil, search: nil)
+        var merged: [String: NostrEvent] = [:]
+        for relay in relays.prefix(12) {
+            for ev in await client.fetchEventsFromRelay(relay, filters: [f], timeoutSeconds: 3.0) { merged[ev.id] = ev }
+        }
+        let stableD = mlsStableKeyPackageDTag()
+        var deleted = 0
+        for ev in merged.values {
+            guard !keepIds.contains(ev.id), !isConsumedKeyPackageEventId(ev.id) else { continue }
+            let superseded = ev.kind == NostrKind.mlsKeyPackage && ev.getTagValue("d") != stableD
+            let legacy = ev.kind == NostrKind.mlsKeyPackageLegacy
+            if superseded || legacy {
+                await publishConsumedKeyPackageDeleteBestEffort(eventId: ev.id)
+                recordConsumedKeyPackageEventId(ev.id)
+                deleted += 1
+            }
+        }
+        if deleted > 0 { AppLogger.log("MLS", "cleanupSupersededOwnKeyPackages: deleted=\(deleted)") }
     }
 
     // MARK: - Publish Helpers
@@ -1535,31 +1621,11 @@ extension NostrRepository {
 
         do {
             let kpData = try ffi.mlsCreateKeyPackage()
-            let relayUrls = canonicalRelayUrls(Array(prefs.selectedRelays.prefix(3)))
-            var tags30443 = kpData.tags.map { t -> [String] in t.first == "relays" ? ["relays"] + relayUrls : t }
+            let relayUrls = myMlsKeyPackageRelays()
+            var tags30443 = applyStableKeyPackageDTag(kpData.tags, fallback: kpData.dTag).map { t -> [String] in t.first == "relays" ? ["relays"] + relayUrls : t }
             if !tags30443.contains(where: { $0.first == "relays" }) { tags30443.append(["relays"] + relayUrls) }
 
-            // If consumed was kind:30443, reuse same d tag.
-            // Prefer relay event metadata; fallback to locally persisted JSON parse; then kpData.dTag.
-            if let consumedEvent, consumedEvent.kind == NostrKind.mlsKeyPackage,
-               let d = consumedEvent.getTagValue("d"), !d.isEmpty {
-                tags30443.removeAll { $0.first == "d" }
-                tags30443.insert(["d", d], at: 0)
-            } else if let consumedEventJSON,
-                      let data = consumedEventJSON.data(using: .utf8),
-                      let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                      let kind = obj["kind"] as? Int,
-                      kind == NostrKind.mlsKeyPackage,
-                      let rawTags = obj["tags"] as? [[Any]],
-                      let dTag = rawTags.first(where: { ($0.first as? String) == "d" })?.dropFirst().first as? String,
-                      !dTag.isEmpty {
-                tags30443.removeAll { $0.first == "d" }
-                tags30443.insert(["d", dTag], at: 0)
-            } else if !kpData.dTag.isEmpty {
-                tags30443.removeAll { $0.first == "d" }
-                tags30443.insert(["d", kpData.dTag], at: 0)
-            }
-
+            // Keep every replacement in the same install/account stable replaceable slot.
             // Canonical rotation publish (kind:30443; same d when consumed was 30443).
             let signed30443 = try await publishEventAndReturnSigned(kind: Int(kpData.kind), tags: tags30443, content: kpData.content)
             persistPublishedKeyPackageEvent(id: signed30443.id, json: encodeEventJSON(signed30443), hashRef: kpData.hashRef)
@@ -1919,7 +1985,11 @@ extension NostrRepository {
             await ensureGroupRelaysConnected(allRelays)
             resolvedRelayCount = allRelays.count
 
-            let hEvents = await fetchFromRelays(allRelays, filters: [hFilter], timeoutSeconds: incremental ? 1.2 : 1.8, limit: incremental ? 8 : 12)
+            // Live Talk correctness over speed: Android publishes Marmot kind:445 to a
+            // broad fanout set, and the fastest relay is not always in our top-8 scored
+            // prefix. Query the full resolved set with a moderate timeout so active iOS
+            // polling sees Android messages instead of waiting for a later repair pass.
+            let hEvents = await fetchFromRelays(allRelays, filters: [hFilter], timeoutSeconds: incremental ? 3.0 : 3.0, limit: incremental ? 24 : 24)
             recordMlsRelayHits(hEvents, relays: allRelays)
             for ev in hEvents { mergedById[ev.id] = ev }
 
@@ -1934,7 +2004,7 @@ extension NostrRepository {
             // Broad kind:445 scans are expensive and can accidentally mix unrelated DM traffic.
             // Use them only as a conservative fallback when full repair/initial #h lookup finds nothing.
             if !incremental && hEvents.isEmpty {
-                let relayBroad = await fetchFromRelays(allRelays, filters: [broadFilter], timeoutSeconds: 1.8, limit: 8)
+                let relayBroad = await fetchFromRelays(allRelays, filters: [broadFilter], timeoutSeconds: 3.0, limit: 24)
                 recordMlsRelayHits(relayBroad, relays: allRelays)
                 for ev in relayBroad where normalizedCandidates.contains((ev.getTagValue("h") ?? "").lowercased()) {
                     mergedById[ev.id] = ev
@@ -2165,8 +2235,8 @@ extension NostrRepository {
 
     private func publishReplacementKeyPackageForRetry(item: MlsRetryQueueItem, ffi: MlsFFIBridge) async throws {
         let kpData = try ffi.mlsCreateKeyPackage()
-        let relayUrls = canonicalRelayUrls((item.relayUrls.isEmpty ? Array(prefs.selectedRelays.prefix(3)) : item.relayUrls) + ["wss://relay.damus.io", "wss://nos.lol"])
-        var tags30443 = kpData.tags.map { t -> [String] in t.first == "relays" ? ["relays"] + relayUrls : t }
+        let relayUrls = canonicalRelayUrls((item.relayUrls.isEmpty ? myMlsKeyPackageRelays() : item.relayUrls) + ["wss://relay.damus.io", "wss://nos.lol"])
+        var tags30443 = applyStableKeyPackageDTag(kpData.tags, fallback: kpData.dTag).map { t -> [String] in t.first == "relays" ? ["relays"] + relayUrls : t }
         if !tags30443.contains(where: { $0.first == "relays" }) { tags30443.append(["relays"] + relayUrls) }
 
         if let consumedId = item.keyPackageEventId,

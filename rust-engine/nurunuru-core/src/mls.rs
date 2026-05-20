@@ -198,6 +198,51 @@ impl MlsManager {
         }
     }
 
+    /// Ensure unsigned inner Marmot rumors serialize in Amethyst/Quartz-compatible
+    /// shape. Quartz rumors carry an `id` field and an empty `sig` field; MDK only
+    /// requires/verifies `id`, but including both makes persisted/decrypted inner
+    /// JSON parseable by Amethyst's `Event.fromJson()` and visible in its UI.
+    fn ensure_marmot_rumor_identity(rumor: &mut UnsignedEvent) -> Result<()> {
+        rumor.ensure_id();
+        let v = serde_json::to_value(&*rumor)
+            .map_err(|e| NuruNuruError::MlsError(format!("serialize rumor: {e}")))?;
+        let mut obj = v
+            .as_object()
+            .cloned()
+            .ok_or_else(|| NuruNuruError::MlsError("serialize rumor: not object".to_string()))?;
+        if let Some(id) = rumor.id {
+            obj.insert("id".to_string(), Value::String(id.to_hex()));
+        }
+        obj.insert("sig".to_string(), Value::String(String::new()));
+        let with_sig = Value::Object(obj);
+        *rumor = serde_json::from_value(with_sig)
+            .map_err(|e| NuruNuruError::MlsError(format!("normalize rumor: {e}")))?;
+        Ok(())
+    }
+
+    /// Convert a stored/decrypted MDK rumor to JSON that Amethyst can parse.
+    /// MDK stores unsigned events without `sig`; Amethyst's Kotlin `Event` model
+    /// expects `id` + `sig` fields even for rumors, with `sig` empty.
+    fn unsigned_event_json_with_empty_sig(event: &UnsignedEvent) -> Result<String> {
+        let mut rumor = event.clone();
+        Self::ensure_marmot_rumor_identity(&mut rumor)?;
+        let v = serde_json::to_value(&rumor)
+            .map_err(|e| NuruNuruError::MlsError(format!("serialize stored rumor: {e}")))?;
+        serde_json::to_string(&v)
+            .map_err(|e| NuruNuruError::MlsError(format!("serialize stored rumor json: {e}")))
+    }
+
+    fn display_content_from_decrypted_event(event: &UnsignedEvent, fallback: String) -> String {
+        let is_chat = event.kind.as_u16() == 9;
+        if is_chat && !event.content.is_empty() {
+            event.content.clone()
+        } else if fallback.is_empty() {
+            Self::unsigned_event_json_with_empty_sig(event).unwrap_or_default()
+        } else {
+            fallback
+        }
+    }
+
     // ─── Key Package (Kind 30443, MIP-00) ───────────────────────────────────
 
     /// Generate a fresh MLS KeyPackage and return Kind-30443 event data.
@@ -223,27 +268,17 @@ impl MlsManager {
         })
     }
 
-    /// Normalize incoming Marmot KeyPackage event JSON for MDK 0.7.x parser.
+    /// Parse an incoming Marmot KeyPackage event JSON without mutating signed fields.
     ///
-    /// MDK 0.7.x expects kind:443 (`Kind::MlsKeyPackage`). Marmot canonical uses kind:30443.
-    /// For compatibility we rewrite kind 30443 -> 443 before handing events to MDK parser.
+    /// MDK 0.8 accepts both canonical kind:30443 and migration legacy kind:443.  Do
+    /// not rewrite kind/tags here: changing a peer-signed event would invalidate the
+    /// event id/signature and can make MDK reject otherwise valid KeyPackages.
     fn normalize_key_package_event_for_mdk(
         &self,
         key_package_event_json: &str,
     ) -> Result<nostr::Event> {
-        let mut v: Value = serde_json::from_str(key_package_event_json)
-            .map_err(|e| NuruNuruError::MlsError(format!("Invalid KeyPackage event JSON: {e}")))?;
-
-        let kind = v.get("kind").and_then(|k| k.as_u64()).unwrap_or_default();
-        if kind == 30443 {
-            if let Some(obj) = v.as_object_mut() {
-                obj.insert("kind".to_string(), Value::from(443u64));
-            }
-        }
-
-        serde_json::from_value(v).map_err(|e| {
-            NuruNuruError::MlsError(format!("Invalid normalized KeyPackage event JSON: {e}"))
-        })
+        serde_json::from_str(key_package_event_json)
+            .map_err(|e| NuruNuruError::MlsError(format!("Invalid KeyPackage event JSON: {e}")))
     }
 
     /// Strictly validate a KeyPackage event (including KeyPackageRef `i` tag content match).
@@ -382,8 +417,7 @@ impl MlsManager {
     ) -> Result<AddMemberResult> {
         let group_id = self.resolve_group_id(group_id_hex)?;
 
-        // MDK 0.7.x expects kind:443 for parse_key_package internally.
-        // Normalize 30443 -> 443 for compatibility, while keeping all other fields intact.
+        // MDK 0.8 accepts canonical 30443 and legacy 443; keep the peer-signed event immutable.
         let kp_event = self.normalize_key_package_event_for_mdk(key_package_event_json)?;
         let key_package_owner_pubkey = kp_event.pubkey;
 
@@ -553,8 +587,9 @@ impl MlsManager {
         //
         // NOTE: reactions/other kinds are supported when callers provide prebuilt
         // MLS messages via lower layers; this high-level helper is chat-text focused.
-        let rumor: UnsignedEvent =
+        let mut rumor: UnsignedEvent =
             EventBuilder::new(nostr::Kind::from(9u16), content).build(pubkey);
+        Self::ensure_marmot_rumor_identity(&mut rumor)?;
 
         let event = self
             .mdk
@@ -649,10 +684,11 @@ impl MlsManager {
                     redact_hex_prefix(&msg.pubkey.to_hex()),
                     msg.content.len()
                 );
+                let content = Self::display_content_from_decrypted_event(&msg.event, msg.content);
                 Ok(crate::types::MlsProcessResult::ApplicationMessage(
                     DecryptedMessage {
                         sender_pubkey: msg.pubkey.to_hex(),
-                        content: msg.content,
+                        content,
                         timestamp: msg.created_at.as_secs(),
                         group_id_hex: group_id_hex.to_string(),
                     },
@@ -933,7 +969,7 @@ impl MlsManager {
             .into_iter()
             .map(|m| DecryptedMessage {
                 sender_pubkey: m.pubkey.to_hex(),
-                content: m.content,
+                content: Self::display_content_from_decrypted_event(&m.event, m.content),
                 timestamp: m.created_at.as_secs(),
                 group_id_hex: nostr_group_id_hex.to_string(),
             })

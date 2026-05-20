@@ -25,36 +25,33 @@ import {
   getReadRelays,
   getWriteRelays,
   getDefaultRelay,
+  getNotificationRelays,
   reportEvent,
   createBirdwatchLabel,
   fetchBirdwatchLabels,
   rateBirdwatchLabel,
+  fetchBookmarkEventIds,
+  addBookmark,
+  removeBookmark,
+  fetchZapTotals,
+  fetchRepostCounts,
+  DEFAULT_RELAY,
+  FALLBACK_RELAYS,
   RELAYS
 } from '@/lib/nostr'
 import { uploadImagesInParallel } from '@/lib/imageUtils'
 import { setCachedMuteList } from '@/lib/cache'
 import {
   markNotInterested,
-  getNotInterestedPosts,
-  sortByRecommendation,
-  extract2ndDegreeNetwork,
-  getRecommendedPosts,
-  fetchEngagementData,
-  buildRecommendationContext,
-  fetchFollowListsBatch,
   recordEngagement
 } from '@/lib/recommendation'
-import {
-  fetchEventsWithOutboxModel,
-  fetchRelayListsBatch,
-  getUserOutboxRelays,
-  RELAY_LIST_DISCOVERY_RELAYS
-} from '@/lib/outbox'
+import { fetchEventsManaged } from '@/lib/connection-manager'
 import PostItem from './PostItem'
 import LongFormPostItem from './LongFormPostItem'
 import UserProfileView from './UserProfileView'
 import SearchModal from './SearchModal'
 import NotificationModal from './NotificationModal'
+import PostDetailModal from './PostDetailModal'
 import EmojiPicker from './EmojiPicker'
 import { NOSTR_KINDS } from '@/lib/constants'
 import { useSTT } from '@/hooks/useSTT'
@@ -145,10 +142,17 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
   const [userReposts, setUserReposts] = useState(new Set())
   const [userReactionIds, setUserReactionIds] = useState({}) // eventId -> reactionEventId
   const [userRepostIds, setUserRepostIds] = useState({}) // eventId -> repostEventId
+  const [repostCounts, setRepostCounts] = useState({}) // eventId -> repost count
+  const [zapAmounts, setZapAmounts] = useState({}) // eventId -> total zap sats
+  const [userBookmarks, setUserBookmarks] = useState(new Set()) // bookmarked event ids
+  const [bookmarkingId, setBookmarkingId] = useState(null) // in-flight bookmark toggle
   const [zapAnimating, setZapAnimating] = useState(null)
   const [likeAnimating, setLikeAnimating] = useState(null)
   const [showPostModal, setShowPostModal] = useState(false)
   const [newPost, setNewPost] = useState('')
+  // 引用ポスト (リポスト長押し) と 返信 (投稿長押し) のターゲット — iOS PostSheet と同じ NIP-10/NIP-18
+  const [quotePost, setQuotePost] = useState(null)
+  const [replyToPost, setReplyToPost] = useState(null)
   const [imageFiles, setImageFiles] = useState([])
   const [imagePreviews, setImagePreviews] = useState([])
   const [uploadingPostImage, setUploadingPostImage] = useState(false)
@@ -170,6 +174,9 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
   const [searchQuery, setSearchQuery] = useState('') // Initial query for search modal
   const [showNotifications, setShowNotifications] = useState(false)
   const [hasUnreadNotifications, setHasUnreadNotifications] = useState(false)
+  // 通知から投稿詳細モーダルへ遷移するための状態 (Android PostDetailScreen 相当)
+  const [focusedPostId, setFocusedPostId] = useState(null)
+  const [focusedPostEvent, setFocusedPostEvent] = useState(null)
 
   // Speech to Text
   const handleTranscript = useCallback((text) => {
@@ -179,12 +186,18 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
 
   // Birdwatch (NIP-32) state
   const [birdwatchLabels, setBirdwatchLabels] = useState({}) // eventId -> array of label events
-  // Not interested state (for recommendation feed)
+  // Not interested state — kept for compatibility but not displayed in relay feed (アプリ版に合わせ)
   const [notInterestedPosts, setNotInterestedPosts] = useState(new Set())
-  // Follow timeline state
-  const [timelineMode, setTimelineMode] = useState('following') // 'global' or 'following'
-  const [loadingRecommended, setLoadingRecommended] = useState(false)
-  const [recommendedReady, setRecommendedReady] = useState(false)
+  // Timeline mode — 'global' = リレーフィード (Android TimelineViewModel.FeedType.GLOBAL と同じ)
+  const [timelineMode, setTimelineMode] = useState('following')
+  const [loadingRelay, setLoadingRelay] = useState(false)
+  const [relayReady, setRelayReady] = useState(false)
+  // Relay feed selector (matches Android TimelineHeader savedRelayUrls + selectedRelayUrl)
+  // - savedRelayUrls: localStorage 'nip65Relays' から取得した保存済みリレー
+  // - selectedRelayUrl: null = デフォルト read relays (NIP-65)、URL = その単一リレー
+  const [savedRelayUrls, setSavedRelayUrls] = useState([])
+  const [selectedRelayUrl, setSelectedRelayUrl] = useState(null)
+  const [showRelayDropdown, setShowRelayDropdown] = useState(false)
   const [followList, setFollowList] = useState([])
   const [followListLoading, setFollowListLoading] = useState(false)
   const [followingPrefetched, setFollowingPrefetched] = useState(false)
@@ -193,6 +206,8 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
   const postImageInputRef = useRef(null)
   const postImageAddRef = useRef(null)
   const initialLoadDone = useRef(false)
+  // リレー切替時のレース防止: 最新リクエスト ID のみ反映する
+  const relayRequestIdRef = useRef(0)
 
   // Maximum number of images allowed
   const MAX_IMAGES = 3
@@ -228,8 +243,8 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
     }
 
     if (newMode === 'global') {
-      // Clear recommended notification when switching to global
-      setRecommendedReady(false)
+      // Clear new-post notification when switching to relay feed
+      setRelayReady(false)
     }
     
     setTimelineMode(newMode)
@@ -245,7 +260,7 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
 
   // Lock body scroll when modal is open
   useEffect(() => {
-    if (showPostModal || viewingProfile || showZapModal || showSearch || showNotifications) {
+    if (showPostModal || viewingProfile || showZapModal || showSearch || showNotifications || focusedPostId) {
       document.body.style.overflow = 'hidden'
     } else {
       document.body.style.overflow = ''
@@ -253,7 +268,7 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
     return () => {
       document.body.style.overflow = ''
     }
-  }, [showPostModal, viewingProfile, showZapModal, showSearch, showNotifications])
+  }, [showPostModal, viewingProfile, showZapModal, showSearch, showNotifications, focusedPostId])
 
   // Close search modal when tab becomes inactive
   useEffect(() => {
@@ -268,16 +283,56 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
     if (Object.keys(cachedProfiles).length > 0) {
       setProfiles(cachedProfiles)
     }
-    
+
+    // リレーセレクタ用に保存済みリレー一覧を読み込み (Android getSavedRelayUrls 相当)
+    loadSavedRelays()
+
     // Start loading data
     loadTimeline()
-    
+
     return () => {
       if (subRef.current) {
         subRef.current.close()
       }
     }
   }, [])
+
+  // 保存済みリレー URL 一覧を取得する。Android NostrRepository.getSavedRelayUrls() に対応:
+  //   NIP-65 リスト (localStorage 'nip65Relays') があればそれを、無ければデフォルト general relays。
+  // RelaySettings ミニアプリで管理される NIP-65 リレーリストと共有。
+  // フォールバックリスト = [DEFAULT_RELAY, ...FALLBACK_RELAYS] (= AGENTS.md "Default Relays" の 4 件)。
+  // これにより リレー選択ピル のドロップダウンは常に最低 4 件の選択肢を持つ。
+  const computeFallbackRelays = () => {
+    const all = [DEFAULT_RELAY, ...FALLBACK_RELAYS]
+      .filter(u => typeof u === 'string' && u.startsWith('wss://'))
+      .map(u => u.trim().replace(/\/+$/, ''))
+    return all.filter((u, i, arr) => arr.indexOf(u) === i)
+  }
+
+  const loadSavedRelays = () => {
+    if (typeof window === 'undefined') {
+      setSavedRelayUrls(computeFallbackRelays())
+      return
+    }
+    let urls = []
+    try {
+      const raw = localStorage.getItem('nip65Relays')
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        if (Array.isArray(parsed)) {
+          urls = parsed
+            .map(r => (typeof r === 'string' ? r : r?.url))
+            .filter(u => typeof u === 'string' && u.startsWith('wss://'))
+            .map(u => u.trim().replace(/\/+$/, ''))
+            .filter((u, i, arr) => arr.indexOf(u) === i)
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to load saved relays:', e)
+    }
+    // Android getSavedRelayUrls の `nip65.ifEmpty { prefs.relays }` 相当のフォールバック
+    setSavedRelayUrls(urls.length > 0 ? urls : computeFallbackRelays())
+  }
 
   // Load mute list, follow list, and check notifications when pubkey is available
   useEffect(() => {
@@ -292,28 +347,33 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
     if (!pubkey) return
     try {
       const lastRead = parseInt(localStorage.getItem('lastNotificationReadAt') || '0', 10)
-      const relays = [getDefaultRelay()]
+      // アプリ版 (Android NostrRepositoryNotifications) と同じく接続中の
+      // inbox/read リレー (NIP-65 read=true) からまとめて取得する
+      const notifRelays = await getNotificationRelays(pubkey)
+      const relays = (notifRelays && notifRelays.length > 0) ? notifRelays : [getDefaultRelay()]
 
       const [events, mutualFollowPubkeys] = await Promise.all([
-        fetchEvents({
-          kinds: [NOSTR_KINDS.REACTION, NOSTR_KINDS.ZAP], // Reaction and Zap
+        // fetchEventsManaged を直接呼び全 read relay から REQ する
+        // (fetchEvents は先頭リレーしか使わないため通知の取りこぼしが起きる)
+        // Android と同じ 6 種類 (リアクション / Zap / リポスト / 返信メンション / バッジ / フォロー) を見る
+        fetchEventsManaged({
+          kinds: [
+            NOSTR_KINDS.REACTION,
+            NOSTR_KINDS.ZAP,
+            NOSTR_KINDS.REPOST,
+            NOSTR_KINDS.TEXT_NOTE,
+            NOSTR_KINDS.BADGE_AWARD,
+            NOSTR_KINDS.CONTACTS
+          ],
           '#p': [pubkey],
           since: lastRead,
-          limit: 50
+          limit: 100
         }, relays),
         fetchMutualFollowsCached(pubkey, relays)
       ])
 
-      // Check for new reactions or zaps
-      let hasNew = events.some(e => {
-        if (e.kind === NOSTR_KINDS.REACTION) {
-          return e.tags.some(t => t[0] === 'emoji') && e.created_at > lastRead
-        }
-        if (e.kind === NOSTR_KINDS.ZAP) {
-          return e.created_at > lastRead
-        }
-        return false
-      })
+      // 自分由来のイベントは無視。Kind 1 はメンションも返信も両方拾う。
+      let hasNew = events.some(e => e.pubkey !== pubkey && e.created_at > lastRead)
 
       // Check for birthdays today if not already read today
       if (!hasNew && mutualFollowPubkeys.length > 0) {
@@ -364,13 +424,12 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
     }
   }, [followList])
 
-  // Prefetch recommended timeline in background
+  // Prefetch relay timeline in background (アプリ版 fetchRelayTimeline 相当)
   useEffect(() => {
-    // Start prefetching recommended if we have follows and it's not already loading/ready
-    if (initialLoadDone.current && globalPosts.length === 0 && !loadingRecommended && !recommendedReady) {
-      loadRecommendedTimeline()
+    if (initialLoadDone.current && globalPosts.length === 0 && !loadingRelay && !relayReady) {
+      loadRelayTimeline(selectedRelayUrl)
     }
-  }, [initialLoadDone.current, globalPosts.length, loadingRecommended, recommendedReady])
+  }, [initialLoadDone.current, globalPosts.length, loadingRelay, relayReady])
 
   // Reload timeline when mode changes (only if not already loaded)
   useEffect(() => {
@@ -378,10 +437,20 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
       if (timelineMode === 'following' && followingPosts.length === 0) {
         loadFollowingTimeline()
       } else if (timelineMode === 'global' && globalPosts.length === 0) {
-        loadRecommendedTimeline()
+        loadRelayTimeline(selectedRelayUrl)
       }
     }
   }, [timelineMode])
+
+  // Reload relay feed when the selected relay changes
+  // (Android TimelineViewModel.selectRelayFeed と同じ — 旧結果をクリアして再取得)
+  useEffect(() => {
+    if (!initialLoadDone.current) return
+    setGlobalPosts([])
+    setRelayReady(false)
+    loadRelayTimeline(selectedRelayUrl)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRelayUrl])
 
   const loadFollowList = async () => {
     if (!pubkey) return
@@ -437,36 +506,62 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
     setMutedPubkeys(new Set())
   }
 
-  // Load recommended timeline with algorithm (global mode)
-  const loadRecommendedTimeline = async () => {
-    if (loadingRecommended) return
-    setLoadingRecommended(true)
+  // Load relay timeline (アプリ版に合わせたリレーフィード)
+  // iOS fetchGlobalTimelineFromRelay / Android fetchGlobalTimelineFast と同じく、
+  // 通常投稿と長文記事を表示対象にする:
+  //   - 指定リレー単体 (relayUrl !== null) または read relays (NIP-65) から kind:1 / kind:30023 を取得
+  //   - リプライ ("e" タグを含むイベント) を除外
+  //   - 時系列降順でソート
+  //   - 推薦アルゴリズム (2nd-degree network / scoring / diversity) は適用しない
+  const loadRelayTimeline = async (relayUrl = null) => {
+    setLoadingRelay(true)
     setLoadError(false)
-    
+
     // Only show main loading spinner if currently in global mode and have no posts
     const isPrimaryView = timelineMode === 'global' && globalPosts.length === 0
     if (isPrimaryView) setLoading(true)
 
-    const readRelays = getReadRelays()
-    const threeHoursAgo = Math.floor(Date.now() / 1000) - 10800 // 3 hours for recommendations
+    // 並行リクエストのレース対策: 最新リクエスト ID のみ反映
+    const requestId = ++relayRequestIdRef.current
+    // relayUrl 指定時 → そのリレーのみ
+    // "すべて" (relayUrl === null) → 保存済みリレー全件 (Android fetchGlobalTimelineFast と同様、
+    //   複数リレーから集約)。savedRelayUrls はフォールバックで必ず非空。
+    //   保険として fallback リスト or getReadRelays() でガード。
+    const allRelays = savedRelayUrls.length > 0
+      ? savedRelayUrls
+      : (computeFallbackRelays().length > 0 ? computeFallbackRelays() : getReadRelays())
+    const targetRelays = relayUrl ? [relayUrl] : allRelays
 
     try {
-      let noteFilter = { kinds: [1, NOSTR_KINDS.LONG_FORM, NOSTR_KINDS.SHORT_VIDEO], since: threeHoursAgo, limit: 200 }
-      let repostFilter = { kinds: [6], since: threeHoursAgo, limit: 100 }
+      // 単一リレー指定時は connection-manager の fetchEventsManaged で
+      // 指定リレーのみに対して REQ を投げる (fallback を抑止)。
+      // 未指定時は通常の fetchEvents (fallback 含む) を使う。
+      // アプリ版 (iOS fetchGlobalTimelineFromRelay / Android fetchGlobalTimelineFast) に合わせて
+      // 通常投稿 (kind:1) と長文記事 (kind:30023) を取得する。
+      // リプライ ("e" タグ持ち) は下の filter で除外される (kind:30023 は通常 e タグを持たないので全件通る)。
+      const noteFilter = { kinds: [1, NOSTR_KINDS.LONG_FORM], limit: 50 }
 
-      const [notes, reposts] = await Promise.all([
-        fetchEvents(noteFilter, readRelays),
-        fetchEvents(repostFilter, readRelays)
-      ])
+      const fetchOnce = (filter) =>
+        relayUrl
+          ? fetchEventsManaged(filter, targetRelays, { fast: true, timeoutMs: 8000 })
+          : fetchEvents(filter, targetRelays)
+
+      const notes = await fetchOnce(noteFilter)
+      const reposts = []
+
+      // リクエスト ID が変わっていれば破棄
+      if (requestId !== relayRequestIdRef.current) return
 
       if (notes.length === 0 && reposts.length === 0) {
-        console.warn('No events received - possible connection issue')
-        if (isPrimaryView) setLoadError(true)
+        // 新着投稿が無いリレー (低トラフィック単一リレー等) は接続エラーではなく
+        // 「📭 まだ投稿がありません」表示にフォールバックさせる (アプリ版と同じ挙動)。
+        // 接続エラーは catch ブロックで例外を捕捉した時のみ扱う。
+        console.warn('No events received from relay feed (relay may be quiet, not necessarily an error)')
       }
 
+      // リポストを展開
       const repostData = []
       const originalAuthors = new Set()
-
       for (const repost of reposts) {
         try {
           if (repost.content) {
@@ -481,102 +576,69 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
             })
           }
         } catch (e) {
-          // Skip invalid
+          // 不正な JSON はスキップ
         }
       }
 
       let allPosts = [...notes, ...repostData]
 
-      // Build 2nd-degree network
-      let secondDegreeFollows = new Set()
-      if (followList.length > 0) {
-        try {
-          const sampleFollows = followList.slice(0, 30)
-          const followsOfFollows = await fetchFollowListsBatch(sampleFollows, readRelays)
-          secondDegreeFollows = extract2ndDegreeNetwork(followList, followsOfFollows)
+      // リプライを除外 (アプリ版 fetchRelayTimeline: rootPosts = events.filter { it.getTagValues("e").isEmpty() })
+      // リポストはオリジナルイベントとして展開済みなので除外対象外
+      allPosts = allPosts.filter(post => {
+        if (post._isRepost) return true
+        const hasReplyTag = Array.isArray(post.tags) && post.tags.some(t => t[0] === 'e')
+        return !hasReplyTag
+      })
 
-          if (secondDegreeFollows.size > 0) {
-            const secondDegreeArray = Array.from(secondDegreeFollows).slice(0, 50)
-            const secondDegreePosts = await fetchEventsWithOutboxModel(
-              { kinds: [1, NOSTR_KINDS.LONG_FORM, NOSTR_KINDS.SHORT_VIDEO], since: threeHoursAgo, limit: 100 },
-              secondDegreeArray,
-              { timeout: 12000 }
-            )
-            allPosts = [...allPosts, ...secondDegreePosts]
-          }
-        } catch (e) {
-          console.warn('Failed to fetch 2nd-degree network:', e)
-        }
-      }
-
-      // Deduplicate
+      // ID 重複除去
       const postMap = new Map()
       for (const post of allPosts) {
-        if (!postMap.has(post.id)) {
-          postMap.set(post.id, post)
-        }
+        if (!postMap.has(post.id)) postMap.set(post.id, post)
       }
       allPosts = Array.from(postMap.values())
 
-      // Fetch engagement
-      const eventIds = allPosts.slice(0, 150).map(p => p.id)
-      let engagements = {}
-      if (eventIds.length > 0) {
-        engagements = await fetchEngagementData(eventIds, readRelays)
-      }
+      // 時系列降順 (アプリ版と同じ)
+      allPosts.sort((a, b) => {
+        const timeA = a._repostTime || a.created_at
+        const timeB = b._repostTime || b.created_at
+        return timeB - timeA
+      })
 
-      // Fetch profiles first to enable filtering by profile info in recommendation
+      // 上限 50 件 (Android fetchRelayTimeline のデフォルトと同じ)
+      const finalPosts = allPosts.slice(0, 50)
+
+      if (requestId !== relayRequestIdRef.current) return
+      setGlobalPosts(finalPosts)
+
+      // バックグラウンド中だった場合、新着ピル相当の通知ドットを点灯
+      if (timelineMode !== 'global') setRelayReady(true)
+
+      // プロフィール取得
       const authors = new Set()
-      allPosts.forEach(p => {
+      finalPosts.forEach(p => {
         authors.add(p.pubkey)
         if (p._repostedBy) authors.add(p._repostedBy)
       })
       originalAuthors.forEach(a => authors.add(a))
-
       let profileMap = {}
       if (authors.size > 0) {
         profileMap = await fetchProfilesBatch(Array.from(authors))
+        if (requestId !== relayRequestIdRef.current) return
         setProfiles(prev => ({ ...prev, ...profileMap }))
       }
 
-      // Recommend
-      const followSet = new Set(followList)
-      const combinedProfiles = { ...profiles, ...profileMap }
-      const recommendedPosts = getRecommendedPosts(allPosts, {
-        followList: followSet,
-        secondDegreeFollows,
-        mutedPubkeys,
-        engagements,
-        profiles: combinedProfiles,
-        userGeohash: typeof window !== 'undefined' ? localStorage.getItem('user_geohash') : null
-      }, 100)
-
-      // Apply same profile filter to fallback
-      const finalPosts = recommendedPosts.length > 0 ? recommendedPosts : allPosts
-        .filter(post => {
-          const profile = combinedProfiles[post.pubkey]
-          return profile && profile.picture && (profile.name || profile.displayName)
-        })
-        .sort((a, b) => {
-          const timeA = a._repostTime || a.created_at
-          const timeB = b._repostTime || b.created_at
-          return timeB - timeA
-        })
-
-      setGlobalPosts(finalPosts)
-      
-      // Notify user on mobile if in background
-      if (timelineMode !== 'global') {
-        setRecommendedReady(true)
-      }
-
-      // Fetch interactions if logged in
-      if (pubkey && allPosts.length > 0) {
-        const eventIds = allPosts.map(p => p.id)
-        const [reactionEvents, myRepostEvents] = await Promise.all([
-          fetchEvents({ kinds: [7], '#e': eventIds, limit: 500 }, readRelays),
-          fetchEvents({ kinds: [6], authors: [pubkey], limit: 100 }, readRelays)
+      // リアクション / リポスト / Zap / ブックマークの並列取得
+      // (iOS NostrRepository+Timeline.swift enrichPosts と同じ並列フェッチ)
+      if (pubkey && finalPosts.length > 0) {
+        const eventIds = finalPosts.map(p => p.id)
+        const [reactionEvents, repostAgg, zapTotals, bookmarkIds] = await Promise.all([
+          fetchEvents({ kinds: [7], '#e': eventIds, limit: 500 }, getReadRelays()),
+          fetchRepostCounts(eventIds, pubkey),
+          fetchZapTotals(eventIds),
+          fetchBookmarkEventIds(pubkey)
         ])
+
+        if (requestId !== relayRequestIdRef.current) return
 
         const reactionCounts = {}
         const myReactions = new Set()
@@ -593,29 +655,30 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
           }
         }
 
-        const myReposts = new Set()
-        const myRepostIdsMap = {}
-        for (const repost of myRepostEvents) {
-          const targetId = repost.tags.find(t => t[0] === 'e')?.[1]
-          if (targetId) {
-            myReposts.add(targetId)
-            myRepostIdsMap[targetId] = repost.id
-          }
-        }
-
         setReactions(reactionCounts)
         setUserReactions(myReactions)
-        setUserReposts(myReposts)
+        setUserReposts(new Set(Object.keys(repostAgg.myRepostIds)))
         setUserReactionIds(myReactionIds)
-        setUserRepostIds(myRepostIdsMap)
+        setUserRepostIds(repostAgg.myRepostIds)
+        setRepostCounts(repostAgg.counts)
+        setZapAmounts(zapTotals)
+        setUserBookmarks(new Set(bookmarkIds))
+      }
+
+      // Birdwatch ラベル取得
+      if (finalPosts.length > 0) {
+        const ids = finalPosts.map(p => p.id)
+        fetchBirdwatchForPosts(ids)
       }
     } catch (e) {
-      console.error('Failed to load recommended timeline:', e)
+      console.error('Failed to load relay timeline:', e)
       if (isPrimaryView) setLoadError(true)
     } finally {
-      setLoadingRecommended(false)
-      setLoading(false)
-      initialLoadDone.current = true
+      if (requestId === relayRequestIdRef.current) {
+        setLoadingRelay(false)
+        setLoading(false)
+        initialLoadDone.current = true
+      }
     }
   }
 
@@ -723,11 +786,15 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
     }
     
     const readRelays = getReadRelays()
-    const oneHourAgo = Math.floor(Date.now() / 1000) - 3600
-    
+    // アプリ版に合わせて 2 日間ウィンドウを使用:
+    //   - Android NostrRepositoryTimeline.fetchFollowingTimelineFast: since = now - 2 * DAY_SECS
+    //   - iOS  NostrRepository+Timeline.fetchFollowingTimeline:        since = -86400 * 2
+    // 1時間だとフォロー中ユーザーの新着が無い場合に空になりやすいため。
+    const twoDaysAgo = Math.floor(Date.now() / 1000) - 2 * 24 * 3600
+
     try {
-      const noteFilter = { kinds: [1, NOSTR_KINDS.LONG_FORM, NOSTR_KINDS.SHORT_VIDEO], authors: followList, since: oneHourAgo, limit: 100 }
-      const repostFilter = { kinds: [6], authors: followList, since: oneHourAgo, limit: 50 }
+      const noteFilter = { kinds: [1, NOSTR_KINDS.LONG_FORM, NOSTR_KINDS.SHORT_VIDEO], authors: followList, since: twoDaysAgo, limit: 100 }
+      const repostFilter = { kinds: [6], authors: followList, since: twoDaysAgo, limit: 50 }
       
       const [notes, reposts] = await Promise.all([
         fetchEvents(noteFilter, readRelays),
@@ -780,6 +847,39 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
       // Fetch Birdwatch labels in background
       const eventIds = allPosts.map(p => p.id)
       fetchBirdwatchForPosts(eventIds)
+
+      // Fetch reactions / reposts / zaps / bookmarks in parallel (iOS enrichPosts と同じ)
+      if (pubkey && eventIds.length > 0) {
+        const [reactionEvents, repostAgg, zapTotals, bookmarkIds] = await Promise.all([
+          fetchEvents({ kinds: [7], '#e': eventIds, limit: 500 }, getReadRelays()),
+          fetchRepostCounts(eventIds, pubkey),
+          fetchZapTotals(eventIds),
+          fetchBookmarkEventIds(pubkey)
+        ])
+
+        const reactionCounts = {}
+        const myReactions = new Set()
+        const myReactionIds = {}
+        for (const event of reactionEvents) {
+          const targetId = event.tags.find(t => t[0] === 'e')?.[1]
+          if (targetId) {
+            reactionCounts[targetId] = (reactionCounts[targetId] || 0) + 1
+            if (event.pubkey === pubkey) {
+              myReactions.add(targetId)
+              myReactionIds[targetId] = event.id
+            }
+          }
+        }
+
+        setReactions(reactionCounts)
+        setUserReactions(myReactions)
+        setUserReposts(new Set(Object.keys(repostAgg.myRepostIds)))
+        setUserReactionIds(myReactionIds)
+        setUserRepostIds(repostAgg.myRepostIds)
+        setRepostCounts(repostAgg.counts)
+        setZapAmounts(zapTotals)
+        setUserBookmarks(new Set(bookmarkIds))
+      }
     } catch (e) {
       console.error('Failed to load following timeline:', e)
     } finally {
@@ -793,7 +893,7 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
     if (timelineMode === 'following') {
       await loadFollowingTimeline()
     } else {
-      await loadRecommendedTimeline()
+      await loadRelayTimeline(selectedRelayUrl)
     }
   }
 
@@ -891,6 +991,10 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
       if (success) {
         setUserReposts(prev => new Set([...prev, event.id]))
         setUserRepostIds(prev => ({ ...prev, [event.id]: signed.id }))
+        setRepostCounts(prev => ({
+          ...prev,
+          [event.id]: (prev[event.id] || 0) + 1
+        }))
         // Record engagement for recommendation personalization
         recordEngagement('repost', event.pubkey)
       }
@@ -917,10 +1021,60 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
           delete newIds[event.id]
           return newIds
         })
+        setRepostCounts(prev => ({
+          ...prev,
+          [event.id]: Math.max(0, (prev[event.id] || 1) - 1)
+        }))
       }
     } catch (e) {
       console.error('Failed to unrepost:', e)
     }
+  }
+
+  // Bookmark toggle (NIP-51 Kind 10003) — iOS NostrRepository+Bookmarks の add/remove と同じ振る舞い
+  const handleBookmark = async (event, wasBookmarked) => {
+    if (!pubkey || !event?.id) return
+    if (bookmarkingId === event.id) return
+    setBookmarkingId(event.id)
+    try {
+      if (wasBookmarked) {
+        const { ids } = await removeBookmark(pubkey, event.id)
+        setUserBookmarks(new Set(ids))
+      } else {
+        const { ids } = await addBookmark(pubkey, event.id)
+        setUserBookmarks(new Set(ids))
+      }
+    } catch (e) {
+      console.error('Bookmark toggle failed:', e)
+      alert(e.message || 'ブックマーク更新に失敗しました')
+    } finally {
+      setBookmarkingId(null)
+    }
+  }
+
+  // リポスト長押し → 引用ポスト (iOS PostRow onRepostLongPress → showQuoteSheet 相当)
+  const handleRepostLongPress = (event) => {
+    if (!event) return
+    setReplyToPost(null)
+    setQuotePost(event)
+    setShowPostModal(true)
+  }
+
+  // 投稿長押し → 返信モーダル (iOS PostRow .onLongPressGesture → showPostDetail 相当)
+  const handlePostLongPress = (event) => {
+    if (!event) return
+    setQuotePost(null)
+    setReplyToPost(event)
+    setShowPostModal(true)
+  }
+
+  // モーダルを閉じるとき replyTo / quotePost もクリア
+  const closePostModal = () => {
+    setShowPostModal(false)
+    setReplyToPost(null)
+    setQuotePost(null)
+    setImageFiles([])
+    setImagePreviews([])
   }
 
   const handleDelete = async (eventId) => {
@@ -1120,11 +1274,33 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
         }
       }
 
+      // 引用ポスト (NIP-18): content 末尾に nostr:nevent... を埋め込む
+      if (quotePost) {
+        try {
+          const nevent = nip19.neventEncode({ id: quotePost.id })
+          content = content ? `${content}\n\nnostr:${nevent}` : `nostr:${nevent}`
+        } catch (e) {
+          console.error('Failed to encode nevent for quote:', e)
+        }
+      }
+
       const event = createEventTemplate(1, content)
       event.pubkey = pubkey
 
       // Add client tag
       event.tags = [...event.tags, ['client', 'nullnull']]
+
+      // 返信 (NIP-10): e + p タグ
+      if (replyToPost) {
+        event.tags.push(['e', replyToPost.id, '', 'reply'])
+        event.tags.push(['p', replyToPost.pubkey])
+      }
+
+      // 引用 (NIP-18): q + p タグ
+      if (quotePost) {
+        event.tags.push(['q', quotePost.id])
+        event.tags.push(['p', quotePost.pubkey])
+      }
 
       // Add video tags if present (imeta for diVine compatibility)
       if (recordedVideo) {
@@ -1176,7 +1352,10 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
       const success = await publishEvent(signed)
 
       if (success) {
-        setPosts([signed, ...posts])
+        // 返信/引用ポストは自分のタイムラインに直接出すと文脈が崩れるので、新規投稿のみ追加
+        if (!replyToPost && !quotePost) {
+          setPosts([signed, ...posts])
+        }
         setNewPost('')
         setImageFiles([])
         setImagePreviews([])
@@ -1185,6 +1364,8 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
         setContentWarning('')
         setShowCWInput(false)
         setShowPostModal(false)
+        setReplyToPost(null)
+        setQuotePost(null)
 
         // Notify parent to refresh home tab
         if (onPostPublished) {
@@ -1214,21 +1395,29 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
   const renderTimelinePost = (post, { showNotInterested: showNI = false } = {}) => {
     const postProfile = profiles[post.pubkey]
     const postLikeCount = reactions[post.id] || 0
+    const postRepostCount = repostCounts[post.id] || 0
+    const postZapAmount = zapAmounts[post.id] || 0
     const postHasLiked = userReactions.has(post.id)
     const postHasReposted = userReposts.has(post.id)
+    const postHasBookmarked = userBookmarks.has(post.id)
     const postIsZapping = zapAnimating === post.id
     const postIsLiking = likeAnimating === post.id
+    const postIsBookmarking = bookmarkingId === post.id
     const commonProps = {
       post,
       profile: postProfile,
       profiles,
       likeCount: postLikeCount,
+      repostCount: postRepostCount,
+      zapAmount: postZapAmount,
       hasLiked: postHasLiked,
       hasReposted: postHasReposted,
+      hasBookmarked: postHasBookmarked,
       myReactionId: userReactionIds[post.id],
       myRepostId: userRepostIds[post.id],
       isLiking: postIsLiking,
       isZapping: postIsZapping,
+      isBookmarking: postIsBookmarking,
       onLike: handleLike,
       onUnlike: handleUnlike,
       onRepost: handleRepost,
@@ -1236,6 +1425,9 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
       onZap: handleZap,
       onZapLongPress: handleZapLongPressStart,
       onZapLongPressEnd: handleZapLongPressEnd,
+      onBookmark: handleBookmark,
+      onRepostLongPress: handleRepostLongPress,
+      onPostLongPress: handlePostLongPress,
       onAvatarClick: handleAvatarClick,
       onHashtagClick: handleHashtagClick,
       onMute: handleMute,
@@ -1258,26 +1450,91 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
     return <PostItem {...commonProps} />
   }
 
+  // NIP-65 が未設定でも、アプリ版 getSavedRelayUrls() と同じく
+  // デフォルトリレー群を選択肢として表示する。
+  const relaySelectorUrls = savedRelayUrls.length > 0 ? savedRelayUrls : computeFallbackRelays()
+
   return (
     <div className="min-h-full overflow-x-hidden">
       {/* Header with tabs - fixed position (mobile only) */}
       <header className="fixed top-0 left-0 right-0 lg:left-[240px] xl:left-[280px] z-30 bg-[var(--bg-primary)] border-b border-[var(--border-color)]">
         <div className="flex items-center justify-between px-4 h-14 lg:h-16">
-          {/* Tab Switcher (Mobile only) - Pill Style */}
+          {/* Tab Switcher (Mobile only) - Pill Style (アプリ版 TimelineHeader 相当) */}
           <div className="flex items-center gap-2 p-1 bg-[var(--bg-secondary)] rounded-full lg:hidden">
-            <button
-              onClick={() => handleModeChange('global')}
-              className={`relative px-4 py-1.5 rounded-full text-xs font-bold transition-all ${
-                timelineMode === 'global'
-                  ? 'bg-[var(--line-green)] text-white shadow-sm'
-                  : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]'
-              }`}
-            >
-              おすすめ
-              {recommendedReady && timelineMode !== 'global' && (
-                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-[var(--bg-secondary)]" />
+            {/* リレーピル — 選択中リレーのホスト名を表示。タップでフィード切替、▼で選択ドロップダウン */}
+            <div className="relative">
+              <button
+                onClick={() => {
+                  handleModeChange('global')
+                  if (relaySelectorUrls.length > 0) setShowRelayDropdown(prev => !prev)
+                }}
+                className={`relative inline-flex items-center gap-0.5 pl-3 ${relaySelectorUrls.length > 0 ? 'pr-1.5' : 'pr-3'} py-1.5 rounded-full text-xs font-bold transition-all ${
+                  timelineMode === 'global'
+                    ? 'bg-[var(--line-green)] text-white shadow-sm'
+                    : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]'
+                }`}
+              >
+                <span className="max-w-[120px] truncate">
+                  {selectedRelayUrl
+                    ? selectedRelayUrl.replace(/^wss:\/\//, '').replace(/\/+$/, '').split('/')[0]
+                    : 'リレー'}
+                </span>
+                {relaySelectorUrls.length > 0 && (
+                  <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M7 10l5 5 5-5z"/>
+                  </svg>
+                )}
+                {relayReady && timelineMode !== 'global' && (
+                  <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-[var(--bg-secondary)]" />
+                )}
+              </button>
+
+              {/* リレー選択ドロップダウン (Android DropdownMenu 相当) */}
+              {showRelayDropdown && relaySelectorUrls.length > 0 && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setShowRelayDropdown(false)}
+                  />
+                  <div className="absolute top-full left-0 mt-2 min-w-[200px] max-w-[280px] bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl shadow-lg z-50 overflow-hidden">
+                    {/* すべて (= selectedRelayUrl null) */}
+                    <button
+                      onClick={() => { setSelectedRelayUrl(null); setShowRelayDropdown(false) }}
+                      className="w-full flex items-center justify-between px-3 py-2.5 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] transition-colors"
+                    >
+                      <span>すべて</span>
+                      {selectedRelayUrl === null && (
+                        <svg className="w-4 h-4 text-[var(--line-green)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="20 6 9 17 4 12"/>
+                        </svg>
+                      )}
+                    </button>
+                    {relaySelectorUrls.map(url => {
+                      const display = url.replace(/^wss:\/\//, '').replace(/\/+$/, '')
+                      const isSel = selectedRelayUrl === url
+                      return (
+                        <button
+                          key={url}
+                          onClick={() => {
+                            setSelectedRelayUrl(isSel ? null : url)
+                            setShowRelayDropdown(false)
+                          }}
+                          className="w-full flex items-center justify-between px-3 py-2.5 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] transition-colors"
+                        >
+                          <span className="truncate">{display}</span>
+                          {isSel && (
+                            <svg className="w-4 h-4 text-[var(--line-green)] flex-shrink-0 ml-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="20 6 9 17 4 12"/>
+                            </svg>
+                          )}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </>
               )}
-            </button>
+            </div>
+
             <button
               onClick={() => handleModeChange('following')}
               className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${
@@ -1378,21 +1635,61 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
             setShowNotifications(false)
             setViewingProfile(pk)
           }}
+          onPostClick={(eventId, eventObj) => {
+            // 通知タップ → 投稿詳細モーダルへ (Android NotificationRow onNoteClick → PostDetailScreen 相当)
+            setShowNotifications(false)
+            setFocusedPostEvent(eventObj || null)
+            setFocusedPostId(eventId)
+          }}
+        />
+      )}
+
+      {/* Post Detail Modal (通知から遷移) */}
+      {focusedPostId && (
+        <PostDetailModal
+          eventId={focusedPostId}
+          initialPost={focusedPostEvent}
+          pubkey={pubkey}
+          onClose={() => {
+            setFocusedPostId(null)
+            setFocusedPostEvent(null)
+          }}
+          onAvatarClick={(pk) => {
+            setFocusedPostId(null)
+            setFocusedPostEvent(null)
+            setViewingProfile(pk)
+          }}
+          onHashtagClick={(tag) => {
+            setFocusedPostId(null)
+            setFocusedPostEvent(null)
+            setSearchQuery(`#${tag}`)
+            setShowSearch(true)
+          }}
+          onReply={(event) => {
+            // 既存の handlePostLongPress と同じフロー (返信モーダルを開く)
+            setFocusedPostId(null)
+            setFocusedPostEvent(null)
+            setQuotePost(null)
+            setReplyToPost(event)
+            setShowPostModal(true)
+          }}
         />
       )}
 
       {/* Post Modal */}
       {showPostModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center modal-overlay" onClick={() => { setShowPostModal(false); setImageFiles([]); setImagePreviews([]) }}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center modal-overlay" onClick={closePostModal}>
           <div
             className="w-full h-full sm:h-auto sm:max-w-lg bg-[var(--bg-primary)] sm:rounded-2xl flex flex-col overflow-hidden animate-scaleIn"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between p-4 border-b border-[var(--border-color)] flex-shrink-0">
-              <button onClick={() => { setShowPostModal(false); setImageFiles([]); setImagePreviews([]) }} className="text-[var(--text-secondary)] action-btn whitespace-nowrap flex-shrink-0">
+              <button onClick={closePostModal} className="text-[var(--text-secondary)] action-btn whitespace-nowrap flex-shrink-0">
                 キャンセル
               </button>
-              <span className="font-semibold text-[var(--text-primary)] whitespace-nowrap flex-shrink-0">新規投稿</span>
+              <span className="font-semibold text-[var(--text-primary)] whitespace-nowrap flex-shrink-0">
+                {replyToPost ? '返信' : quotePost ? '引用投稿' : '新規投稿'}
+              </span>
               <button
                 onClick={handlePost}
                 disabled={posting || uploadingPostImage || (!newPost.trim() && imageFiles.length === 0)}
@@ -1402,6 +1699,27 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
               </button>
             </div>
             <div className="flex-1 p-4 pb-20 sm:pb-4 flex flex-col overflow-y-auto">
+              {/* 返信/引用ターゲット表示 */}
+              {(replyToPost || quotePost) && (
+                <div className="mb-3 p-3 rounded-lg border border-[var(--border-color)] bg-[var(--bg-secondary)]/50">
+                  <div className="flex items-center gap-2 mb-1.5 text-xs text-[var(--text-tertiary)]">
+                    {replyToPost ? (
+                      <>
+                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 00-4-4H4"/></svg>
+                        <span>返信先</span>
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>
+                        <span>引用元</span>
+                      </>
+                    )}
+                  </div>
+                  <p className="text-sm text-[var(--text-secondary)] line-clamp-3 whitespace-pre-wrap break-words">
+                    {(replyToPost || quotePost).content}
+                  </p>
+                </div>
+              )}
               {/* Video Preview */}
               {recordedVideo && (
                 <div className="mb-4 relative aspect-square w-full max-w-[300px] mx-auto overflow-hidden rounded-xl bg-black">
@@ -1462,7 +1780,7 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
                       ? 'text-transparent caret-[var(--text-primary)] absolute inset-0 z-10'
                       : 'text-[var(--text-primary)] relative'
                   }`}
-                  placeholder="いまどうしてる？"
+                  placeholder={replyToPost ? '返信を入力...' : quotePost ? 'コメントを追加...' : 'いまどうしてる？'}
                   autoFocus
                 />
                 {/* Visible preview layer - show when there are hashtags, emojis, or active STT */}
@@ -1815,7 +2133,7 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
                   className="animate-fadeIn"
                   style={{ animationDelay: `${Math.min(index * 30, 300)}ms` }}
                 >
-                  {renderTimelinePost(post, { showNotInterested: timelineMode === 'global' })}
+                  {renderTimelinePost(post)}
                 </div>
               ))}
 
@@ -1834,26 +2152,89 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
         )}
       </div>
       
-      {/* Desktop: Dual column (Recommend | Following) with independent scroll */}
+      {/* Desktop: Dual column (Relay | Following) with independent scroll */}
       <div className="hidden lg:flex lg:fixed lg:top-16 lg:bottom-0 lg:left-[240px] xl:left-[280px] lg:right-0">
-        {/* Left column: Recommended timeline */}
+        {/* Left column: Relay timeline (アプリ版に合わせたリレーフィード) */}
         <div className="flex-1 flex flex-col border-r border-[var(--border-color)] overflow-hidden">
           <div className="flex-shrink-0 bg-[var(--bg-primary)] border-b border-[var(--border-color)] px-4 py-3 flex items-center justify-between">
-            <h2 className="font-bold text-[var(--text-primary)]">おすすめ</h2>
+            <div className="relative">
+              <button
+                onClick={() => {
+                  if (relaySelectorUrls.length > 0) setShowRelayDropdown(prev => !prev)
+                }}
+                className="flex items-center gap-2 text-left rounded-full px-3 py-1.5 text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+                title="リレーを選択"
+              >
+                <span className="font-bold">リレー</span>
+                <span className="text-xs font-normal text-[var(--text-tertiary)] truncate max-w-[200px]">
+                  {selectedRelayUrl
+                    ? selectedRelayUrl.replace(/^wss:\/\//, '').replace(/\/+$/, '')
+                    : 'すべて'}
+                </span>
+                {relaySelectorUrls.length > 0 && (
+                  <svg className="w-3 h-3 text-[var(--text-tertiary)] flex-shrink-0" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M7 10l5 5 5-5z"/>
+                  </svg>
+                )}
+              </button>
+
+              {showRelayDropdown && relaySelectorUrls.length > 0 && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setShowRelayDropdown(false)}
+                  />
+                  <div className="absolute top-full left-0 mt-2 min-w-[220px] max-w-[320px] bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl shadow-lg z-50 overflow-hidden">
+                    <button
+                      onClick={() => { setSelectedRelayUrl(null); setShowRelayDropdown(false) }}
+                      className="w-full flex items-center justify-between px-3 py-2.5 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] transition-colors"
+                    >
+                      <span>すべて</span>
+                      {selectedRelayUrl === null && (
+                        <svg className="w-4 h-4 text-[var(--line-green)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="20 6 9 17 4 12"/>
+                        </svg>
+                      )}
+                    </button>
+                    {relaySelectorUrls.map(url => {
+                      const display = url.replace(/^wss:\/\//, '').replace(/\/+$/, '')
+                      const isSel = selectedRelayUrl === url
+                      return (
+                        <button
+                          key={url}
+                          onClick={() => {
+                            setSelectedRelayUrl(isSel ? null : url)
+                            setShowRelayDropdown(false)
+                          }}
+                          className="w-full flex items-center justify-between px-3 py-2.5 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] transition-colors"
+                        >
+                          <span className="truncate">{display}</span>
+                          {isSel && (
+                            <svg className="w-4 h-4 text-[var(--line-green)] flex-shrink-0 ml-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="20 6 9 17 4 12"/>
+                            </svg>
+                          )}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
             <button
-              onClick={() => loadRecommendedTimeline()}
-              disabled={loadingRecommended}
+              onClick={() => loadRelayTimeline(selectedRelayUrl)}
+              disabled={loadingRelay}
               className="p-2 rounded-full text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-all disabled:opacity-50"
-              title="おすすめを更新"
+              title="リレーフィードを更新"
             >
-              <svg className={`w-4 h-4 ${loadingRecommended ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <svg className={`w-4 h-4 ${loadingRelay ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M23 4v6h-6M1 20v-6h6"/>
                 <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
               </svg>
             </button>
           </div>
           <div className="flex-1 overflow-y-auto">
-            {(loading || loadingRecommended) && globalPosts.length === 0 ? (
+            {(loading || loadingRelay) && globalPosts.length === 0 ? (
               /* Nintendo-style: デスクトップ用やさしいスケルトン */
               <div className="divide-y divide-[var(--border-color)] animate-fadeIn">
                 {[1, 2, 3, 4].map((i) => (
@@ -1882,7 +2263,7 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
                       className="animate-fadeIn"
                       style={{ animationDelay: `${Math.min(index * 30, 300)}ms` }}
                     >
-                      {renderTimelinePost(post, { showNotInterested: true })}
+                      {renderTimelinePost(post)}
                     </div>
                   ))}
               </div>

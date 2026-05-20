@@ -240,6 +240,10 @@ private struct GroupChatView: View {
                         .font(NuruFont.titleMedium())
                         .foregroundStyle(theme.textPrimary)
                         .lineLimit(1)
+                    Text("gid:\(String(group.groupIdHex.prefix(12))) msg:\(viewModel.messages.count)")
+                        .font(.system(size: 10, weight: .regular))
+                        .foregroundStyle(theme.textTertiary)
+                        .lineLimit(1)
                     if let np = partnerProfile?.name, !np.isEmpty {
                         Text(np)
                             .font(NuruFont.labelSmall())
@@ -398,7 +402,7 @@ private struct GroupRow: View {
                         }
                     }
                     HStack {
-                        Text(group.lastMessage.isEmpty ? "メッセージはありません" : group.lastMessage)
+                        Text("gid:\(String(group.groupIdHex.prefix(12)))  \(group.lastMessage.isEmpty ? "メッセージはありません" : group.lastMessage)")
                             .font(NuruFont.bodySmall())
                             .foregroundStyle(theme.textSecondary)
                             .lineLimit(1)
