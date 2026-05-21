@@ -10,6 +10,22 @@ null--nostr is a LINE-style Nostr client for the Japanese community. It runs as 
 
 ---
 
+## Culture (Charter v0.1)
+
+ぬるぬるは「美意識を制度化する」ことを文化戦略の中核に据える。すべての設計・実装判断は
+以下の文化憲章に従う。新しい NIP の採用や新機能 PR は、これらに抵触しないかを確認する。
+
+- [docs/wiki/culture/principles.md](./docs/wiki/culture/principles.md) — 北極星 + 五箇条
+- [docs/wiki/culture/not-doing.md](./docs/wiki/culture/not-doing.md) — やらないことリスト
+- [docs/wiki/culture/design-crit.md](./docs/wiki/culture/design-crit.md) — Weekly Nuru Design Crit
+- [docs/wiki/culture/copy-style.md](./docs/wiki/culture/copy-style.md) — 日本語コピー規約
+- [docs/wiki/culture/llm-onboarding.md](./docs/wiki/culture/llm-onboarding.md) — LLM コントリビュータ向け
+- [docs/wiki/culture/four-freedoms.md](./docs/wiki/culture/four-freedoms.md) — 10年先の4軸自由ドクトリン
+
+長期ミッション (Charter 北極星) は ADR-0008、Design Crit の制度化は ADR-0007 を参照。
+
+---
+
 ## LLM Wiki
 
 This repository maintains an LLM-generated project wiki under [`docs/wiki/`](./docs/wiki/).

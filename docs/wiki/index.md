@@ -14,6 +14,17 @@
 | [[glossary]] | Nostr / Marmot / Blossom / platform parity 用語集。 |
 | [[lint-report]] | Wiki の最新ヘルスチェック、修正済み stale claim、残ギャップ。 |
 
+## Culture (Charter v0.1)
+
+| Page | Summary |
+|---|---|
+| [[culture/principles]] | 北極星 + 五箇条。ぬるぬるの文化的憲章 v0.1。 |
+| [[culture/not-doing]] | ぬるぬるが意図的にやらないこと。 |
+| [[culture/design-crit]] | Weekly Nuru Design Crit の運用と Crit ルール。 |
+| [[culture/copy-style]] | 日本語コピー規約 (直訳禁止、既存採用語の保護)。 |
+| [[culture/llm-onboarding]] | LLM コントリビュータのオンボーディングと出力規約。 |
+| [[culture/four-freedoms]] | 4軸自由ドクトリン (言論 / プライバシー / 経済 / 配布)。 |
+
 ## Platforms
 
 | Page | Summary |
@@ -75,12 +86,15 @@
 | Page | Summary |
 |---|---|
 | [[decisions/README]] | ADR 形式で設計判断を蓄積する場所。 |
+| [[decisions/_template]] | 新規 ADR を起票するためのテンプレート。 |
 | [[decisions/adr-0001-ios-observation]] | iOS ViewModel に iOS 17+ Observation を使う判断。 |
 | [[decisions/adr-0002-native-talk-uses-marmot-mls]] | Native Talk は Marmot MLS 中心。 |
 | [[decisions/adr-0003-ios-external-signing-uses-nip46]] | iOS external signing は NIP-46。 |
 | [[decisions/adr-0004-design-tokens-are-source-of-truth]] | Design tokens を source of truth とする判断。 |
 | [[decisions/adr-0005-postactions-no-reply-button]] | PostActions に reply button を置かない判断。 |
 | [[decisions/adr-0006-web-rust-bridge-is-stub]] | Web Rust bridge は現状 stub。 |
+| [[decisions/adr-0007-design-crit-ritual]] | Weekly Nuru Design Crit を制度化する判断。 |
+| [[decisions/adr-0008-four-freedoms-mission]] | 4軸自由ドクトリンを長期ミッションとして起票する判断。 |
 
 ## Maintenance checklist for agents
 
@@ -91,9 +105,10 @@
 - `log.md` に `## [YYYY-MM-DD] type | title` 形式で追記したか。
 - Wiki の主張に根拠ファイルを付けたか。
 - 不明点や推測を `Open Questions` に分離したか。
+- 文化判断 ([[culture/principles|五箇条]] / [[culture/not-doing|やらないこと]]) に抵触しないか確認したか。
+
 ## Source references
 
 - `AGENTS.md`
 - `docs/wiki/log.md`
 - Source references listed in each linked wiki page.
-

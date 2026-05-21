@@ -42,3 +42,18 @@ LLM Wiki の時系列ログです。追記専用として扱います。
 - Split Talk documentation into Marmot MLS internals, relay strategy, debugging guidance, and Android/iOS parity pages.
 - Added detailed pages for `nip-04`, `nip-18`, `nip-23`, and `nip-44`.
 - Updated `index.md`, `nips/README.md`, and `lint-report.md` with the new pages and remaining future targets.
+
+## [2026-05-22] culture | NuruNuru Charter v0.1 と4軸自由ドクトリンを起票
+
+- Theme Day「企業文化・カルチャー構築」の成果として `docs/wiki/culture/` を新設。
+- 北極星 + 五箇条を [[culture/principles]] に明文化 (Charter v0.1)。
+- [[culture/not-doing]] にやらないことリストを起票 (体験 / 日本語 / 一貫性 / 鍵 / 設計判断 / NIP / 経済 / 配布 / 短期 KPI)。
+- [[culture/design-crit]] に Weekly Nuru Design Crit の運用 (沈黙批評 → 発話批評 → 4 ラベル) を定義し、[[decisions/adr-0007-design-crit-ritual]] として制度化を起票。
+- [[culture/copy-style]] に日本語コピー規約 (直訳禁止 / 既存採用語保護 / 場面別ガイド) を起票。
+- [[culture/llm-onboarding]] に LLM コントリビュータ向けの編集前チェックリストと出力規約を起票。
+- ユーザーからの「業界の10年先を行く」「経済 / 配布の自由も視野に入れる」という方針を [[culture/four-freedoms]] に整理し、[[decisions/adr-0008-four-freedoms-mission]] として長期ミッションを Proposed で起票。
+- 新規 ADR テンプレート [[decisions/_template]] を追加。
+- `.github/pull_request_template_ui.md` に UI 変更 PR チェックリストを追加。
+- `AGENTS.md` に Culture セクションを追加し、Wiki から AGENTS へのエントリを確立。
+- `docs/wiki/index.md` に Culture セクションを追加し、ADR-0007/0008 とテンプレートをリストに追加。
+- 本件はコード変更を伴わない文化憲章 (Proposed)。Phase 1 (Talk Marmot 完成) → Phase 2 (経済) → Phase 3 (配布) のロードマップは [[culture/four-freedoms]] を参照。
