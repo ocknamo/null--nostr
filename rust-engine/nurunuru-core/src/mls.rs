@@ -22,16 +22,18 @@
 //! Kind-444 (Welcome) rumors are gift-wrapped via NIP-59 in `engine.rs`
 //! (`mls_add_member`) using the engine's signer.
 
+use std::collections::BTreeSet;
+
 use base64::Engine as _;
 use mdk_core::groups::NostrGroupConfigData;
-use mdk_sqlite_storage::MdkSqliteStorage;
-use nostr::{EventBuilder, JsonUtil, PublicKey, RelayUrl, UnsignedEvent};
+use mdk_sqlite_storage::{EncryptionConfig, MdkSqliteStorage};
+use nostr::{EventBuilder, EventId, JsonUtil, PublicKey, RelayUrl, UnsignedEvent};
 use serde_json::Value;
 
 use crate::error::{NuruNuruError, Result};
 use crate::types::{
-    AddMemberResult, DecryptedMessage, EncryptedMessageData, KeyPackageEventData, MlsGroupInfo,
-    WelcomeEventData,
+    AddMemberResult, CommitDelta, DecryptedMessage, EncryptedMessageData, KeyPackageEventData,
+    MlsGroupInfo, PendingWelcome, WelcomeEventData,
 };
 
 // ─── Type alias ──────────────────────────────────────────────────────────────
@@ -83,27 +85,22 @@ fn mls_error_label(error: &dyn std::fmt::Display) -> &'static str {
 
 // ─── MlsManager ──────────────────────────────────────────────────────────────
 
-/// Thin wrapper around `mdk_core::MDK` that translates MLS operations into
-/// Nostr event payloads ready for signing and publishing.
-///
-/// `MlsManager` is not `Clone`; hold it behind `Option<MlsManager>` in the
-/// engine.  Read-only (anonymous) clients keep `None`.
+/// Wraps `mdk_core::MDK` and produces/consumes Nostr event payloads for
+/// Marmot kinds 30443/444/1059/445. Identity is bound at construction; to
+/// switch users, drop this manager (see `NuruNuruEngine::mls_reset`).
 pub struct MlsManager {
     mdk: Mdk,
-    /// Hex-encoded Nostr public key of the local user.  Set on `login()`.
-    /// Uses `RwLock` so `set_user_pubkey` can be called via `&self` from
-    /// `NuruNuruEngine::login()` without requiring `&mut self` on the engine.
-    user_pubkey_hex: std::sync::RwLock<String>,
+    user_pubkey: PublicKey,
     db_path: String,
+    encrypted: bool,
 }
 
 impl MlsManager {
-    /// Open (or create) the MLS SQLite database and initialise MDK.
-    ///
-    /// `db_path`      — absolute path to the `.sqlite3` file
-    /// `nostr_pubkey` — hex-encoded Nostr public key (may be empty at init,
-    ///                  call `set_user_pubkey` after login)
+    /// Unencrypted SQLite open. Prefer [`MlsManager::new_with_key`]
+    /// (SQLCipher) for production; this is for tests / pre-migration installs.
     pub fn new(db_path: &str, nostr_pubkey: &str) -> Result<Self> {
+        let pubkey = Self::parse_required_pubkey(nostr_pubkey)?;
+
         let storage = MdkSqliteStorage::new_unencrypted(db_path)
             .map_err(|e| NuruNuruError::MlsError(format!("SQLite open: {e}")))?;
 
@@ -111,28 +108,65 @@ impl MlsManager {
 
         Ok(Self {
             mdk,
-            user_pubkey_hex: std::sync::RwLock::new(nostr_pubkey.to_string()),
+            user_pubkey: pubkey,
             db_path: db_path.to_string(),
+            encrypted: false,
         })
     }
 
-    /// Update the stored user pubkey after login().
-    /// Takes `&self` so it can be called from `NuruNuruEngine::login()` via `Arc<Self>`.
-    pub fn set_user_pubkey(&self, pubkey_hex: &str) {
-        if let Ok(mut w) = self.user_pubkey_hex.write() {
-            *w = pubkey_hex.to_string();
-        }
+    /// SQLCipher-encrypted SQLite open. Derive `db_key` via
+    /// [`derive_mls_db_key`] or source it from a platform keychain/keystore.
+    pub fn new_with_key(db_path: &str, nostr_pubkey: &str, db_key: [u8; 32]) -> Result<Self> {
+        let pubkey = Self::parse_required_pubkey(nostr_pubkey)?;
+
+        let config = EncryptionConfig::new(db_key);
+        let storage = MdkSqliteStorage::new_with_key(db_path, config)
+            .map_err(|e| NuruNuruError::MlsError(format!("SQLite encrypted open: {e}")))?;
+
+        let mdk = Mdk::new(storage);
+
+        Ok(Self {
+            mdk,
+            user_pubkey: pubkey,
+            db_path: db_path.to_string(),
+            encrypted: true,
+        })
     }
 
-    fn user_pubkey(&self) -> Result<PublicKey> {
-        let hex = self
-            .user_pubkey_hex
-            .read()
-            .map_err(|_| NuruNuruError::MlsError("pubkey lock poisoned".to_string()))?;
-        PublicKey::from_hex(&*hex)
+    fn parse_required_pubkey(nostr_pubkey: &str) -> Result<PublicKey> {
+        if nostr_pubkey.trim().is_empty() {
+            return Err(NuruNuruError::MlsError(
+                "MlsManager requires a non-empty Nostr pubkey at construction time".to_string(),
+            ));
+        }
+        PublicKey::from_hex(nostr_pubkey)
             .map_err(|e| NuruNuruError::MlsError(format!("Invalid user pubkey: {e}")))
     }
 
+    fn user_pubkey(&self) -> Result<PublicKey> {
+        Ok(self.user_pubkey)
+    }
+
+    /// `true` when the underlying SQLite is SQLCipher-encrypted (used in tests).
+    pub fn is_encrypted(&self) -> bool {
+        self.encrypted
+    }
+}
+
+/// HKDF-SHA256 over the raw 32-byte secret key. Deterministic, so the
+/// encrypted DB can be reopened on the same device without keychain
+/// round-trips. `app_salt` scopes the key (use e.g. `b"io.nurunuru.mdk.v1"`).
+pub fn derive_mls_db_key(nsec_bytes: &[u8; 32], app_salt: &[u8]) -> [u8; 32] {
+    use hkdf::Hkdf;
+    use sha2::Sha256;
+    let hk = Hkdf::<Sha256>::new(Some(app_salt), nsec_bytes);
+    let mut out = [0u8; 32];
+    hk.expand(b"mdk-sqlite-db-key", &mut out)
+        .expect("32 bytes is well within HKDF-SHA256 output limits");
+    out
+}
+
+impl MlsManager {
     /// Resolve a `nostr_group_id` hex string (32 bytes = 64 hex chars) to the
     /// internal `mdk_storage_traits::GroupId` (= `mls_group_id`) used by MDK API calls.
     ///
@@ -610,6 +644,56 @@ impl MlsManager {
         })
     }
 
+    /// Compute a `CommitDelta` by diffing membership before vs after MDK
+    /// applied the commit. Issue #178 #5: lets the UI render add/remove
+    /// without a racey `get_group_info` re-query.
+    fn build_commit_delta_result(
+        &self,
+        group_id_hex: &str,
+        members_before: Option<BTreeSet<String>>,
+        log_tag: &str,
+        event_id: &nostr::EventId,
+    ) -> crate::types::MlsProcessResult {
+        let (members_after, epoch_after) = match self.resolve_group_id(group_id_hex) {
+            Ok(gid) => {
+                let after: BTreeSet<String> = self
+                    .mdk
+                    .get_members(&gid)
+                    .map(|set| set.iter().map(|pk| pk.to_hex()).collect())
+                    .unwrap_or_default();
+                let epoch = self
+                    .mdk
+                    .get_group(&gid)
+                    .ok()
+                    .flatten()
+                    .map(|g| g.epoch)
+                    .unwrap_or(0);
+                (after, epoch)
+            }
+            Err(_) => (BTreeSet::new(), 0),
+        };
+        let before = members_before.unwrap_or_default();
+        let added: Vec<String> = members_after.difference(&before).cloned().collect();
+        let removed: Vec<String> = before.difference(&members_after).cloned().collect();
+        tracing::info!(
+            "[MLS] process_message {} group={} event_id={} added={} removed={} epoch={}",
+            log_tag,
+            group_id_hex,
+            event_id.to_hex(),
+            added.len(),
+            removed.len(),
+            epoch_after
+        );
+        crate::types::MlsProcessResult::Commit {
+            group_id_hex: group_id_hex.to_string(),
+            delta: CommitDelta {
+                added_pubkeys: added,
+                removed_pubkeys: removed,
+                epoch_after,
+            },
+        }
+    }
+
     /// Process an incoming Kind-445 event (Proposal / Commit / Application).
     pub fn process_message_result(
         &self,
@@ -670,6 +754,13 @@ impl MlsManager {
             });
         }
 
+        // Snapshot members so we can diff after Commit (MDK 0.8 only returns mls_group_id).
+        let members_before: Option<BTreeSet<String>> = self
+            .resolve_group_id(group_id_hex)
+            .ok()
+            .and_then(|gid| self.mdk.get_members(&gid).ok())
+            .map(|set| set.iter().map(|pk| pk.to_hex()).collect());
+
         let result = self
             .mdk
             .process_message(&event)
@@ -694,34 +785,32 @@ impl MlsManager {
                     },
                 ))
             }
-            mdk_core::messages::MessageProcessingResult::Commit { .. } => {
-                tracing::info!(
-                    "[MLS] process_message commit group={} event_id={} — state updated",
+            mdk_core::messages::MessageProcessingResult::Commit { .. } => Ok(
+                self.build_commit_delta_result(group_id_hex, members_before, "commit", &event.id)
+            ),
+            // MDK auto-commits some proposals (e.g. self-remove when receiver
+            // is admin); surface them as commits too.
+            mdk_core::messages::MessageProcessingResult::Proposal(_) => Ok(self
+                .build_commit_delta_result(
                     group_id_hex,
-                    event.id.to_hex()
-                );
-                Ok(crate::types::MlsProcessResult::StateUpdate {
-                    kind: "commit".to_string(),
-                })
-            }
-            mdk_core::messages::MessageProcessingResult::Proposal(_) => {
-                tracing::info!(
-                    "[MLS] process_message proposal group={} event_id={} — auto-committed",
-                    group_id_hex,
-                    event.id.to_hex()
-                );
-                Ok(crate::types::MlsProcessResult::StateUpdate {
-                    kind: "proposal".to_string(),
-                })
-            }
+                    members_before,
+                    "proposal_auto_committed",
+                    &event.id,
+                )),
             mdk_core::messages::MessageProcessingResult::PendingProposal { .. } => {
-                tracing::info!(
-                    "[MLS] process_message pending_proposal group={} event_id={} — stored",
+                // A pending proposal sits in MDK storage. Multi-member groups
+                // will stall on the next clean-state operation ("pending
+                // proposal exists") and the group can fork. Surface a signal
+                // so the engine/app schedules a `self_update` commit to resolve
+                // it instead of silently logging.
+                tracing::warn!(
+                    "[MLS] process_message pending_proposal group={} event_id={} — needs self_update",
                     group_id_hex,
                     event.id.to_hex()
                 );
-                Ok(crate::types::MlsProcessResult::StateUpdate {
-                    kind: "pending_proposal".to_string(),
+                Ok(crate::types::MlsProcessResult::NeedsSelfUpdate {
+                    group_id_hex: group_id_hex.to_string(),
+                    reason: "pending_proposal".to_string(),
                 })
             }
             other => {
@@ -796,7 +885,9 @@ impl MlsManager {
     ) -> Result<DecryptedMessage> {
         match self.process_message_result(group_id_hex, event_json)? {
             crate::types::MlsProcessResult::ApplicationMessage(msg) => Ok(msg),
-            crate::types::MlsProcessResult::StateUpdate { .. } => {
+            crate::types::MlsProcessResult::Commit { .. }
+            | crate::types::MlsProcessResult::NeedsSelfUpdate { .. }
+            | crate::types::MlsProcessResult::StateUpdate { .. } => {
                 Err(NuruNuruError::MlsStateUpdate)
             }
         }
@@ -804,10 +895,10 @@ impl MlsManager {
 
     // ─── Welcome (Kind 444) ───────────────────────────────────────────────
 
-    /// Process an incoming Kind-444 Welcome and join the group.
-    ///
-    /// `welcome_event_json` — JSON of the **rumor** (inner, unwrapped unsigned event).
-    /// The wrapper Event ID is extracted from the rumor's `id` field for MDK tracking.
+    /// Process + accept a Welcome in one step (back-compat). Prefer the split
+    /// API ([`Self::preview_welcome_rumor`] +
+    /// [`Self::accept_pending_welcome`] / [`Self::decline_pending_welcome`])
+    /// so users can decline — see issue #178 #4.
     pub fn process_welcome(&self, welcome_event_json: &str) -> Result<MlsGroupInfo> {
         let mut rumor: UnsignedEvent = serde_json::from_str(welcome_event_json)
             .map_err(|e| NuruNuruError::MlsError(format!("Invalid welcome JSON: {e}")))?;
@@ -818,58 +909,127 @@ impl MlsManager {
         self.process_welcome_rumor(&wrapper_event_id, &rumor)
     }
 
-    /// Process an already-unwrapped Welcome rumor and join the group.
-    ///
-    /// `wrapper_event_id` must be the outer kind:1059 event id when available.
-    /// MDK stores processed/failed Welcome state under this id, so using the
-    /// inner rumor id causes repeated failures and prevents interoperability with
-    /// Marmot/WhiteNoise gift-wrapped Welcomes.
+    /// Back-compat fused process+accept. Prefer the split API for new code.
     pub fn process_welcome_rumor(
         &self,
         wrapper_event_id: &nostr::EventId,
         rumor: &UnsignedEvent,
     ) -> Result<MlsGroupInfo> {
-        let welcome = self
-            .mdk
-            .process_welcome(wrapper_event_id, rumor)
-            .map_err(|e| NuruNuruError::MlsError(format!("process_welcome: {e}")))?;
+        let preview = self.preview_welcome_rumor(wrapper_event_id, rumor)?;
+        let welcome_id = EventId::from_hex(&preview.welcome_event_id_hex)
+            .map_err(|e| NuruNuruError::MlsError(format!("Invalid welcome_event_id: {e}")))?;
+        let _ = self.accept_pending_welcome(&welcome_id)?;
 
-        // `process_welcome` in MDK only stores a pending welcome preview. The
-        // NuruNuru API method is documented/used as "process and join", so accept
-        // it immediately to create the local MLS group and mark the required
-        // post-join self-update state.
-        self.mdk
-            .accept_welcome(&welcome)
-            .map_err(|e| NuruNuruError::MlsError(format!("accept_welcome: {e}")))?;
-
-        let group_id_hex = hex::encode(welcome.nostr_group_id);
-        let is_dm = welcome.member_count <= 2;
+        let group_id_hex = preview.group_id_hex.clone();
+        let is_dm = preview.is_dm;
 
         // The Welcome record itself doesn't carry disappearing_message_secs;
         // read it from the stored group metadata if already available.
         let disappearing_message_secs = self
-            .mdk
-            .get_group(&welcome.mls_group_id)
+            .resolve_group_id(&group_id_hex)
             .ok()
-            .flatten()
+            .and_then(|gid| self.mdk.get_group(&gid).ok().flatten())
             .and_then(|g| g.disappearing_message_secs);
 
         Ok(MlsGroupInfo {
             group_id_hex,
-            name: welcome.group_name,
-            description: welcome.group_description,
-            admin_pubkeys: welcome
-                .group_admin_pubkeys
-                .iter()
-                .map(|pk| pk.to_hex())
-                .collect(),
+            name: preview.group_name,
+            description: preview.group_description,
+            admin_pubkeys: preview.group_admin_pubkeys,
             member_pubkeys: Vec::new(),
-            relays: welcome.group_relays.iter().map(|r| r.to_string()).collect(),
+            relays: preview.group_relays,
             created_at: 0,
             epoch: 0,
             disappearing_message_secs,
             is_dm,
         })
+    }
+
+    /// Stage a Welcome without joining. `wrapper_event_id` is the outer
+    /// kind:1059 id when available (MDK keys processed state on it).
+    pub fn preview_welcome_rumor(
+        &self,
+        wrapper_event_id: &nostr::EventId,
+        rumor: &UnsignedEvent,
+    ) -> Result<PendingWelcome> {
+        let welcome = self
+            .mdk
+            .process_welcome(wrapper_event_id, rumor)
+            .map_err(|e| NuruNuruError::MlsError(format!("process_welcome: {e}")))?;
+
+        Ok(Self::welcome_to_pending(&welcome))
+    }
+
+    fn welcome_to_pending(
+        welcome: &mdk_storage_traits::welcomes::types::Welcome,
+    ) -> PendingWelcome {
+        PendingWelcome {
+            welcome_event_id_hex: welcome.id.to_hex(),
+            wrapper_event_id_hex: welcome.wrapper_event_id.to_hex(),
+            group_id_hex: hex::encode(welcome.nostr_group_id),
+            group_name: welcome.group_name.clone(),
+            group_description: welcome.group_description.clone(),
+            group_admin_pubkeys: welcome
+                .group_admin_pubkeys
+                .iter()
+                .map(|pk| pk.to_hex())
+                .collect(),
+            group_relays: welcome.group_relays.iter().map(|r| r.to_string()).collect(),
+            welcomer_pubkey: welcome.welcomer.to_hex(),
+            member_count: welcome.member_count,
+            is_dm: welcome.member_count <= 2,
+        }
+    }
+
+    /// List Welcomes that have been previewed but not yet accepted/declined.
+    pub fn get_pending_welcomes(&self) -> Result<Vec<PendingWelcome>> {
+        let welcomes = self
+            .mdk
+            .get_pending_welcomes(None)
+            .map_err(|e| NuruNuruError::MlsError(format!("get_pending_welcomes: {e}")))?;
+        Ok(welcomes.iter().map(Self::welcome_to_pending).collect())
+    }
+
+    /// Accept a previewed Welcome — joins the group and marks the MIP-02
+    /// post-join self-update required.
+    pub fn accept_pending_welcome(&self, welcome_event_id: &EventId) -> Result<PendingWelcome> {
+        let welcome = self
+            .mdk
+            .get_welcome(welcome_event_id)
+            .map_err(|e| NuruNuruError::MlsError(format!("get_welcome: {e}")))?
+            .ok_or_else(|| {
+                NuruNuruError::MlsError(format!(
+                    "accept_pending_welcome: welcome not found for welcome_event_id={}",
+                    welcome_event_id.to_hex()
+                ))
+            })?;
+
+        self.mdk
+            .accept_welcome(&welcome)
+            .map_err(|e| NuruNuruError::MlsError(format!("accept_welcome: {e}")))?;
+
+        // TODO(mdk): receive-side init-key delete API not yet exposed (issue #178 #8).
+        // Send-side `delete_consumed_key_package_by_hash_ref` covers the common case.
+
+        Ok(Self::welcome_to_pending(&welcome))
+    }
+
+    /// Decline a previewed Welcome.
+    pub fn decline_pending_welcome(&self, welcome_event_id: &EventId) -> Result<()> {
+        let welcome = self
+            .mdk
+            .get_welcome(welcome_event_id)
+            .map_err(|e| NuruNuruError::MlsError(format!("get_welcome: {e}")))?
+            .ok_or_else(|| {
+                NuruNuruError::MlsError(format!(
+                    "decline_pending_welcome: welcome not found for welcome_event_id={}",
+                    welcome_event_id.to_hex()
+                ))
+            })?;
+
+        self.mdk
+            .decline_welcome(&welcome)
+            .map_err(|e| NuruNuruError::MlsError(format!("decline_welcome: {e}")))
     }
 
     // ─── Group queries ────────────────────────────────────────────────────

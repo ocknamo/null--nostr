@@ -248,10 +248,18 @@ async fn merge_pending_commit_allows_followup_state_update() {
         .await
         .unwrap();
     match processed {
+        // Issue #178 #5: self-update commit is now structured Commit with
+        // empty member delta (no add/remove on self-update).
+        nurunuru_core::types::MlsProcessResult::Commit { delta, .. } => {
+            assert!(
+                delta.added_pubkeys.is_empty() && delta.removed_pubkeys.is_empty(),
+                "Bob self-update must have empty member delta, got {delta:?}"
+            );
+        }
         nurunuru_core::types::MlsProcessResult::StateUpdate { kind } => {
             assert_eq!(kind, "commit", "Bob self-update must process as a commit");
         }
-        other => panic!("expected Bob self-update to be a state update, got {other:?}"),
+        other => panic!("expected Bob self-update commit, got {other:?}"),
     }
 
     let expected = "message after pending add-member commit was merged";

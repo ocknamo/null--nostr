@@ -425,7 +425,7 @@ extension NostrRepository {
         // available on relays. Polling must still fetch recent relay events so Android ->
         // iOS messages appear.
 
-        _ = try? ffi.mlsMergePendingCommit(groupIdHex: groupIdHex)
+        // Issue #178 #2: no merge_pending_commit on the receive path — only safe after a confirmed publish.
 
         // Foreground polling is incremental only. Explicit repairFull is the only
         // unbounded replay path, used when a DM has diverged and local history contains
@@ -524,6 +524,25 @@ extension NostrRepository {
                         appliedCount += 1
                         AppLogger.log("MLS", "fetchMlsMessages: application id=\(ev.id) sender=\(mlsLogPrefix(msg.senderPubkey)) len=\(msg.content.count)")
 
+                    // Issue #178 #5: structured commit delta — no group-info re-query needed.
+                    case .commit(let gid, let added, let removed, let epochAfter):
+                        processedIds.insert(ev.id)
+                        retryCooldowns.removeValue(forKey: ev.id)
+                        retryableIds.remove(ev.id)
+                        stateOnlyCount += 1
+                        stateUpdateProcessedInPass = true
+                        retryCooldowns = retryCooldowns.filter { $0.value <= nowSec }
+                        AppLogger.log("MLS", "fetchMlsMessages: commit id=\(ev.id) group=\(gid) added=\(added.count) removed=\(removed.count) epoch=\(epochAfter)")
+
+                    // Issue #178 #6: surface the pending-proposal signal; recovery commit runs on the publish path.
+                    case .needsSelfUpdate(let gid, let reason):
+                        processedIds.insert(ev.id)
+                        retryCooldowns.removeValue(forKey: ev.id)
+                        retryableIds.remove(ev.id)
+                        stateOnlyCount += 1
+                        stateUpdateProcessedInPass = true
+                        AppLogger.log("MLS", "fetchMlsMessages: needsSelfUpdate id=\(ev.id) group=\(gid) reason=\(reason)")
+
                     case .stateUpdate(let kind):
                         // protocol-shape mismatch は再試行不要として処理済み化
                         if isNonRetryableMlsUnprocessable(kind) {
@@ -547,42 +566,23 @@ extension NostrRepository {
                             retryableIds.remove(ev.id)
                             stateOnlyCount += 1
                             stateUpdateProcessedInPass = true
-                            try? ffi.mlsMergePendingCommit(groupIdHex: groupIdHex)
+                            // Issue #178 #2: no merge here — pending slot is for *our* commits, post-publish only.
                             // New state may unblock previously state_not_ready events.
                             retryCooldowns = retryCooldowns.filter { $0.value <= nowSec }
                             AppLogger.log("MLS", "fetchMlsMessages: state-only kind=\(kind) id=\(ev.id)")
                         }
                     }
                 } catch {
-                    // Live-chat correctness: the event has already arrived from relays.
-                    // Do one local pending-state cleanup and immediate retry before hiding
-                    // it behind cooldown. This prevents Android->iOS messages from being
-                    // fetched but not displayed after a transient MDK pending-state error.
-                    do {
-                        try? ffi.mlsMergePendingCommit(groupIdHex: groupIdHex)
-                        try? ffi.mlsClearPendingCommit(groupIdHex: groupIdHex)
-                        let retryResult = try ffi.mlsProcessMessageResult(groupIdHex: groupIdHex, eventJSON: eventJSON)
-                        switch retryResult {
-                        case .application(let msg):
-                            liveDecrypted.append(msg)
-                            mlsApplicationMessageCache[groupIdHex, default: [:]][ev.id] = msg
-                            processedIds.insert(ev.id)
-                            retryCooldowns.removeValue(forKey: ev.id)
-                            retryableIds.remove(ev.id)
-                            appliedCount += 1
-                            AppLogger.log("MLS", "fetchMlsMessages: application retry id=\(ev.id) sender=\(mlsLogPrefix(msg.senderPubkey)) len=\(msg.content.count)")
-                        case .stateUpdate(let kind):
-                            if kind.hasPrefix("unhandled:Unprocessable") { throw error }
-                            processedIds.insert(ev.id)
-                            retryCooldowns.removeValue(forKey: ev.id)
-                            retryableIds.remove(ev.id)
-                            stateOnlyCount += 1
-                            stateUpdateProcessedInPass = true
-                            try? ffi.mlsMergePendingCommit(groupIdHex: groupIdHex)
-                            AppLogger.log("MLS", "fetchMlsMessages: state-only retry kind=\(kind) id=\(ev.id)")
-                        }
-                    } catch {
-                        // out-of-order / pending state は processedIds に入れず retry queue に残す。
+                    // Issue #178 #7: never clear_pending_commit on a receive error — it tears
+                    // down our own in-flight commits. Match Android: drop permanent / requeue retryable.
+                    let permanent = isPermanentMlsProcessDropError(error)
+                    if permanent {
+                        processedIds.insert(ev.id)
+                        retryCooldowns.removeValue(forKey: ev.id)
+                        retryableIds.remove(ev.id)
+                        droppedCount += 1
+                        AppLogger.log("MLS", "fetchMlsMessages: process drop (permanent) id=\(ev.id) err=\(mlsRedactedError(error))")
+                    } else {
                         retryableIds.insert(ev.id)
                         retryCooldowns[ev.id] = nowSec + (repairFull ? 60 : 30)
                         if retryLoggedIds.insert(ev.id).inserted {
@@ -629,8 +629,7 @@ extension NostrRepository {
         mlsRetryableStateCount[groupIdHex] = 0
         mlsDidFullCatchUp.insert(groupIdHex)
 
-        _ = try? ffi.mlsMergePendingCommit(groupIdHex: groupIdHex)
-
+        // Issue #178 #2: merge_pending_commit lives on the publish-success path, not here.
         let history = (try? ffi.mlsGetMessageHistory(groupIdHex: groupIdHex, limit: 300)) ?? []
         AppLogger.log("MLS", "fetchMlsMessages: history count=\(history.count) group=\(groupIdHex)")
 
@@ -1080,18 +1079,7 @@ extension NostrRepository {
         try await publishSignedMlsDiscoveryEvent(signed30443, to: keyPackageRelays, context: "keypackage30443")
         persistPublishedKeyPackageEvent(id: signed30443.id, json: encodeEventJSON(signed30443), hashRef: kpData.hashRef)
 
-        // WhiteNoise/Marmot interop: keep publishing legacy kind:443 as a migration fallback.
-        var tags443 = kpData.legacyTags
-        if tags443.isEmpty {
-            tags443 = tags30443.filter { $0.first != "d" }
-        }
-        tags443 = tags443.map { t in t.first == "relays" ? ["relays"] + keyPackageRelays : t }
-        if !tags443.contains(where: { $0.first == "relays" }) {
-            tags443.append(["relays"] + keyPackageRelays)
-        }
-        let signed443 = try signer.signEvent(kind: NostrKind.mlsKeyPackageLegacy, tags: tags443, content: kpData.content)
-        try await publishSignedMlsDiscoveryEvent(signed443, to: keyPackageRelays, context: "keypackage443")
-        persistPublishedKeyPackageEvent(id: signed443.id, json: encodeEventJSON(signed443), hashRef: kpData.hashRef)
+        // Issue #178 #3: kind:443 publish removed (read path still accepts it for migration).
 
         // Marmot MIP-00 / Kind 10051 — publish preferred KeyPackage relays.
         let kpRelayTags = keyPackageRelays.map { ["relay", $0] }
@@ -1104,9 +1092,9 @@ extension NostrRepository {
         let signed10050 = try signer.signEvent(kind: NostrKind.dmRelayList, tags: dmRelayTags, content: "")
         try await publishSignedMlsDiscoveryEvent(signed10050, to: discoveryRelays, context: "inboxRelays10050")
 
-        AppLogger.log("MLS", "publishKeyPackage: published kind=\(kpData.kind) legacy443=true keyPackageRelays=\(keyPackageRelays.count) inboxRelays=\(inboxRelays.count) discoveryRelays=\(discoveryRelays.count) kp=\(keyPackageRelays.joined(separator: ",")) inbox=\(inboxRelays.joined(separator: ","))")
+        AppLogger.log("MLS", "publishKeyPackage: published kind=\(kpData.kind) keyPackageRelays=\(keyPackageRelays.count) inboxRelays=\(inboxRelays.count) discoveryRelays=\(discoveryRelays.count) kp=\(keyPackageRelays.joined(separator: ",")) inbox=\(inboxRelays.joined(separator: ","))")
         keyPackagePublished = true
-        Task { await self.cleanupSupersededOwnKeyPackages(keepIds: [signed30443.id, signed443.id]) }
+        Task { await self.cleanupSupersededOwnKeyPackages(keepIds: [signed30443.id]) }
     }
 
     private func publishSignedMlsDiscoveryEvent(_ event: NostrEvent, to relays: [String], context: String) async throws {
@@ -1629,19 +1617,7 @@ extension NostrRepository {
             // Canonical rotation publish (kind:30443; same d when consumed was 30443).
             let signed30443 = try await publishEventAndReturnSigned(kind: Int(kpData.kind), tags: tags30443, content: kpData.content)
             persistPublishedKeyPackageEvent(id: signed30443.id, json: encodeEventJSON(signed30443), hashRef: kpData.hashRef)
-            // Migration compatibility publish (legacy kind:443) until 2026-05-01 only.
-            if shouldDualPublishLegacy443() {
-                var tags443 = kpData.legacyTags
-                if tags443.isEmpty {
-                    // Fallback for older FFI
-                    tags443 = tags30443.filter { $0.first != "d" }
-                }
-                tags443 = tags443.map { t in t.first == "relays" ? ["relays"] + relayUrls : t }
-                if !tags443.contains(where: { $0.first == "relays" }) { tags443.append(["relays"] + relayUrls) }
-
-                let signed443 = try await publishEventAndReturnSigned(kind: NostrKind.mlsKeyPackageLegacy, tags: tags443, content: kpData.content)
-                persistPublishedKeyPackageEvent(id: signed443.id, json: encodeEventJSON(signed443), hashRef: kpData.hashRef)
-            }
+            // Issue #178 #3: kind:443 mirror removed on rotation (WhiteNoise dropped 443).
 
             let kpRelayTags = relayUrls.map { ["relay", $0] }
             try await publishEvent(kind: NostrKind.mlsKeyPackageRelays, tags: kpRelayTags, content: "")
@@ -2084,22 +2060,6 @@ extension NostrRepository {
         return out
     }
 
-    /// Migration guard for legacy KeyPackage publish (kind:443).
-    /// Enabled strictly until 2026-05-01T00:00:00Z.
-    private func shouldDualPublishLegacy443(now: Date = Date()) -> Bool {
-        var comp = DateComponents()
-        comp.calendar = Calendar(identifier: .gregorian)
-        comp.timeZone = TimeZone(secondsFromGMT: 0)
-        comp.year = 2026
-        comp.month = 5
-        comp.day = 1
-        comp.hour = 0
-        comp.minute = 0
-        comp.second = 0
-        guard let cutoff = comp.date else { return false }
-        return now < cutoff
-    }
-
     private func canonicalRelayUrl(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, var comp = URLComponents(string: trimmed) else { return "" }
@@ -2334,6 +2294,19 @@ extension NostrRepository {
         return kind.hasSuffix(":missing_h_tag")
             || kind.hasSuffix(":group_id_mismatch")
             || kind.hasSuffix(":invalid_kind")
+    }
+
+    /// Issue #178 #7: classify receive errors so we can drop unrecoverable
+    /// ones without ever touching pending state. Mirrors Android's policy.
+    private func isPermanentMlsProcessDropError(_ error: Error) -> Bool {
+        let raw = String(describing: error).lowercased()
+        return raw.contains("invalid_kind")
+            || raw.contains("missing_h_tag")
+            || raw.contains("group_id_mismatch")
+            || raw.contains("invalid_base64")
+            || raw.contains("malformed")
+            || raw.contains("invalid welcome json")
+            || raw.contains("not_mls_welcome_rumor")
     }
 
     private func invalidMlsOuterPayloadReason(_ content: String) -> String? {

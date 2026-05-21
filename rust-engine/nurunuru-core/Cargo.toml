@@ -22,6 +22,8 @@ mdk-sqlite-storage = { workspace = true, features = ["test-utils"] }
 mdk-storage-traits = { workspace = true }
 hex = { workspace = true }
 base64 = { workspace = true }
+hkdf = { workspace = true }
+sha2 = { workspace = true }
 # Force SQLCipher to use vendored OpenSSL for Android cross-compilation.
 # mdk-sqlite-storage enables rusqlite/bundled-sqlcipher; this direct dep unifies
 # the additional libsqlite3-sys/bundled-sqlcipher-vendored-openssl feature.

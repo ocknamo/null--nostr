@@ -95,6 +95,12 @@ fn assert_duplicate_idempotent(result: Result<MlsProcessResult, NuruNuruError>, 
                 "duplicate {label} returned an application message but content was empty"
             );
         }
+        Ok(MlsProcessResult::Commit { .. }) => {
+            // A duplicate that MDK treats as a fresh commit (idempotent path).
+        }
+        Ok(MlsProcessResult::NeedsSelfUpdate { .. }) => {
+            // A pending proposal is idempotent state — no error here.
+        }
         Ok(MlsProcessResult::StateUpdate { kind }) => {
             assert!(
                 kind == "commit"
@@ -206,11 +212,17 @@ async fn marmot_out_of_order_kind445_message_retries_after_missing_commit_and_du
         .await
         .unwrap();
     match commit_result {
+        // Issue #178 #5: self-update commit now arrives as a structured Commit
+        // (empty member delta because self-update doesn't add/remove members).
+        MlsProcessResult::Commit { delta, .. } => assert!(
+            delta.added_pubkeys.is_empty() && delta.removed_pubkeys.is_empty(),
+            "self-update commit must have empty member delta, got {delta:?}"
+        ),
         MlsProcessResult::StateUpdate { kind } => assert_eq!(
             kind, "commit",
             "self-update commit should be a clear state-update result"
         ),
-        other => panic!("expected self-update commit StateUpdate, got {other:?}"),
+        other => panic!("expected self-update commit, got {other:?}"),
     }
 
     // After the missing commit has been processed, retrying the exact same message succeeds.

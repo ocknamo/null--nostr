@@ -51,7 +51,51 @@ public struct FfiDecryptedMessage {
 
 public enum FfiMlsProcessResult {
     case application(FfiDecryptedMessage)
+    /// Issue #178 #5: structured commit delta. `groupIdHex` is the Nostr group
+    /// id; `added` / `removed` are hex pubkeys of members that joined/left.
+    case commit(groupIdHex: String, added: [String], removed: [String], epochAfter: UInt64)
+    /// Issue #178 #6: a pending Proposal was stored — `mls_create_recovery_commit`
+    /// must run on the publish path so the group does not stall.
+    case needsSelfUpdate(groupIdHex: String, reason: String)
     case stateUpdate(String)
+}
+
+/// Mirrors Rust FfiPendingWelcome (Issue #178 #4 split flow).
+public struct FfiPendingWelcome {
+    public let welcomeEventIdHex:   String
+    public let wrapperEventIdHex:   String
+    public let groupIdHex:          String
+    public let groupName:           String
+    public let groupDescription:    String
+    public let groupAdminPubkeys:   [String]
+    public let groupRelays:         [String]
+    public let welcomerPubkey:      String
+    public let memberCount:         UInt32
+    public let isDm:                Bool
+
+    public init(
+        welcomeEventIdHex: String,
+        wrapperEventIdHex: String,
+        groupIdHex: String,
+        groupName: String,
+        groupDescription: String,
+        groupAdminPubkeys: [String],
+        groupRelays: [String],
+        welcomerPubkey: String,
+        memberCount: UInt32,
+        isDm: Bool
+    ) {
+        self.welcomeEventIdHex = welcomeEventIdHex
+        self.wrapperEventIdHex = wrapperEventIdHex
+        self.groupIdHex = groupIdHex
+        self.groupName = groupName
+        self.groupDescription = groupDescription
+        self.groupAdminPubkeys = groupAdminPubkeys
+        self.groupRelays = groupRelays
+        self.welcomerPubkey = welcomerPubkey
+        self.memberCount = memberCount
+        self.isDm = isDm
+    }
 }
 
 /// Mirrors Rust FfiEncryptedMessageData (Kind-445 event payload).
@@ -156,13 +200,37 @@ protocol MlsFFIBridge: AnyObject, Sendable {
     func mlsProcessMessageResult(groupIdHex: String, eventJSON: String) throws -> FfiMlsProcessResult
 
     // ── Welcome (Kind 444 / 1059) ──
+    // mlsProcessWelcome is the legacy fused process+accept call. Prefer the
+    // split flow below so users see invites before crypto state is created.
     func mlsProcessWelcome(welcomeEventJSON: String) throws -> FfiMlsGroupInfo
+    /// Issue #178 #4: preview an incoming Welcome (gift-wrap or rumor JSON)
+    /// without joining. Returns the pending Welcome for app-level
+    /// accept/decline UX.
+    func mlsPreviewWelcome(welcomeEventJSON: String) throws -> FfiPendingWelcome
+    /// Accept a previously previewed Welcome (lookup key = welcomeEventIdHex).
+    func mlsAcceptWelcome(welcomeEventIdHex: String) throws -> FfiPendingWelcome
+    /// Decline a previously previewed Welcome (lookup key = welcomeEventIdHex).
+    func mlsDeclineWelcome(welcomeEventIdHex: String) throws
+    /// List Welcomes previewed but not yet accepted/declined.
+    func mlsGetPendingWelcomes() throws -> [FfiPendingWelcome]
 
     // ── 履歴 + 状態管理 ──
     func mlsGetMessageHistory(groupIdHex: String, limit: UInt64) throws -> [FfiDecryptedMessage]
     func mlsMergePendingCommit(groupIdHex: String) throws
     func mlsCreateRecoveryCommit(groupIdHex: String) throws -> FfiEncryptedMessageData
     func mlsClearPendingCommit(groupIdHex: String) throws
+
+    // ── Subscriptions (Issue #178 #9, #10) ──
+    /// Subscribe to *my* Welcomes (kind:1059 #p=self). Returns a sub_id.
+    func mlsSubscribeWelcomes(sinceSecs: UInt64) throws -> String
+    /// Subscribe to KeyPackage rotations (kind:30443) from given contacts.
+    func mlsSubscribeKeypackageRotations(contactPubkeys: [String]) throws -> String
+
+    // ── Identity / encryption (Issue #178 #1, #11) ──
+    /// Provide a 32-byte SQLCipher key. Must be called before `login()`.
+    func setMlsDbKey(key: [UInt8]) throws
+    /// Wipe + reopen the MLS DB for a new identity.
+    func mlsReset(newPubkeyHex: String) throws
 }
 
 // MARK: - Stub (fallback when XCFramework is not yet linked)
@@ -240,4 +308,36 @@ final class MlsFFIStub: MlsFFIBridge, @unchecked Sendable {
     }
 
     func mlsClearPendingCommit(groupIdHex: String) throws {}
+
+    // Issue #178 #4 split-welcome stubs
+    func mlsPreviewWelcome(welcomeEventJSON: String) throws -> FfiPendingWelcome {
+        FfiPendingWelcome(
+            welcomeEventIdHex: "",
+            wrapperEventIdHex: "",
+            groupIdHex: "",
+            groupName: "",
+            groupDescription: "",
+            groupAdminPubkeys: [],
+            groupRelays: [],
+            welcomerPubkey: "",
+            memberCount: 0,
+            isDm: false
+        )
+    }
+
+    func mlsAcceptWelcome(welcomeEventIdHex: String) throws -> FfiPendingWelcome {
+        try mlsPreviewWelcome(welcomeEventJSON: "")
+    }
+
+    func mlsDeclineWelcome(welcomeEventIdHex: String) throws {}
+
+    func mlsGetPendingWelcomes() throws -> [FfiPendingWelcome] { [] }
+
+    // Issue #178 #9, #10 subscription stubs
+    func mlsSubscribeWelcomes(sinceSecs: UInt64) throws -> String { "" }
+    func mlsSubscribeKeypackageRotations(contactPubkeys: [String]) throws -> String { "" }
+
+    // Issue #178 #1, #11 identity/encryption stubs
+    func setMlsDbKey(key: [UInt8]) throws {}
+    func mlsReset(newPubkeyHex: String) throws {}
 }

@@ -2105,6 +2105,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "hex",
+ "hkdf",
  "mdk-core",
  "mdk-sqlite-storage",
  "mdk-storage-traits",
@@ -2114,6 +2115,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

@@ -80,6 +80,10 @@ final class MlsFFILiveClient: MlsFFIBridge, @unchecked Sendable {
         switch result {
         case let .application(message):
             return .application(bridgeDecryptedMessage(message))
+        case let .commit(gid, added, removed, epochAfter):
+            return .commit(groupIdHex: gid, added: added, removed: removed, epochAfter: epochAfter)
+        case let .needsSelfUpdate(gid, reason):
+            return .needsSelfUpdate(groupIdHex: gid, reason: reason)
         case let .stateUpdate(kind):
             return .stateUpdate(kind)
         }
@@ -87,6 +91,41 @@ final class MlsFFILiveClient: MlsFFIBridge, @unchecked Sendable {
 
     func mlsProcessWelcome(welcomeEventJSON: String) throws -> FfiMlsGroupInfo {
         bridgeGroupInfo(try client.mlsProcessWelcome(welcomeEventJson: welcomeEventJSON))
+    }
+
+    // Issue #178 #4 — split Welcome flow.
+    func mlsPreviewWelcome(welcomeEventJSON: String) throws -> FfiPendingWelcome {
+        bridgePendingWelcome(try client.mlsPreviewWelcome(welcomeEventJson: welcomeEventJSON))
+    }
+
+    func mlsAcceptWelcome(welcomeEventIdHex: String) throws -> FfiPendingWelcome {
+        bridgePendingWelcome(try client.mlsAcceptWelcome(welcomeEventIdHex: welcomeEventIdHex))
+    }
+
+    func mlsDeclineWelcome(welcomeEventIdHex: String) throws {
+        try client.mlsDeclineWelcome(welcomeEventIdHex: welcomeEventIdHex)
+    }
+
+    func mlsGetPendingWelcomes() throws -> [FfiPendingWelcome] {
+        try client.mlsGetPendingWelcomes().map { bridgePendingWelcome($0) }
+    }
+
+    // Issue #178 #9, #10 — engine-side subscriptions.
+    func mlsSubscribeWelcomes(sinceSecs: UInt64) throws -> String {
+        try client.mlsSubscribeWelcomes(sinceSecs: sinceSecs)
+    }
+
+    func mlsSubscribeKeypackageRotations(contactPubkeys: [String]) throws -> String {
+        try client.mlsSubscribeKeypackageRotations(contactPubkeys: contactPubkeys)
+    }
+
+    // Issue #178 #1, #11 — identity / encryption.
+    func setMlsDbKey(key: [UInt8]) throws {
+        try client.setMlsDbKey(key: Data(key))
+    }
+
+    func mlsReset(newPubkeyHex: String) throws {
+        try client.mlsReset(newPubkeyHex: newPubkeyHex)
     }
 
     func mlsGetMessageHistory(groupIdHex: String, limit: UInt64) throws -> [FfiDecryptedMessage] {
@@ -173,6 +212,21 @@ final class MlsFFILiveClient: MlsFFIBridge, @unchecked Sendable {
         FfiAddMemberResult(
             commitEventData: bridgeEncryptedMsg(r.commitEventData),
             welcomeEventData: bridgeWelcomeEvent(r.welcomeEventData)
+        )
+    }
+
+    private func bridgePendingWelcome(_ p: NuruNuruFFILib.FfiPendingWelcome) -> FfiPendingWelcome {
+        FfiPendingWelcome(
+            welcomeEventIdHex: p.welcomeEventIdHex,
+            wrapperEventIdHex: p.wrapperEventIdHex,
+            groupIdHex: p.groupIdHex,
+            groupName: p.groupName,
+            groupDescription: p.groupDescription,
+            groupAdminPubkeys: p.groupAdminPubkeys,
+            groupRelays: p.groupRelays,
+            welcomerPubkey: p.welcomerPubkey,
+            memberCount: p.memberCount,
+            isDm: p.isDm
         )
     }
 }
