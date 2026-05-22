@@ -24,7 +24,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.outlined.CalendarToday
+import androidx.compose.material.icons.outlined.Call
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshContainer
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
@@ -355,7 +359,10 @@ private fun GroupChatScreen(
         val lastVisibleIndex = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
         val totalItems = layoutInfo.totalItemsCount
         val isNearBottom = totalItems == 0 || lastVisibleIndex >= totalItems - 3
-        if (isNearBottom) listState.animateScrollToItem(messages.size - 1)
+        // ぬるぬる: jump instantly. The optimistic bubble is already at the
+        // bottom — any animated scroll just adds 300ms of perceived latency
+        // between tap and confirmation.
+        if (isNearBottom) listState.scrollToItem(messages.size - 1)
     }
 
     val title = if (!group.isDm && group.name.isNotBlank()) {
@@ -371,22 +378,17 @@ private fun GroupChatScreen(
         topBar = {
             TopAppBar(
                 windowInsets = WindowInsets.statusBars,
-                title = {
-                    Text(title, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                },
+                title = { Text(title, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, maxLines = 1) },
                 navigationIcon = {
-                    IconButton(onClick = { viewModel.closeGroup() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "戻る")
-                    }
+                    IconButton(onClick = { viewModel.closeGroup() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "戻る") }
                 },
                 actions = {
-                    IconButton(onClick = { viewModel.showGroupInfo() }) {
-                        Icon(Icons.Outlined.Info, contentDescription = "グループ情報")
-                    }
+                    LineHeaderAction(Icons.Outlined.Search, "検索") { }
+                    LineHeaderAction(Icons.Outlined.Call, "通話") { }
+                    LineHeaderAction(Icons.Outlined.CalendarToday, "予定") { }
+                    LineHeaderAction(Icons.Outlined.Menu, "グループ情報") { viewModel.showGroupInfo() }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
-                )
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
             )
         },
         containerColor = MaterialTheme.colorScheme.background
@@ -461,7 +463,7 @@ private fun GroupChatScreen(
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(16.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         items(messages, key = { it.id }) { message ->
@@ -526,6 +528,22 @@ private fun GroupChatScreen(
  *   - 後で       dismiss action — hides the banner. Next failed catch-up
  *                during send or background poll will re-surface it.
  */
+@Composable
+private fun LineHeaderAction(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit
+) {
+    IconButton(onClick = onClick) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.size(22.dp)
+        )
+    }
+}
+
 @Composable
 private fun MlsRecoveryBanner(
     isWorking: Boolean,

@@ -58,3 +58,6 @@ ios/NuruNuru.xcodeproj/xcuserdata/
 rust-engine/nurunuru-ffi/ios/.swiftpm/
 
 ios/NuruNuru.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Swift Package Manager / xcodebuild .build directory (Xcode 17+ emits here for some configs)
+ios/.build/

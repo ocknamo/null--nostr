@@ -129,7 +129,9 @@ fun MainScreen(
 
     // My profile for post modal avatar
     val homeState by homeVM.uiState.collectAsState()
+    val talkState by talkVM.uiState.collectAsState()
     val myProfile = homeState.profile
+    val shouldShowBottomNav = !isExternalAppOpen && !(activeTab == BottomTab.TALK && talkState.activeGroup != null)
 
     // ── バックグラウンドプリフェッチ ─────────────────────────────────────────
     // タイムライン表示中に他タブのデータをバックグラウンドで取得しておく。
@@ -153,7 +155,7 @@ fun MainScreen(
         },
         bottomBar = {
             androidx.compose.animation.AnimatedVisibility(
-                visible = !isExternalAppOpen,
+                visible = shouldShowBottomNav,
                 enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(120)) +
                         androidx.compose.animation.slideInVertically(androidx.compose.animation.core.tween(120)) { it },
                 exit  = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(120)) +

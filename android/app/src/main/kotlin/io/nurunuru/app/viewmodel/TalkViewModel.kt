@@ -372,6 +372,56 @@ class TalkViewModel(
         viewModelScope.launch {
             var group = _uiState.value.activeGroup ?: allGroupsForLookup().firstOrNull { it.groupIdHex == groupIdHex } ?: return@launch
 
+            // Insert the optimistic bubble IMMEDIATELY before any heavy work
+            // (DM canonicalize, catch-up, gap repair). The user must see their
+            // message in the same frame as the tap — that is the entire premise
+            // of the product name (ぬるぬる = ultra-smooth). The heavy work
+            // below still runs; if it later requires remapping to a different
+            // group, we update the optimistic message's groupIdHex in place.
+            val tempId = "local_${System.currentTimeMillis()}"
+            val initialOptimistic = MlsMessage(
+                id = tempId,
+                senderPubkey = myPubkeyHex,
+                content = trimmed,
+                timestamp = System.currentTimeMillis() / 1000,
+                groupIdHex = group.groupIdHex
+            )
+            // NOTE: sendingMessage is intentionally NOT set here. The optimistic
+            // bubble + cleared composer already confirm the send to the user.
+            // The spinner on the send button reflects only the actual MLS send
+            // call (below), never the pre-flight catch-up / repair / deep
+            // catch-up chain — those can legitimately take tens of seconds
+            // and must be invisible to the user. See docs/wiki/ui/android-ios-sync.md.
+            _uiState.update { it.copy(messages = dedupeMessages(it.messages + initialOptimistic)) }
+            lastMessageActivityAt = System.currentTimeMillis()
+
+            fun abortOptimisticSend(message: String) {
+                _uiState.update {
+                    it.copy(
+                        sendingMessage = false,
+                        messages = it.messages.filterNot { msg -> msg.id == tempId },
+                        error = message
+                    )
+                }
+            }
+
+            fun keepOptimisticBubbleIn(groupIdHex: String) {
+                _uiState.update { state ->
+                    var found = false
+                    val moved = state.messages.map { m ->
+                        if (m.id == tempId) {
+                            found = true
+                            m.copy(groupIdHex = groupIdHex)
+                        } else {
+                            m
+                        }
+                    }
+                    state.copy(
+                        messages = if (found) moved else dedupeMessages(moved + initialOptimistic.copy(groupIdHex = groupIdHex))
+                    )
+                }
+            }
+
             // DM convergence: prefer a gap-free pinned canonical group or the
             // sibling that already has peer messages. Gap-bearing pins are invalidated.
             if (group.isDm) {
@@ -380,6 +430,7 @@ class TalkViewModel(
                     android.util.Log.w("TalkVM", "sendMessage: remap DM send target old=" + group.groupIdHex + " new=" + best.groupIdHex + " reason=" + reason)
                     group = best
                     _uiState.update { it.copy(activeGroupId = best.groupIdHex, activeGroup = best) }
+                    keepOptimisticBubbleIn(best.groupIdHex)
                     startMessageStream(best.groupIdHex)
                 }
             }
@@ -474,6 +525,7 @@ class TalkViewModel(
                         android.util.Log.w("TalkVM", "sendMessage: gap canonical replaced old=" + group.groupIdHex + " new=" + fallback.groupIdHex + " reason=" + fallbackReason)
                         group = fallback
                         _uiState.update { it.copy(activeGroupId = fallback.groupIdHex, activeGroup = fallback) }
+                        keepOptimisticBubbleIn(fallback.groupIdHex)
                         startMessageStream(fallback.groupIdHex)
                     } else {
                         val peerHistoryCount = _uiState.value.messages.count { it.senderPubkey != myPubkeyHex }
@@ -489,7 +541,7 @@ class TalkViewModel(
                                     " localHistory=" + localHistoryCount
                             )
                         } else {
-                            _uiState.update { it.copy(error = "同期中です。少し待って再送してください") }
+                            abortOptimisticSend("同期中です。少し待って再送してください")
                             android.util.Log.w(
                                 "TalkVM",
                                 "sendMessage: abort empty DM unresolved MLS gap group=" + group.groupIdHex +
@@ -501,22 +553,17 @@ class TalkViewModel(
                     }
                 }
             } catch (_: Exception) {
-                _uiState.update { it.copy(error = "同期中です。少し待ってから再送してください") }
+                abortOptimisticSend("同期中です。少し待ってから再送してください")
                 return@launch
             }
 
 
             lastMessageActivityAt = System.currentTimeMillis()
-            val tempId = "local_${System.currentTimeMillis()}"
-            val optimistic = MlsMessage(
-                id = tempId,
-                senderPubkey = myPubkeyHex,
-                content = trimmed,
-                timestamp = System.currentTimeMillis() / 1000,
-                groupIdHex = group.groupIdHex
-            )
-            _uiState.update { it.copy(sendingMessage = true, messages = dedupeMessages(it.messages + optimistic)) }
 
+            // Spinner only covers the actual MLS send. Healthy relays complete
+            // this in well under a second; longer waits indicate a real network
+            // issue and the spinner is the correct affordance for that.
+            _uiState.update { it.copy(sendingMessage = true) }
             try {
                 val success = withTimeout(30_000) { repository.sendMlsMessage(group.groupIdHex, trimmed) }
                 if (success) {

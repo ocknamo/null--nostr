@@ -9,8 +9,6 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -18,6 +16,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -295,14 +295,10 @@ fun MessageInputBar(
         onDispose { speechRecognizer.destroy() }
     }
 
-    val sendBg by animateColorAsState(
-        targetValue = if (hasText) LineGreen else nuruColors.bgTertiary,
-        animationSpec = tween(150), label = "sendBg"
-    )
-    val sendTint by animateColorAsState(
-        targetValue = if (hasText) Color.White else nuruColors.textTertiary,
-        animationSpec = tween(150), label = "sendTint"
-    )
+    // ぬるぬる: snap the send button color/tint instantly. A 150ms tween here
+    // makes every send tap feel like the app is "thinking" before sending.
+    val sendBg = if (hasText) LineGreen else nuruColors.bgTertiary
+    val sendTint = if (hasText) Color.White else nuruColors.textTertiary
 
     // カスタム絵文字ピッカー
     if (showEmojiPicker && repository != null) {
@@ -330,77 +326,81 @@ fun MessageInputBar(
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // 画像添付
-            Box(
-                modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onImageAttach),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(NuruIcons.Image, "画像", tint = nuruColors.textSecondary, modifier = Modifier.size(22.dp))
+            LineInputIcon(onClick = onImageAttach) {
+                Icon(Icons.Outlined.Add, "追加", tint = nuruColors.textSecondary, modifier = Modifier.size(26.dp))
+            }
+            LineInputIcon(onClick = onImageAttach) {
+                Icon(Icons.Outlined.PhotoCamera, "カメラ", tint = nuruColors.textSecondary, modifier = Modifier.size(23.dp))
+            }
+            LineInputIcon(onClick = onImageAttach) {
+                Icon(NuruIcons.Image, "画像", tint = nuruColors.textSecondary, modifier = Modifier.size(23.dp))
             }
 
-            // カスタム絵文字
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(if (showEmojiPicker) LineGreen.copy(alpha = 0.12f) else Color.Transparent)
-                    .clickable { showEmojiPicker = !showEmojiPicker },
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(NuruIcons.Emoji, "絵文字", tint = nuruColors.textSecondary, modifier = Modifier.size(22.dp))
-            }
-
-            // 入力バブル（マイクをピル内右端に配置）
             Row(
                 modifier = Modifier
                     .weight(1f)
                     .defaultMinSize(minHeight = 40.dp)
-                    .background(nuruColors.bgSecondary, RoundedCornerShape(20.dp))
+                    .background(Color(0xFF242426), RoundedCornerShape(20.dp))
                     .padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
-                    modifier = Modifier.weight(1f),
-                    contentAlignment = Alignment.CenterStart
-                ) {
+                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
                     BasicTextField(
                         value = inputText,
                         onValueChange = { inputText = it },
                         modifier = Modifier.fillMaxWidth(),
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(
-                            color = MaterialTheme.colorScheme.onSurface
-                        ),
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
                         cursorBrush = SolidColor(LineGreen),
                         maxLines = 6,
                         decorationBox = { innerTextField ->
                             Box {
                                 if (inputText.isEmpty()) {
-                                    Text("メッセージ...", color = nuruColors.textTertiary,
-                                        style = MaterialTheme.typography.bodyMedium)
+                                    Text("メッセージを入力", color = nuruColors.textTertiary, style = MaterialTheme.typography.bodyMedium)
                                 }
                                 innerTextField()
                             }
                         }
                     )
                 }
-                // マイクボタン（ピル内右端）
                 Box(
                     modifier = Modifier
                         .size(32.dp)
                         .clip(CircleShape)
-                        .background(if (isSTTActive) Color.Red.copy(alpha = 0.1f) else Color.Transparent)
-                        .clickable {
+                        .background(if (showEmojiPicker) LineGreen.copy(alpha = 0.12f) else Color.Transparent)
+                        .clickable { showEmojiPicker = !showEmojiPicker },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(NuruIcons.Emoji, "絵文字", tint = nuruColors.textSecondary, modifier = Modifier.size(21.dp))
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(if (hasText) sendBg else Color.Transparent)
+                    .clickable(enabled = !isSending) {
+                        if (hasText) {
+                            android.util.Log.d("TalkInput", "send tapped len=" + inputText.length)
+                            onSendMessage(inputText)
+                            inputText = ""
+                        } else {
                             if (hasMicPermission) {
-                                if (isSTTActive) speechRecognizer.stopListening()
-                                else speechRecognizer.startListening(sttIntent)
+                                if (isSTTActive) speechRecognizer.stopListening() else speechRecognizer.startListening(sttIntent)
                             } else {
                                 micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                             }
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                if (isSending) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
+                } else if (hasText) {
+                    Icon(NuruIcons.Send, "送信", tint = sendTint, modifier = Modifier.size(18.dp).graphicsLayer { rotationZ = 45f })
+                } else {
                     Icon(
                         NuruIcons.Mic,
                         contentDescription = "音声入力",
@@ -409,40 +409,27 @@ fun MessageInputBar(
                             hasMicPermission -> nuruColors.textSecondary
                             else -> nuruColors.textTertiary.copy(alpha = 0.4f)
                         },
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(24.dp)
                     )
-                }
-            }
-
-            Text(
-                text = "send:" + activeGroupIdHex.take(12),
-                style = MaterialTheme.typography.labelSmall,
-                color = nuruColors.textTertiary,
-                maxLines = 1
-            )
-
-            // 送信ボタン
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(sendBg)
-                    .clickable(enabled = hasText && !isSending) {
-                        android.util.Log.d("TalkInput", "send tapped gid=" + activeGroupIdHex + " len=" + inputText.length)
-                        onSendMessage(inputText)
-                        inputText = ""
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                if (isSending) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
-                } else {
-                    Icon(NuruIcons.Send, "送信", tint = sendTint,
-                        modifier = Modifier.size(18.dp).graphicsLayer { rotationZ = 45f })
                 }
             }
         }
     }
+}
+
+@Composable
+private fun LineInputIcon(
+    onClick: () -> Unit,
+    content: @Composable BoxScope.() -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .size(width = 28.dp, height = 40.dp)
+            .clip(CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+        content = content
+    )
 }
 
 @Composable
@@ -502,9 +489,9 @@ fun GroupItem(
                 }
             }
             Text(
-                text = "gid:" + group.groupIdHex.take(12) + "  " + group.lastMessage.ifBlank {
-                if (group.isDm) "暗号化メッセージ" else "${group.memberPubkeys.size}人のグループ"
-            },
+                text = group.lastMessage.ifBlank {
+                    if (group.isDm) "暗号化メッセージ" else "${group.memberPubkeys.size}人のグループ"
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = nuruColors.textTertiary,
                 maxLines = 1
@@ -520,107 +507,73 @@ fun MlsMessageBubble(
 ) {
     val nuruColors = LocalNuruColors.current
     val isMine = message.senderPubkey == myPubkeyHex
-
     val cwMatch = CW_REGEX.find(message.content)
     val displayContent = cwMatch?.groupValues?.get(2) ?: message.content
     val cwReason = cwMatch?.groupValues?.get(1)
     var isCwRevealed by remember { mutableStateOf(cwReason == null) }
-
     val images = IMAGE_REGEX.findAll(displayContent).map { it.value }.toList()
     val cleanText = IMAGE_REGEX.replace(displayContent, "").trim()
+    val timeText = formatTalkClockTime(message.timestamp)
 
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = if (isMine) Arrangement.End else Arrangement.Start
-    ) {
-        Column(
-            horizontalAlignment = if (isMine) Alignment.End else Alignment.Start
-        ) {
-            if (!isMine) {
-                val senderName = message.senderProfile?.displayedName
-                    ?: NostrKeyUtils.shortenPubkey(message.senderPubkey)
-                Text(
-                    text = senderName,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = nuruColors.textTertiary,
-                    modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
-                )
-            }
-            Box(
-                modifier = Modifier
-                    .background(
-                        if (isMine) LineGreen else MaterialTheme.colorScheme.surfaceVariant,
-                        RoundedCornerShape(
-                            topStart = 16.dp,
-                            topEnd = 16.dp,
-                            bottomStart = if (isMine) 16.dp else 4.dp,
-                            bottomEnd = if (isMine) 4.dp else 16.dp
-                        )
-                    )
-                    .widthIn(max = 280.dp)
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-            ) {
-                Column {
-                    if (cwReason != null && !isCwRevealed) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.clickable { isCwRevealed = true }
-                        ) {
-                            Icon(
-                                Icons.Outlined.Warning,
-                                null,
-                                tint = if (isMine) Color.White else Color(0xFFFF9800),
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Spacer(Modifier.width(4.dp))
-                            Text(
-                                "CW: $cwReason",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (isMine) Color.White else Color(0xFFFF9800),
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    } else {
-                        if (cwReason != null) {
-                            Text(
-                                "CW: $cwReason",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = (if (isMine) Color.White else Color(0xFFFF9800)).copy(alpha = 0.7f),
-                                modifier = Modifier.clickable { isCwRevealed = false }
-                            )
-                            Spacer(Modifier.height(4.dp))
-                        }
-                        if (cleanText.isNotBlank()) {
-                            Text(
-                                text = cleanText,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = if (isMine) MaterialTheme.colorScheme.onPrimary
-                                else MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                        images.forEach { url ->
-                            Spacer(Modifier.height(4.dp))
-                            AsyncImage(
-                                model = url,
-                                contentDescription = null,
-                                contentScale = ContentScale.Fit,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .heightIn(max = 300.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                            )
-                        }
-                    }
-                }
-            }
-            Text(
-                text = formatTalkTime(message.timestamp),
-                style = MaterialTheme.typography.bodySmall,
-                color = nuruColors.textTertiary,
-                modifier = Modifier.padding(top = 2.dp, start = 4.dp, end = 4.dp)
-            )
+    if (isMine) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.Bottom) {
+            Text(timeText, fontSize = 10.sp, color = nuruColors.textTertiary, modifier = Modifier.padding(end = 4.dp, bottom = 2.dp))
+            MlsBubbleContent(true, cleanText, images, cwReason, isCwRevealed, { isCwRevealed = true }, { isCwRevealed = false })
+        }
+    } else {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start, verticalAlignment = Alignment.Bottom) {
+            val senderName = message.senderProfile?.displayedName ?: NostrKeyUtils.shortenPubkey(message.senderPubkey)
+            UserAvatar(pictureUrl = message.senderProfile?.picture, displayName = senderName, size = 32.dp)
+            Spacer(Modifier.width(6.dp))
+            MlsBubbleContent(false, cleanText, images, cwReason, isCwRevealed, { isCwRevealed = true }, { isCwRevealed = false })
+            Text(timeText, fontSize = 10.sp, color = nuruColors.textTertiary, modifier = Modifier.padding(start = 4.dp, bottom = 2.dp))
         }
     }
+}
+
+@Composable
+private fun MlsBubbleContent(
+    isMine: Boolean,
+    cleanText: String,
+    images: List<String>,
+    cwReason: String?,
+    isCwRevealed: Boolean,
+    onRevealCw: () -> Unit,
+    onHideCw: () -> Unit
+) {
+    val bubbleColor = if (isMine) LineGreen else Color(0xFF2B2B2D)
+    val textColor = if (isMine) Color.Black else MaterialTheme.colorScheme.onSurface
+    Box(
+        modifier = Modifier
+            .background(bubbleColor, RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = if (isMine) 16.dp else 4.dp, bottomEnd = if (isMine) 4.dp else 16.dp))
+            .widthIn(max = 280.dp)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+    ) {
+        Column {
+            if (cwReason != null && !isCwRevealed) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { onRevealCw() }) {
+                    Icon(Icons.Outlined.Warning, null, tint = if (isMine) Color.Black else Color(0xFFFF9800), modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("CW: $cwReason", style = MaterialTheme.typography.bodySmall, color = if (isMine) Color.Black else Color(0xFFFF9800), fontWeight = FontWeight.Bold)
+                }
+            } else {
+                if (cwReason != null) {
+                    Text("CW: $cwReason", style = MaterialTheme.typography.labelSmall, color = (if (isMine) Color.Black else Color(0xFFFF9800)).copy(alpha = 0.7f), modifier = Modifier.clickable { onHideCw() })
+                    Spacer(Modifier.height(4.dp))
+                }
+                if (cleanText.isNotBlank()) Text(text = cleanText, style = MaterialTheme.typography.bodyMedium, color = textColor)
+                images.forEach { url ->
+                    Spacer(Modifier.height(4.dp))
+                    AsyncImage(model = url, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp).clip(RoundedCornerShape(8.dp)))
+                }
+            }
+        }
+    }
+}
+
+
+fun formatTalkClockTime(unixSec: Long): String {
+    return SimpleDateFormat("H:mm", Locale.JAPAN).format(Date(unixSec * 1000))
 }
 
 fun formatTalkTime(unixSec: Long): String {

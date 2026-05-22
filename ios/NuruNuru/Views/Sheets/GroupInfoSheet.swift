@@ -50,6 +50,15 @@ struct GroupInfoSheet: View {
                         }
                     }
 
+                    // ─── Group ID ─────────────────────────────────────────
+                    infoSection("グループID") {
+                        Text(group.groupIdHex)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(theme.textSecondary)
+                            .textSelection(.enabled)
+                            .lineLimit(nil)
+                    }
+
                     // ─── Members ──────────────────────────────────────────
                     VStack(alignment: .leading, spacing: NuruSpacing.space2) {
                         HStack {

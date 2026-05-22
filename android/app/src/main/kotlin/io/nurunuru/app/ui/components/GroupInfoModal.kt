@@ -7,6 +7,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.nurunuru.app.data.models.MlsGroup
@@ -61,6 +62,11 @@ fun GroupInfoModal(
                     color = nuruColors.textSecondary,
                     modifier = Modifier.padding(bottom = 12.dp)
                 )
+            }
+
+            Text("グループID", style = MaterialTheme.typography.labelMedium, color = nuruColors.textSecondary, modifier = Modifier.padding(bottom = 6.dp))
+            Surface(modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp), color = nuruColors.bgSecondary, shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)) {
+                Text(group.groupIdHex, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, color = nuruColors.textSecondary, modifier = Modifier.padding(12.dp))
             }
 
             Text(

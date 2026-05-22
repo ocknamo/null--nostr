@@ -137,7 +137,7 @@ struct MainTabView: View {
         // safeAreaInset places the tab bar below content and automatically
         // adjusts child safe areas so FABs and scroll views clear the tab bar.
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if !(activeTab == .miniapp && hideBottomNavForExternalMiniApp) {
+            if shouldShowBottomNav {
                 bottomNavBar
             }
         }
@@ -265,6 +265,13 @@ struct MainTabView: View {
     }
 
     // MARK: - Bottom Nav Bar
+
+    private var shouldShowBottomNav: Bool {
+        if activeTab == .miniapp && hideBottomNavForExternalMiniApp { return false }
+        // Match LINE: an open Talk conversation owns the full screen; app tabs are hidden.
+        if activeTab == .talk && talkVM.activeGroup != nil { return false }
+        return true
+    }
 
     private var bottomNavBar: some View {
         VStack(spacing: 0) {

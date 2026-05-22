@@ -670,6 +670,62 @@ import Foundation
             AppLogger.log("MLS", "TalkVM.sendMessage: skipped (no active group or empty text)")
             return
         }
+
+        // Insert the optimistic bubble IMMEDIATELY before any heavy work
+        // (DM canonicalize, catch-up, gap repair). The user must see their
+        // message in the same frame as the tap — that is the entire premise
+        // of the product name (ぬるぬる = ultra-smooth). The heavy work
+        // below still runs; if a DM remap happens the optimistic message's
+        // groupIdHex is rewritten in place so it stays visible in the canonical group.
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tempId = "local_\(Date().timeIntervalSince1970)_\(UUID().uuidString)"
+        let optimistic = MlsMessage(
+            id: tempId,
+            senderPubkey: myPubkeyHex,
+            content: trimmed,
+            timestamp: Int64(Date().timeIntervalSince1970),
+            groupIdHex: group.groupIdHex
+        )
+        // NOTE: sendingMessage is intentionally NOT set here. The optimistic
+        // bubble + cleared composer already confirm the send to the user.
+        // The spinner on the send button reflects only the actual MLS send
+        // call (below), never the pre-flight catch-up / repair / deep
+        // catch-up chain — those can legitimately take tens of seconds
+        // and must be invisible to the user. See docs/wiki/ui/android-ios-sync.md.
+        lastMessageActivityAt = Date()
+        messages.append(optimistic)
+
+        func abortOptimisticSend(_ message: String) {
+            messages.removeAll { $0.id == tempId }
+            sendingMessage = false
+            self.error = message
+        }
+
+        func keepOptimisticBubble(in groupIdHex: String) {
+            var found = false
+            for i in messages.indices where messages[i].id == tempId {
+                found = true
+                messages[i] = MlsMessage(
+                    id: messages[i].id,
+                    senderPubkey: messages[i].senderPubkey,
+                    content: messages[i].content,
+                    timestamp: messages[i].timestamp,
+                    groupIdHex: groupIdHex,
+                    senderProfile: messages[i].senderProfile
+                )
+            }
+            if !found {
+                messages.append(MlsMessage(
+                    id: optimistic.id,
+                    senderPubkey: optimistic.senderPubkey,
+                    content: optimistic.content,
+                    timestamp: optimistic.timestamp,
+                    groupIdHex: groupIdHex,
+                    senderProfile: optimistic.senderProfile
+                ))
+            }
+        }
+
         // DM convergence: use a pinned canonical group when available; otherwise
         // prefer a sibling with peer history. Newest groupId alone is not stable.
         if group.isDm {
@@ -697,6 +753,8 @@ import Foundation
                 AppLogger.log("MLS", "TalkVM.sendMessage: remap DM send target old=\(group.groupIdHex) new=\(best.groupIdHex) reason=\(hadPinned ? "canonical-pin" : "peer-history")")
                 group = best
                 activeGroup = best
+                // Keep the optimistic bubble visible after canonical remap.
+                keepOptimisticBubble(in: best.groupIdHex)
                 startPolling(groupIdHex: best.groupIdHex)
             }
         }
@@ -713,7 +771,7 @@ import Foundation
             if let refreshed = activeGroup { group = refreshed }
         }
         if stuckGroupIds.contains(group.groupIdHex) {
-            self.error = "このトークは暗号状態がずれているため送信できません。新しいトークを作成してください。"
+            abortOptimisticSend("このトークは暗号状態がずれているため送信できません。新しいトークを作成してください。")
             AppLogger.log("MLS", "TalkVM.sendMessage blocked stuck group=\(group.groupIdHex)")
             return
         }
@@ -741,7 +799,7 @@ import Foundation
             let fallbackHasGap = await repository.hasMlsStateGaps(groupIdHex: fallback.groupIdHex)
             if fallback.groupIdHex != group.groupIdHex && !fallbackHasGap {
                 AppLogger.log("MLS", "TalkVM.sendMessage: gap canonical replaced old=\(group.groupIdHex) new=\(fallback.groupIdHex) reason=\(fallbackReason)")
-                group = fallback; activeGroup = fallback; startPolling(groupIdHex: fallback.groupIdHex)
+                group = fallback; activeGroup = fallback; keepOptimisticBubble(in: fallback.groupIdHex); startPolling(groupIdHex: fallback.groupIdHex)
             } else if messages.count > 0 {
                 AppLogger.log("MLS", "TalkVM.sendMessage ignoring residual MLS gap on established DM group=\(group.groupIdHex) fallback=\(fallback.groupIdHex) fallbackHasGap=\(fallbackHasGap) messages=\(messages.count)")
             } else {
@@ -767,7 +825,7 @@ import Foundation
                     }
                 }
                 if await repository.hasMlsStateGaps(groupIdHex: group.groupIdHex) {
-                    self.error = "同期中です。相手に表示される状態を確認中です。少し待って再送してください"
+                    abortOptimisticSend("同期中です。相手に表示される状態を確認中です。少し待って再送してください")
                     AppLogger.log("MLS", "TalkVM.sendMessage abort unresolved MLS gap group=\(group.groupIdHex) fallback=\(fallback.groupIdHex) fallbackHasGap=\(fallbackHasGap)")
                     return
                 }
@@ -775,20 +833,11 @@ import Foundation
         }
 
         AppLogger.log("MLS", "TalkVM.sendMessage start: group=\(group.groupIdHex), len=\(text.count)")
+
+        // Spinner only covers the actual MLS send. Healthy relays complete
+        // this in well under a second; longer waits indicate a real network
+        // issue and the spinner is the correct affordance for that.
         sendingMessage = true
-        lastMessageActivityAt = Date()
-
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let tempId = "local_\(Date().timeIntervalSince1970)_\(UUID().uuidString)"
-        let optimistic = MlsMessage(
-            id: tempId,
-            senderPubkey: myPubkeyHex,
-            content: trimmed,
-            timestamp: Int64(Date().timeIntervalSince1970),
-            groupIdHex: group.groupIdHex
-        )
-        messages.append(optimistic)
-
         do {
             let msg = try await withTimeout(seconds: 30.0) {
                 try await self.repository.sendMlsMessage(groupIdHex: group.groupIdHex, content: trimmed, myPubkeyHex: self.myPubkeyHex)

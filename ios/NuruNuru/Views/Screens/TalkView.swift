@@ -212,66 +212,48 @@ private struct GroupChatView: View {
         return group.memberProfiles[partner]
     }
 
+    private func lineHeaderIcon(_ systemName: String, label: String) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: 19, weight: .medium))
+            .foregroundStyle(theme.textSecondary)
+            .frame(width: 32, height: 44)
+            .accessibilityLabel(label)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            // LINE-like top bar
-            HStack(spacing: NuruSpacing.space2) {
+            // LINE-like top bar: compact, black, no debug group id.
+            HStack(spacing: 6) {
                 Button { viewModel.closeGroup() } label: {
                     Image(systemName: NuruIcons.back)
-                        .font(.system(size: 19, weight: .semibold))
+                        .font(.system(size: 22, weight: .medium))
                         .foregroundStyle(theme.textPrimary)
-                        .frame(width: 36, height: 36)
+                        .frame(width: 40, height: 44)
                 }
 
-                if let url = partnerProfile?.picture.flatMap(URL.init) {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .success(let image): image.resizable().scaledToFill()
-                        default:
-                            Circle().fill(theme.bgTertiary)
-                        }
-                    }
-                    .frame(width: 30, height: 30)
-                    .clipShape(Circle())
-                }
-
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: 0) {
                     Text(title)
-                        .font(NuruFont.titleMedium())
+                        .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(theme.textPrimary)
-                        .lineLimit(1)
-                    Text("gid:\(String(group.groupIdHex.prefix(12))) msg:\(viewModel.messages.count)")
-                        .font(.system(size: 10, weight: .regular))
-                        .foregroundStyle(theme.textTertiary)
                         .lineLimit(1)
                     if let np = partnerProfile?.name, !np.isEmpty {
                         Text(np)
-                            .font(NuruFont.labelSmall())
+                            .font(.system(size: 11, weight: .regular))
                             .foregroundStyle(theme.textTertiary)
                             .lineLimit(1)
                     }
                 }
-
-                Spacer()
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 HStack(spacing: 2) {
-                    Image(systemName: "magnifyingglass")
-                    Image(systemName: "phone")
-                    Image(systemName: "line.3.horizontal")
-                }
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(theme.textSecondary)
-                .frame(height: 36)
-
-                Button { viewModel.showGroupInfoSheet() } label: {
-                    Image(systemName: NuruIcons.info)
-                        .font(.system(size: 16, weight: .regular))
-                        .foregroundStyle(theme.textSecondary)
-                        .frame(width: 28, height: 28)
+                    Button(action: {}) { lineHeaderIcon("magnifyingglass", label: "検索") }
+                    Button(action: {}) { lineHeaderIcon("phone", label: "通話") }
+                    Button(action: {}) { lineHeaderIcon("calendar", label: "予定") }
+                    Button { viewModel.showGroupInfoSheet() } label: { lineHeaderIcon("line.3.horizontal", label: "グループ情報") }
                 }
             }
             .frame(height: 56)
-            .padding(.horizontal, NuruSpacing.space2)
+            .padding(.horizontal, 4)
             .background(theme.bgPrimary)
 
             Divider().background(theme.borderColor)
@@ -321,24 +303,38 @@ private struct GroupChatView: View {
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(spacing: 6) {
+                        LazyVStack(spacing: 8) {
                             ForEach(viewModel.messages) { msg in
                                 MessageBubble(message: msg, myPubkeyHex: viewModel.myPubkeyHex)
                                     .id(msg.id)
                             }
                         }
-                        .padding(.horizontal, NuruSpacing.space3)
-                        .padding(.vertical, NuruSpacing.space3)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 10)
                     }
                     .background(theme.bgPrimary)
                     .onChange(of: viewModel.messages.count) { _, _ in
                         if let last = viewModel.messages.last {
-                            withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                            // ぬるぬる: scroll instantly when the user just sent.
+                            // The optimistic bubble already exists at the bottom
+                            // — any extra easing pushes perceived latency.
+                            // Use a no-animation transaction so SwiftUI cannot
+                            // attach an implicit animation from an enclosing
+                            // .animation() modifier.
+                            var t = Transaction()
+                            t.disablesAnimations = true
+                            withTransaction(t) {
+                                proxy.scrollTo(last.id, anchor: .bottom)
+                            }
                         }
                     }
                     .onChange(of: viewModel.messages.last?.id) { _, _ in
                         if let last = viewModel.messages.last {
-                            withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                            var t = Transaction()
+                            t.disablesAnimations = true
+                            withTransaction(t) {
+                                proxy.scrollTo(last.id, anchor: .bottom)
+                            }
                         }
                     }
                 }
@@ -414,7 +410,7 @@ private struct GroupRow: View {
                         }
                     }
                     HStack {
-                        Text("gid:\(String(group.groupIdHex.prefix(12)))  \(group.lastMessage.isEmpty ? "メッセージはありません" : group.lastMessage)")
+                        Text(group.lastMessage.isEmpty ? (group.isDm ? "暗号化メッセージ" : "\(group.memberPubkeys.count)人のグループ") : group.lastMessage)
                             .font(NuruFont.bodySmall())
                             .foregroundStyle(theme.textSecondary)
                             .lineLimit(1)
@@ -531,11 +527,11 @@ private struct MessageBubble: View {
         let timeText = Date(timeIntervalSince1970: TimeInterval(message.timestamp)).formatted(.dateTime.hour().minute())
 
         if isMine {
-            HStack(alignment: .bottom, spacing: 1) {
+            HStack(alignment: .bottom, spacing: 4) {
                 Text(timeText)
                     .font(.system(size: 10))
                     .foregroundStyle(theme.textTertiary)
-                    .padding(.bottom, 1)
+                    .padding(.bottom, 2)
 
                 if let cw = cwReason, !isCWRevealed {
                     cwBanner(reason: cw)
@@ -558,26 +554,17 @@ private struct MessageBubble: View {
                         .frame(width: 30, height: 30)
                 }
 
-                VStack(alignment: .leading, spacing: 2) {
-                    if let profile = message.senderProfile {
-                        Text(profile.displayedName)
-                            .font(.system(size: 11))
-                            .foregroundStyle(theme.textTertiary)
-                            .padding(.leading, 2)
+                HStack(alignment: .bottom, spacing: 1) {
+                    if let cw = cwReason, !isCWRevealed {
+                        cwBanner(reason: cw)
+                    } else {
+                        bubbleContent(text: displayText, images: images, cwReason: cwReason)
                     }
 
-                    HStack(alignment: .bottom, spacing: 1) {
-                        if let cw = cwReason, !isCWRevealed {
-                            cwBanner(reason: cw)
-                        } else {
-                            bubbleContent(text: displayText, images: images, cwReason: cwReason)
-                        }
-
-                        Text(timeText)
-                            .font(.system(size: 10))
-                            .foregroundStyle(theme.textTertiary)
-                            .padding(.bottom, 2)
-                    }
+                    Text(timeText)
+                        .font(.system(size: 10))
+                        .foregroundStyle(theme.textTertiary)
+                        .padding(.bottom, 2)
                 }
 
                 Spacer(minLength: 40)
@@ -629,14 +616,14 @@ private struct MessageBubble: View {
                         .lineSpacing(1)
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: true, vertical: true)
-                        .padding(.horizontal, 11)
-                        .padding(.vertical, 7)
-                        .background(isMine ? NuruColors.lineGreen : theme.bgSecondary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(isMine ? NuruColors.lineGreen : Color(hex: "#2B2B2D"))
                         .clipShape(
                             UnevenRoundedRectangle(
                                 topLeadingRadius: 16,
-                                bottomLeadingRadius: isMine ? 16 : 5,
-                                bottomTrailingRadius: isMine ? 5 : 16,
+                                bottomLeadingRadius: isMine ? 16 : 4,
+                                bottomTrailingRadius: isMine ? 4 : 16,
                                 topTrailingRadius: 16
                             )
                         )
@@ -648,15 +635,15 @@ private struct MessageBubble: View {
                         .multilineTextAlignment(.leading)
                         .lineLimit(nil)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, 11)
-                        .padding(.vertical, 7)
-                        .frame(maxWidth: 240, alignment: .leading)
-                        .background(isMine ? NuruColors.lineGreen : theme.bgSecondary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .frame(maxWidth: 260, alignment: .leading)
+                        .background(isMine ? NuruColors.lineGreen : Color(hex: "#2B2B2D"))
                         .clipShape(
                             UnevenRoundedRectangle(
                                 topLeadingRadius: 16,
-                                bottomLeadingRadius: isMine ? 16 : 5,
-                                bottomTrailingRadius: isMine ? 5 : 16,
+                                bottomLeadingRadius: isMine ? 16 : 4,
+                                bottomTrailingRadius: isMine ? 4 : 16,
                                 topTrailingRadius: 16
                             )
                         )
@@ -693,16 +680,12 @@ private struct MessageInputBar: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Button(action: { onImageAttach?() }) {
-                Image(systemName: "plus")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(theme.textSecondary)
-                    .frame(width: 34, height: 34)
-            }
-            .buttonStyle(.plain)
+            lineInputIcon("plus", label: "追加") { onImageAttach?() }
+            lineInputIcon("camera", label: "カメラ") { onImageAttach?() }
+            lineInputIcon("photo", label: "画像") { onImageAttach?() }
 
-            HStack(spacing: 8) {
-                TextField("メッセージを入力", text: $text, axis: .vertical)
+            HStack(spacing: 6) {
+                TextField("", text: $text, prompt: Text("メッセージを入力").foregroundStyle(theme.textTertiary), axis: .vertical)
                     .font(.system(size: 16))
                     .foregroundStyle(theme.textPrimary)
                     .lineLimit(1...4)
@@ -711,35 +694,50 @@ private struct MessageInputBar: View {
 
                 Button(action: {}) {
                     Image(systemName: NuruIcons.emoji)
-                        .font(.system(size: 18))
+                        .font(.system(size: 20))
                         .foregroundStyle(theme.textTertiary)
+                        .frame(width: 28, height: 28)
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, 12)
+            .padding(.leading, 14)
+            .padding(.trailing, 6)
             .padding(.vertical, 7)
-            .background(theme.bgSecondary)
+            .background(Color(hex: "#242426"))
             .clipShape(Capsule())
 
-            Button(action: onSend) {
+            Button(action: hasText ? onSend : {}) {
                 if isSending {
                     ProgressView().tint(.white)
-                        .frame(width: 38, height: 38)
+                        .frame(width: 36, height: 36)
                 } else {
-                    Image(systemName: NuruIcons.send)
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 38, height: 38)
-                        .background(hasText ? NuruColors.lineGreen : NuruColors.lineGreen.opacity(0.4))
+                    // ぬるぬる: no .animation here. The send button must flip
+                    // between mic ↔ paper-plane on the same frame as the tap;
+                    // any easing reads as "the app is thinking".
+                    Image(systemName: hasText ? NuruIcons.send : "mic")
+                        .font(.system(size: hasText ? 17 : 22, weight: .semibold))
+                        .foregroundStyle(hasText ? .white : theme.textSecondary)
+                        .frame(width: 36, height: 36)
+                        .background(hasText ? NuruColors.lineGreen : Color.clear)
                         .clipShape(Circle())
-                        .animation(.easeInOut(duration: 0.15), value: hasText)
                 }
             }
-            .disabled(!hasText || isSending || isDisabled)
+            .disabled(isSending || isDisabled)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(theme.bgPrimary)
+    }
+
+    private func lineInputIcon(_ systemName: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 22, weight: .regular))
+                .foregroundStyle(theme.textSecondary)
+                .frame(width: 24, height: 36)
+                .accessibilityLabel(label)
+        }
+        .buttonStyle(.plain)
     }
 }
 

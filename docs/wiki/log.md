@@ -2,6 +2,36 @@
 
 LLM Wiki の時系列ログです。追記専用として扱います。
 
+## [2026-05-23] perf | Send-button spinner reflects only the MLS send call (not pre-flight)
+
+- `TalkViewModel.sendMessage` on both iOS and Android no longer sets `sendingMessage = true` at the top of the function. The flag is now set immediately before the `repository.sendMlsMessage(...)` call so the spinner covers only the actual MLS network round-trip.
+- Previously the spinner stayed visible for up to ~110s (Android) or ~77s (iOS) because the pre-flight chain (DM canonicalize → catch-up 15s → repair 30s → deep-catch-up 35s) ran while `sendingMessage` was true. User reported the spinner staying on for "about 1 minute" after tapping send.
+- The optimistic bubble + cleared composer remain the affordance for "message accepted". The spinner is now only the affordance for "network send in flight". `abortOptimisticSend(...)` still defensively clears the flag on every early-return path.
+- Source: `android/app/src/main/kotlin/io/nurunuru/app/viewmodel/TalkViewModel.kt`, `ios/NuruNuru/ViewModels/TalkViewModel.swift`, `docs/wiki/ui/android-ios-sync.md`.
+
+## [2026-05-23] perf | Instant send + drop sender-name label in Talk chat
+
+- Removed the sender display-name `Text` rendered above incoming bubbles on both platforms (`TalkView.swift` `MessageBubble`, `TalkComponents.kt` `MlsMessageBubble`). The avatar already carries identity; duplicating the name on every consecutive incoming message broke the LINE silhouette.
+- Moved the optimistic-bubble insertion to the very top of `sendMessage` on both platforms (`TalkViewModel.swift` and `TalkViewModel.kt`). Previously the optimistic `MlsMessage` was appended **after** DM canonicalization, `fetchMlsMessages(repairFull = false/true)` catch-up, and gap-repair with `withTimeout(15_000)` + `withTimeout(30_000)`, so the user could wait up to 45 s between tapping send and seeing their own bubble. Now the bubble appears in the same UI frame as the tap; the heavy convergence work continues in the background. If a later DM remap picks a different canonical group, the optimistic message's `groupIdHex` is rewritten in place rather than dropped/re-added.
+- Hardened the optimistic-send path: Android now uses `abortOptimisticSend(...)` and `keepOptimisticBubbleIn(...)`; iOS uses `abortOptimisticSend(...)` and `keepOptimisticBubble(in:)`. Pre-send abort paths remove the temporary bubble and clear `sendingMessage`; canonical remaps preserve or restore the temporary bubble in the target group instead of losing it during message-list replacement.
+- Removed the remaining micro-animations on the send affordance and auto-scroll. iOS `TalkView.swift`: dropped `.animation(.easeInOut(duration: 0.15), value: hasText)` on the send button so the mic ↔ paper-plane swap happens on the same frame as the tap, and wrapped both `proxy.scrollTo` calls in a `Transaction` with `disablesAnimations = true` so no enclosing implicit animation can attach. Android `TalkComponents.kt`: replaced the two `animateColorAsState(tween(150))` on the send button background/tint with plain conditional values (and removed the now-unused `animateColorAsState` / `tween` imports). Net effect: every send tap commits in <16 ms with zero easing between tap, bubble insertion, and bottom-snap.
+- Replaced the auto-scroll easing in the chat list with instantaneous jumps (`scrollToItem` on Android `TalkScreen.kt`, plain `proxy.scrollTo(..., anchor: .bottom)` without `withAnimation` on iOS `TalkView.swift`). The optimistic bubble is already at the bottom, so any easing only adds perceived latency.
+- Documented the new "instant send" rule and the no-sender-name rule in `docs/wiki/ui/android-ios-sync.md`.
+
+## [2026-05-23] fix | Talk chat icon parity + drop read-receipt label
+
+- Aligned Android Talk chat icons with the iOS SF Symbols set. Header `⌕ / ☎ / 31 / ☰` text glyphs replaced with `Icons.Outlined.Search / Call / CalendarToday / Menu` in `TalkScreen.kt`; the obsolete `LineCalendarAction` and Unicode-symbol `LineHeaderAction(symbol: String, …)` helper were removed and the helper now takes an `ImageVector` + `onClick`.
+- Composer left-side icons in `TalkComponents.kt` rebuilt: `Icons.Outlined.Add` (＋), `Icons.Outlined.PhotoCamera` (camera), `NuruIcons.Image` (photo). Previously the camera slot reused `NuruIcons.Image`, so two identical photo glyphs were shown.
+- Removed the outgoing 「既読」 label on both platforms (`TalkView.swift` `MessageBubble`, `TalkComponents.kt` `MlsMessageBubble`) because end-to-end read receipts are not yet observable; only the timestamp remains beside the bubble.
+- Updated `docs/wiki/ui/android-ios-sync.md` with the explicit header / composer icon mapping and the no-read-receipt rule.
+
+## [2026-05-23] fix | LINE-style native Talk chat chrome
+
+- Updated native Talk chat UI on iOS and Android toward the LINE reference: compact black header, LINE-like action icons, green outgoing bubbles, dark-gray incoming bubbles, outside timestamps, and LINE-style composer controls.
+- Hidden the global bottom tab bar while a Talk conversation is open so the chat and composer own the full screen; the tab bar remains visible on the Talk list.
+- Removed visible MLS group IDs from chat headers, composers, and conversation rows. Added the full group ID to the group information sheet/modal on iOS and Android.
+- Source: `ios/NuruNuru/Views/Screens/TalkView.swift`, `ios/NuruNuru/Views/Sheets/GroupInfoSheet.swift`, `ios/NuruNuru/Views/Screens/MainTabView.swift`, `android/app/src/main/kotlin/io/nurunuru/app/ui/screens/TalkScreen.kt`, `android/app/src/main/kotlin/io/nurunuru/app/ui/components/TalkComponents.kt`, `android/app/src/main/kotlin/io/nurunuru/app/ui/components/GroupInfoModal.kt`, `android/app/src/main/kotlin/io/nurunuru/app/ui/screens/MainScreen.kt`.
+
 ## [2026-05-23] feat | iOS MLS peer-epoch catch-up parity (issue #190)
 
 - Wired the Issue #183 Rust FFI (`mls_catch_up_to_peer`,
