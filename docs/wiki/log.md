@@ -190,3 +190,13 @@ LLM Wiki の時系列ログです。追記専用として扱います。
 - Fix: update `_uiState.messages` before handling residual DM gap diagnostics, and do not break the stream solely because `mlsStateGapCount() > 0` when usable normalized history exists. Manual pull and guarded auto-repair remain responsible for reducing the remaining gap.
 - Kept the LINE-grade Talk UX changes: no TopBar refresh icon, no debug `gid:/msg:` subtitle, Android Talk-list pull-to-refresh added, and conversation pull-to-refresh uses strong repair.
 - Verified by rebuild + reinstall + launch on a physical Android device: versionName=1.5.0.
+## [2026-05-23] fix | iOS Talk fresh DM isolation and cache-first open
+
+- iOS explicit DM creation now treats「新しくトークを作成」as a hard reset for that DM conversation key: older sibling DM groups are locally hidden, removed from the visible ViewModel lists, and the fresh group is pinned as the canonical send/open target.
+- iOS `fetchMlsGroups` now applies DM hidden tombstones when an unhidden sibling DM exists for the same peer, so old hidden DM history does not resurrect after app restart and get merged into the new Talk. If all valid peer DMs are hidden (legacy auto-recovery tombstone bug), the valid shared group remains visible to avoid orphan sends.
+- iOS `loadGroups` now paints locally-known Rust SQLite groups before relay Welcome/profile discovery, and `openGroup` paints local SQLite message history immediately (then local sibling histories) before relay-backed repair/canonical scanning. Relay catch-up remains background refinement, so opening Talk after launch is cache-first.
+## [2026-05-23] fix | iOS Talk exited groups stay hidden
+
+- iOS Talk now records explicit MLS exits in the persistent left-group blocklist and applies that blocklist in both `getLocalMlsGroups` (cache-first startup) and `fetchMlsGroups` (relay refresh).
+- `visibleFfiMlsGroups` now treats local hidden/left tombstones as authoritative for DMs and named groups, and no longer auto-prunes tombstones just because the visible list would otherwise be empty. This prevents a deliberately empty Talk list after leaving the last group from being repopulated from Rust SQLite/relay state.
+- `TalkViewModel.leaveGroup` removes exited named groups from both visible lists immediately, mirrors DM sibling exits into the persistent left set, and clears fresh-DM session pins for exited groups.

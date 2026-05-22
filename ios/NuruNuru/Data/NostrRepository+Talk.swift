@@ -117,6 +117,41 @@ extension NostrRepository {
         return group.memberPubkeys.contains { $0.lowercased() == pk }
     }
 
+    private func visibleFfiMlsGroups(_ ffiGroupsAll: [FfiMlsGroupInfo], myPubkeyHex: String, context: String) -> [FfiMlsGroupInfo] {
+        let hidden = prefs.hiddenMlsGroupIds
+        let left = cache.getLeftGroupIds()
+        // invalid DM（相手不在 = 自分だけ）を一覧から除外。
+        // Explicit exits and local-hide tombstones are authoritative for both
+        // cache-first (`getLocalMlsGroups`) and relay refresh (`fetchMlsGroups`).
+        // Do not auto-prune tombstones just because the visible result becomes empty:
+        // an intentionally empty Talk list after leaving the last group must stay empty.
+        func dmPeerKey(_ g: FfiMlsGroupInfo) -> String? {
+            guard g.isDm else { return nil }
+            return g.memberPubkeys.map { $0.lowercased() }.first { $0 != myPubkeyHex.lowercased() }
+        }
+        var hiddenSuppressed = 0
+        var leftSuppressed = 0
+        let ffiGroups = ffiGroupsAll.filter { g in
+            if g.isDm, dmPeerKey(g) == nil { return false }
+            if left.contains(g.groupIdHex) {
+                leftSuppressed += 1
+                return false
+            }
+            if hidden.contains(g.groupIdHex) {
+                hiddenSuppressed += 1
+                return false
+            }
+            return true
+        }
+        if leftSuppressed > 0 {
+            AppLogger.log("MLS", "\(context): suppressed left groups=\(leftSuppressed)")
+        }
+        if hiddenSuppressed > 0 {
+            AppLogger.log("MLS", "\(context): suppressed hidden groups=\(hiddenSuppressed)")
+        }
+        return ffiGroups
+    }
+
     func isMlsGroupBroken(groupIdHex: String) -> Bool {
         mlsBrokenGroupIds.contains(groupIdHex)
     }
@@ -129,6 +164,46 @@ extension NostrRepository {
     }
 
     // MARK: - Group Fetch
+
+    /// Return locally-known MLS groups from Rust SQLite without relay fetches.
+    /// Used by Talk list startup for cache-first rendering; `fetchMlsGroups` later
+    /// refreshes Welcomes, relay metadata, and remote profile data in the background.
+    func getLocalMlsGroups(myPubkeyHex: String) async -> [MlsGroup] {
+        guard let ffi = ensureMlsClient() else { return [] }
+        var ffiGroupsAll = (try? ffi.mlsListGroups()) ?? []
+        ffiGroupsAll = ffiGroupsAll.filter { g in
+            g.memberPubkeys.contains { $0.caseInsensitiveCompare(myPubkeyHex) == .orderedSame }
+        }
+        let ffiGroups = visibleFfiMlsGroups(ffiGroupsAll, myPubkeyHex: myPubkeyHex, context: "getLocalMlsGroups")
+        let allPubkeys = Array(Set(ffiGroups.flatMap { $0.memberPubkeys }))
+        let profileMap: [String: UserProfile] = Dictionary(uniqueKeysWithValues: allPubkeys.compactMap { pk in
+            cache.getCachedProfile(pk).map { (pk, $0) }
+        })
+        let groups = ffiGroups.map { ffiG in
+            let lastMsg = (try? ffi.mlsGetMessageHistory(groupIdHex: ffiG.groupIdHex, limit: 1))?.first
+            return MlsGroup(
+                groupIdHex:    ffiG.groupIdHex,
+                name:          ffiG.name,
+                description:   ffiG.description,
+                adminPubkeys:  ffiG.adminPubkeys,
+                memberPubkeys: ffiG.memberPubkeys,
+                relays:        ffiG.relays,
+                createdAt:     Int64(ffiG.createdAt),
+                epoch:         Int64(ffiG.epoch),
+                disappearingMessageSecs: ffiG.disappearingMessageSecs.map(Int64.init),
+                isDm:          ffiG.isDm,
+                memberProfiles: Dictionary(
+                    uniqueKeysWithValues: ffiG.memberPubkeys.compactMap { pk in
+                        profileMap[pk].map { (pk, $0) }
+                    }
+                ),
+                lastMessage:     lastMsg?.content ?? "",
+                lastMessageTime: lastMsg.map { Int64($0.timestamp) } ?? Int64(ffiG.createdAt)
+            )
+        }.sorted { $0.lastMessageTime > $1.lastMessageTime }
+        AppLogger.log("MLS", "getLocalMlsGroups: sqlite groups=\(groups.count)/\(ffiGroupsAll.count)")
+        return groups
+    }
 
     /// MLS グループ一覧をリレー + Rust SQLite から取得する。
     ///
@@ -280,43 +355,7 @@ extension NostrRepository {
             }
             ffiGroupsAll = Array(byId.values)
         }
-        var hidden = prefs.hiddenMlsGroupIds
-        // invalid DM（相手不在 = 自分だけ）を一覧から除外。
-        // WhiteNoise interop recovery: do NOT apply local hidden tombstones to valid
-        // peer DMs. Earlier auto-recovery hid the real shared WhiteNoise group and
-        // made iOS send to a newly-created orphan group instead. Explicit leave still
-        // hides non-DM groups; DM deletion must be revisited after interop is stable.
-        var ffiGroups = ffiGroupsAll.filter { g in
-            if g.isDm {
-                return g.memberPubkeys.contains(where: { $0 != myPubkeyHex })
-            }
-            guard !hidden.contains(g.groupIdHex) else { return false }
-            return true
-        }
-
-        // Recovery safety: a previous stuck-DM auto recovery could locally hide every
-        // otherwise valid Rust/MDK group for the account. If that happens, Talk becomes
-        // permanently empty after reinstall even though mlsListGroups still returns valid
-        // Nostr groups. Do not expose internal MLS ids here; groupIdHex remains the Nostr
-        // group id from FFI. Prune only stale local-hide tombstones for groups that still
-        // have a peer member (or are non-DM groups) and only when the visible list would be
-        // empty, preserving normal explicit leave/orphan hiding in non-empty states.
-        if ffiGroups.isEmpty, !hidden.isEmpty {
-            let validHiddenGroups = ffiGroupsAll.filter { g in
-                hidden.contains(g.groupIdHex) && (!g.isDm || g.memberPubkeys.contains(where: { $0 != myPubkeyHex }))
-            }
-            if !validHiddenGroups.isEmpty {
-                for g in validHiddenGroups { hidden.remove(g.groupIdHex) }
-                prefs.hiddenMlsGroupIds = hidden
-                ffiGroups = ffiGroupsAll.filter { g in
-                    if g.isDm {
-                        return g.memberPubkeys.contains(where: { $0 != myPubkeyHex })
-                    }
-                    return true
-                }
-                AppLogger.log("MLS", "fetchMlsGroups: pruned stale hidden tombstones=\(validHiddenGroups.count) after zero-visible guard")
-            }
-        }
+        let ffiGroups = visibleFfiMlsGroups(ffiGroupsAll, myPubkeyHex: myPubkeyHex, context: "fetchMlsGroups")
 
         AppLogger.log("MLS", "fetchMlsGroups: ffi.mlsListGroups -> \(ffiGroups.count)/\(ffiGroupsAll.count) visible groups")
 
@@ -966,7 +1005,8 @@ extension NostrRepository {
     }
 
     /// ローカルでグループを非表示化する（再起動後も維持）。
-    /// leave publish の成否に関係なく UI 復活を防ぐために使用。
+    /// Migration/recovery/fresh-DM 用の軽い tombstone。明示退出は
+    /// `markMlsGroupAsLeftLocally` を使い、zero-visible recovery でも復活させない。
     func hideMlsGroupLocally(groupIdHex: String) {
         mlsProcessedIds.removeValue(forKey: groupIdHex)
         var hidden = prefs.hiddenMlsGroupIds
@@ -974,9 +1014,16 @@ extension NostrRepository {
         prefs.hiddenMlsGroupIds = hidden
     }
 
-    func leaveMlsGroup(groupIdHex: String) async throws {
-        // 退出publishが失敗しても、再起動時に復活しないよう先にローカル非表示を確定。
+    /// 明示的に退出した MLS グループを永続ブロックリストへ保存する。
+    /// cache-first の `getLocalMlsGroups` と relay refresh の `fetchMlsGroups` の両方が参照する。
+    func markMlsGroupAsLeftLocally(groupIdHex: String) {
+        cache.markGroupAsLeft(groupIdHex)
         hideMlsGroupLocally(groupIdHex: groupIdHex)
+    }
+
+    func leaveMlsGroup(groupIdHex: String) async throws {
+        // 退出publishが失敗しても、再起動時に復活しないよう先にローカル退出を確定。
+        markMlsGroupAsLeftLocally(groupIdHex: groupIdHex)
 
         guard let ffi = ensureMlsClient() else {
             AppLogger.log("MLS", "leaveMlsGroup: FFI unavailable, local-hide only group=\(groupIdHex)")

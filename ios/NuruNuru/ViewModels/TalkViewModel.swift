@@ -41,6 +41,11 @@ import Foundation
     let myPubkeyHex: String
     private var pollingTask:   Task<Void, Never>?
     private var canonicalDmGroupByConversationKey: [String: String] = [:]
+    /// Session-only marker for explicit「新しくトークを作成」groups. A normal
+    /// canonical pin still needs sibling scanning; only this fresh-create marker
+    /// suppresses old sibling-history merge in the current session. After restart,
+    /// repository hidden tombstones keep old siblings out of `allMlsGroups`.
+    private var freshCreatedDmGroupIds: Set<String> = []
     private var mlsGroupRetryCooldownUntil: [String: Date] = [:]
     private var mlsPollHealth: [String: MlsPollHealth] = [:]
     private var lastMessageActivityAt: Date = Date()
@@ -134,6 +139,18 @@ import Foundation
         // finishes.
         isLoading = false
         error     = nil
+
+        // Cache-first Talk startup: paint locally-known Rust SQLite groups before
+        // any relay Welcome/profile discovery. This makes the Talk tab usable
+        // immediately after launch; the fetch below refines the list afterward.
+        let localGroups = await repository.getLocalMlsGroups(myPubkeyHex: myPubkeyHex)
+        if !localGroups.isEmpty {
+            let filtered = localGroups.filter { !stuckGroupIds.contains($0.groupIdHex) }
+            allMlsGroups = filtered
+            groups = collapseDuplicateConversationGroups(filtered)
+            AppLogger.log("MLS", "TalkVM.loadGroups local-first groups=\(localGroups.count) collapsed=\(groups.count)")
+        }
+
         do {
             let fetched = try await repository.fetchMlsGroups(myPubkeyHex: myPubkeyHex)
             let filtered = fetched.filter { !stuckGroupIds.contains($0.groupIdHex) }
@@ -242,11 +259,9 @@ import Foundation
 
         do {
             let localMsgs = await repository.getLocalMlsMessages(groupIdHex: groupIdHex)
-            if !localMsgs.isEmpty {
-                messages = localMsgs
-                messagesLoading = false
-                AppLogger.log("MLS", "TalkVM.openGroup local-first messages=\(localMsgs.count) group=\(groupIdHex)")
-            }
+            messages = dedupeMessages(localMsgs)
+            messagesLoading = false
+            AppLogger.log("MLS", "TalkVM.openGroup local-first messages=\(localMsgs.count) group=\(groupIdHex)")
 
             // Do not block opening on relay/MLS catch-up. The user-visible chat must
             // be local-first and send-capable immediately; catch-up runs in polling.
@@ -257,8 +272,16 @@ import Foundation
             // 新規 orphan group）と、WhiteNoise Android が実際に参加している group が
             // ずれることがある。ここがずれると iOS では送信済みに見えても Android には
             // 出ない。開封時は常に local MDK history を見て「相手のメッセージが復号
-            // できている group」を送信先として選ぶ。異なる group の履歴は混ぜない。
-            do {
+            // できている group」を送信先として選ぶ。
+            // ただし明示的な「新しくトークを作成」は fresh boundary。create path で
+            // fresh group を pin 済みなら、旧 sibling 履歴を混ぜずに新規トークの空履歴
+            // を維持する（送信先だけ canonical pin として安定化）。
+            let requestedConversationKey = conversationKey(group)
+            let isExplicitFreshPinnedDm = group.isDm && freshCreatedDmGroupIds.contains(group.groupIdHex)
+            if isExplicitFreshPinnedDm {
+                AppLogger.log("MLS", "TalkVM.openGroup: fresh pinned DM; skip sibling merge group=\(groupIdHex)")
+                canonicalDmGroupByConversationKey[requestedConversationKey] = group.groupIdHex
+            } else {
                 let siblingGroupsAll = siblingConversationGroups(for: group).sorted { lhs, rhs in
                     if lhs.lastMessageTime != rhs.lastMessageTime { return lhs.lastMessageTime > rhs.lastMessageTime }
                     return lhs.groupIdHex < rhs.groupIdHex
@@ -268,11 +291,29 @@ import Foundation
                 let siblingGroups = Array(siblingGroupsAll.prefix(maxSiblingScan))
                 AppLogger.log("MLS", "TalkVM.openGroup: canonical scan requested=\(groupIdHex) key=\(String(conversationKey(group).prefix(18))) total=\(siblingGroupsAll.count) scanned=\(siblingGroups.count)")
 
-                var allMessagesByGroup: [(group: MlsGroup, messages: [MlsMessage], fetchOk: Bool)] = []
+                var localMessagesByGroup: [(group: MlsGroup, messages: [MlsMessage])] = []
                 var seenGroupIds = Set<String>()
                 for candidate in ([group] + siblingGroups) where seenGroupIds.insert(candidate.groupIdHex).inserted {
+                    let local = candidate.groupIdHex == groupIdHex ? msgs : await self.repository.getLocalMlsMessages(groupIdHex: candidate.groupIdHex)
+                    localMessagesByGroup.append((candidate, local))
+                }
+
+                // Cache-first means all local sibling histories are painted before any
+                // relay-backed repair/canonical scan. This is especially important after
+                // cold launch: the user should see SQLite history immediately, while MLS
+                // catch-up runs as a background refinement.
+                let cacheFirstMessages = localMessagesByGroup.flatMap { $0.messages }
+                if shouldReplaceMessages(current: messages, incoming: cacheFirstMessages) {
+                    messages = dedupeMessages(cacheFirstMessages)
+                }
+                messagesLoading = false
+                AppLogger.log("MLS", "TalkVM.openGroup cache-first sibling local messages=\(cacheFirstMessages.count) groups=\(localMessagesByGroup.count) requested=\(groupIdHex)")
+
+                var allMessagesByGroup: [(group: MlsGroup, messages: [MlsMessage], fetchOk: Bool)] = []
+                for snapshot in localMessagesByGroup {
+                    let candidate = snapshot.group
                     do {
-                        var local = candidate.groupIdHex == groupIdHex ? msgs : await self.repository.getLocalMlsMessages(groupIdHex: candidate.groupIdHex)
+                        var local = snapshot.messages
                         // If a DM has no peer message locally, do a real relay/MDK repair pass
                         // before deciding it is an orphan. WhiteNoise often has already sent
                         // the first message (e.g. group_id shown in Android logs) while iOS has
@@ -293,7 +334,7 @@ import Foundation
                         }
                         allMessagesByGroup.append((candidate, local, true))
                     } catch {
-                        allMessagesByGroup.append((candidate, [], false))
+                        allMessagesByGroup.append((candidate, snapshot.messages, false))
                         let fetchError = normalizeMlsError(error, fallback: "fetch_failed")
                         AppLogger.log("MLS", "TalkVM.openGroup: DM canonical fetch failed group=\(candidate.groupIdHex) err=\(fetchError)")
                     }
@@ -897,17 +938,22 @@ import Foundation
     func leaveGroup() async {
         guard let group = activeGroup else { return }
 
-        // まずローカル非表示を確定し、失敗時の再起動復活を防ぐ。
-        await repository.hideMlsGroupLocally(groupIdHex: group.groupIdHex)
+        // まずローカル退出を確定し、失敗時/再起動/cache-first 表示での復活を防ぐ。
+        await repository.markMlsGroupAsLeftLocally(groupIdHex: group.groupIdHex)
+        freshCreatedDmGroupIds.remove(group.groupIdHex)
 
-        // DM重複移行期では sibling も同時に非表示化して既存DM再利用を回避。
+        // DM重複移行期では sibling も同時に退出済み扱いにして既存DM再利用を回避。
         if group.isDm {
             let siblingIds = siblingDmGroupIds(for: group, from: groups).filter { $0 != group.groupIdHex }
             for sid in siblingIds {
-                await repository.hideMlsGroupLocally(groupIdHex: sid)
+                await repository.markMlsGroupAsLeftLocally(groupIdHex: sid)
+                freshCreatedDmGroupIds.remove(sid)
             }
             allMlsGroups.removeAll { g in conversationKey(g) == conversationKey(group) }
             groups.removeAll { g in conversationKey(g) == conversationKey(group) }
+        } else {
+            allMlsGroups.removeAll { $0.groupIdHex == group.groupIdHex }
+            groups.removeAll { $0.groupIdHex == group.groupIdHex }
         }
 
         do {
@@ -919,6 +965,7 @@ import Foundation
 
         closeGroup()
         groups.removeAll { $0.groupIdHex == group.groupIdHex }
+        allMlsGroups.removeAll { $0.groupIdHex == group.groupIdHex }
         showGroupInfo = false
     }
 
@@ -979,11 +1026,19 @@ import Foundation
                 groups.removeAll { $0.isDm && $0.memberPubkeys.contains(pubkey) }
             }
             let group = try await repository.createMlsDmConversation(partnerPubkeyHex: pubkey, myPubkeyHex: myPubkeyHex)
+            // Explicit New Talk is a hard reset for this DM key. Pin the freshly-created
+            // group and keep only that visible conversation locally, otherwise the
+            // canonical peer-history selector can remap the user back to the previous
+            // sibling and make the new Talk inherit old history.
+            canonicalDmGroupByConversationKey[conversationKey(group)] = group.groupIdHex
+            freshCreatedDmGroupIds.insert(group.groupIdHex)
+            allMlsGroups.removeAll { $0.isDm && $0.memberPubkeys.contains(pubkey) && $0.groupIdHex != group.groupIdHex }
+            groups.removeAll { $0.isDm && $0.memberPubkeys.contains(pubkey) && $0.groupIdHex != group.groupIdHex }
             if !allMlsGroups.contains(where: { $0.groupIdHex == group.groupIdHex }) {
                 allMlsGroups.insert(group, at: 0)
             }
             groups = collapseDuplicateConversationGroups(allMlsGroups)
-            AppLogger.log("MLS", "TalkVM.createDmConversation created group=\(group.groupIdHex)")
+            AppLogger.log("MLS", "TalkVM.createDmConversation created group=\(group.groupIdHex) freshPinned=true")
             await openGroup(group.groupIdHex)
         } catch {
             AppLogger.log("MLS", "TalkVM.createDmConversation failed err=\(error)")
