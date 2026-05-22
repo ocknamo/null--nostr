@@ -791,6 +791,22 @@ impl NuruNuruClient {
                     },
                 }
             }
+            nurunuru_core::types::MlsProcessResult::Commit {
+                group_id_hex,
+                delta,
+            } => FfiMlsProcessResult::Commit {
+                group_id_hex,
+                added_pubkeys: delta.added_pubkeys,
+                removed_pubkeys: delta.removed_pubkeys,
+                epoch_after: delta.epoch_after,
+            },
+            nurunuru_core::types::MlsProcessResult::NeedsSelfUpdate {
+                group_id_hex,
+                reason,
+            } => FfiMlsProcessResult::NeedsSelfUpdate {
+                group_id_hex,
+                reason,
+            },
             nurunuru_core::types::MlsProcessResult::StateUpdate { kind } => {
                 FfiMlsProcessResult::StateUpdate { kind }
             }
@@ -807,13 +823,14 @@ impl NuruNuruClient {
     ) -> Result<FfiDecryptedMessage, NuruNuruFfiError> {
         match self.mls_process_message_result(group_id_hex, event_json)? {
             FfiMlsProcessResult::Application { message } => Ok(message),
-            FfiMlsProcessResult::StateUpdate { .. } => Err(NuruNuruFfiError::MlsStateUpdate),
+            FfiMlsProcessResult::Commit { .. }
+            | FfiMlsProcessResult::NeedsSelfUpdate { .. }
+            | FfiMlsProcessResult::StateUpdate { .. } => Err(NuruNuruFfiError::MlsStateUpdate),
         }
     }
 
-    /// Process an incoming Welcome event and join the group.
-    ///
-    /// Accepts both Kind 1059 (NIP-59 gift-wrapped, Marmot) and Kind 444 (legacy).
+    /// Fused process+accept (back-compat). Issue #178 #4: prefer the split
+    /// flow `mls_preview_welcome` → `mls_accept_welcome`/`mls_decline_welcome`.
     pub fn mls_process_welcome(
         &self,
         welcome_event_json: String,
@@ -823,6 +840,108 @@ impl NuruNuruClient {
             .block_on(self.engine.mls_process_welcome(&welcome_event_json))
             .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))?;
         Ok(core_group_info_to_ffi(info))
+    }
+
+    /// Stage an incoming Welcome without joining. Returns the pending welcome
+    /// so the UI can show "Bob invited you to Foo" before any cryptographic
+    /// state is created. Follow with `mls_accept_welcome` or `mls_decline_welcome`.
+    pub fn mls_preview_welcome(
+        &self,
+        welcome_event_json: String,
+    ) -> Result<FfiPendingWelcome, NuruNuruFfiError> {
+        let pending = self
+            .runtime
+            .block_on(self.engine.mls_preview_welcome(&welcome_event_json))
+            .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))?;
+        Ok(core_pending_welcome_to_ffi(pending))
+    }
+
+    /// Accept a previously previewed Welcome by its **welcome event id** (kind:444 rumor id).
+    /// The id is the `welcome_event_id_hex` field returned by `mls_preview_welcome`.
+    pub fn mls_accept_welcome(
+        &self,
+        welcome_event_id_hex: String,
+    ) -> Result<FfiPendingWelcome, NuruNuruFfiError> {
+        let pending = self
+            .runtime
+            .block_on(self.engine.mls_accept_welcome(&welcome_event_id_hex))
+            .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))?;
+        Ok(core_pending_welcome_to_ffi(pending))
+    }
+
+    /// Decline a previously previewed Welcome by its **welcome event id** (kind:444 rumor id).
+    pub fn mls_decline_welcome(
+        &self,
+        welcome_event_id_hex: String,
+    ) -> Result<(), NuruNuruFfiError> {
+        self.runtime
+            .block_on(self.engine.mls_decline_welcome(&welcome_event_id_hex))
+            .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
+    }
+
+    /// List Welcomes that have been previewed but not yet accepted/declined.
+    pub fn mls_get_pending_welcomes(&self) -> Result<Vec<FfiPendingWelcome>, NuruNuruFfiError> {
+        let pending = self
+            .runtime
+            .block_on(self.engine.mls_get_pending_welcomes())
+            .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))?;
+        Ok(pending
+            .into_iter()
+            .map(core_pending_welcome_to_ffi)
+            .collect())
+    }
+
+    // ─── MLS subscriptions (issue #178 #9, #10) ───────────────────────────
+
+    /// Issue #178 #9: subscribe to my Welcomes (kind:1059 #p=self). Returns
+    /// a sub_id for `poll_live_events`/`stop_live_subscription`. `since_secs=0` means now.
+    pub fn mls_subscribe_welcomes(&self, since_secs: u64) -> Result<String, NuruNuruFfiError> {
+        let since = if since_secs == 0 {
+            None
+        } else {
+            Some(nostr::Timestamp::from(since_secs))
+        };
+        self.runtime
+            .block_on(self.engine.mls_subscribe_welcomes(since))
+            .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
+    }
+
+    /// Issue #178 #10: subscribe to kind:30443 rotations from the given
+    /// contacts (empty list = all kind:30443).
+    pub fn mls_subscribe_keypackage_rotations(
+        &self,
+        contact_pubkeys: Vec<String>,
+    ) -> Result<String, NuruNuruFfiError> {
+        let pks: Vec<nostr::PublicKey> = contact_pubkeys
+            .iter()
+            .filter_map(|h| nostr::PublicKey::from_hex(h).ok())
+            .collect();
+        self.runtime
+            .block_on(self.engine.mls_subscribe_keypackage_rotations(pks))
+            .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
+    }
+
+    // ─── MLS identity / encryption (issue #178 #1, #11) ───────────────────
+
+    /// Issue #178 #1: set the 32-byte SQLCipher key. Call before `login()`.
+    pub fn set_mls_db_key(&self, key: Vec<u8>) -> Result<(), NuruNuruFfiError> {
+        let bytes: [u8; 32] = key.try_into().map_err(|v: Vec<u8>| {
+            NuruNuruFfiError::EngineError(format!(
+                "set_mls_db_key: key must be 32 bytes, got {}",
+                v.len()
+            ))
+        })?;
+        self.runtime.block_on(self.engine.set_mls_db_key(bytes));
+        Ok(())
+    }
+
+    /// Issue #178 #11: wipe + reopen the MLS DB for a new identity.
+    pub fn mls_reset(&self, new_pubkey_hex: String) -> Result<(), NuruNuruFfiError> {
+        let pk = nostr::PublicKey::from_hex(&new_pubkey_hex)
+            .map_err(|e| NuruNuruFfiError::KeyError(e.to_string()))?;
+        self.runtime
+            .block_on(self.engine.mls_reset(pk))
+            .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
     }
 
     /// Retrieve decrypted message history for a group from MDK's local SQLite.
@@ -1488,8 +1607,45 @@ pub struct FfiDecryptedMessage {
 
 #[derive(uniffi::Enum)]
 pub enum FfiMlsProcessResult {
-    Application { message: FfiDecryptedMessage },
-    StateUpdate { kind: String },
+    Application {
+        message: FfiDecryptedMessage,
+    },
+    /// A Commit was applied. Carries the membership delta so the UI doesn't
+    /// need to re-query group info (issue #178 #5).
+    Commit {
+        group_id_hex: String,
+        added_pubkeys: Vec<String>,
+        removed_pubkeys: Vec<String>,
+        epoch_after: u64,
+    },
+    /// A pending proposal was stored — call `mls_create_recovery_commit` to
+    /// resolve it before the group stalls (issue #178 #6).
+    NeedsSelfUpdate {
+        group_id_hex: String,
+        reason: String,
+    },
+    /// Catch-all for unprocessable / unhandled results.
+    StateUpdate {
+        kind: String,
+    },
+}
+
+#[derive(uniffi::Record)]
+pub struct FfiPendingWelcome {
+    /// Inner Welcome rumor (kind:444) event id — the lookup key for
+    /// `mls_accept_welcome` / `mls_decline_welcome`.
+    pub welcome_event_id_hex: String,
+    /// Outer NIP-59 gift-wrap (kind:1059) event id — for app-side dedup
+    /// against relay-level caches.
+    pub wrapper_event_id_hex: String,
+    pub group_id_hex: String,
+    pub group_name: String,
+    pub group_description: String,
+    pub group_admin_pubkeys: Vec<String>,
+    pub group_relays: Vec<String>,
+    pub welcomer_pubkey: String,
+    pub member_count: u32,
+    pub is_dm: bool,
 }
 
 // ─── MLS conversion helpers ─────────────────────────────────────────────────
@@ -1517,6 +1673,35 @@ fn core_encrypted_msg_to_ffi(
         tags: data.tags,
         ephemeral_pubkey: data.ephemeral_pubkey,
     }
+}
+
+fn core_pending_welcome_to_ffi(p: nurunuru_core::types::PendingWelcome) -> FfiPendingWelcome {
+    FfiPendingWelcome {
+        welcome_event_id_hex: p.welcome_event_id_hex,
+        wrapper_event_id_hex: p.wrapper_event_id_hex,
+        group_id_hex: p.group_id_hex,
+        group_name: p.group_name,
+        group_description: p.group_description,
+        group_admin_pubkeys: p.group_admin_pubkeys,
+        group_relays: p.group_relays,
+        welcomer_pubkey: p.welcomer_pubkey,
+        member_count: p.member_count,
+        is_dm: p.is_dm,
+    }
+}
+
+/// HKDF-SHA256 over the secret key (hex or nsec) → 32-byte key for
+/// `set_mls_db_key`. `app_salt` scopes the key (e.g. `"io.nurunuru.mdk.v1"`).
+#[uniffi::export]
+pub fn derive_mls_db_key_from_secret(
+    secret_key_hex: String,
+    app_salt: String,
+) -> Result<Vec<u8>, NuruNuruFfiError> {
+    let keys = nostr::Keys::parse(&secret_key_hex)
+        .map_err(|e| NuruNuruFfiError::KeyError(e.to_string()))?;
+    let sk_bytes = keys.secret_key().to_secret_bytes();
+    let key = nurunuru_core::mls::derive_mls_db_key(&sk_bytes, app_salt.as_bytes());
+    Ok(key.to_vec())
 }
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]

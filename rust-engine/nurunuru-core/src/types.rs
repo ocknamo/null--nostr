@@ -198,11 +198,55 @@ pub struct DecryptedMessage {
     pub group_id_hex: String,
 }
 
+/// Issue #178 #5: membership delta the wrapper computes by diffing members
+/// before vs after MDK applies a Commit. Lets the UI render add/remove
+/// without a `get_group_info` re-query.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CommitDelta {
+    pub added_pubkeys: Vec<String>,
+    pub removed_pubkeys: Vec<String>,
+    pub epoch_after: u64,
+}
+
 /// Structured result for processing a Kind 445 event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MlsProcessResult {
     ApplicationMessage(DecryptedMessage),
-    StateUpdate { kind: String },
+    /// Issue #178 #5: commit applied; delta tells the UI who joined/left.
+    Commit {
+        group_id_hex: String,
+        delta: CommitDelta,
+    },
+    /// Issue #178 #6: pending proposal stored; app must run a self-update.
+    NeedsSelfUpdate {
+        group_id_hex: String,
+        reason: String,
+    },
+    /// Catch-all for unprocessable / unhandled MDK results.
+    StateUpdate {
+        kind: String,
+    },
+}
+
+/// Issue #178 #4: a Welcome staged for accept/decline UX.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingWelcome {
+    /// Inner kind:444 rumor id — the lookup key MDK uses.
+    pub welcome_event_id_hex: String,
+    /// Outer kind:1059 gift-wrap id — for app-side dedup.
+    pub wrapper_event_id_hex: String,
+    /// `nostr_group_id` (32-byte hex) — the same id used in Kind-445 `h` tags.
+    pub group_id_hex: String,
+    pub group_name: String,
+    pub group_description: String,
+    pub group_admin_pubkeys: Vec<String>,
+    pub group_relays: Vec<String>,
+    /// Pubkey of the inviter (welcomer).
+    pub welcomer_pubkey: String,
+    /// Number of members in the group at Welcome time (creator + invitees).
+    pub member_count: u32,
+    /// `true` when member_count <= 2 (1:1 DM).
+    pub is_dm: bool,
 }
 
 /// Japanese-friendly timestamp display

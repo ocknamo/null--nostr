@@ -378,6 +378,25 @@ suspend fun NostrRepository.fetchMlsMessages(groupIdHex: String, repairFull: Boo
                             )
                             MlsProcessPolicy.Processed
                         }
+                        // Issue #178 #5: structured commit delta — no group-info re-query needed.
+                        is uniffi.nurunuru.FfiMlsProcessResult.Commit -> {
+                            stateOnly++
+                            android.util.Log.d(
+                                "NostrRepository",
+                                "fetchMlsMessages($groupIdHex): commit id=${event.id} added=${result.addedPubkeys.size} removed=${result.removedPubkeys.size} epoch=${result.epochAfter}"
+                            )
+                            MlsProcessPolicy.StateUpdated
+                        }
+                        // Issue #178 #6: pending proposal — schedule a self-update so the group does not fork.
+                        is uniffi.nurunuru.FfiMlsProcessResult.NeedsSelfUpdate -> {
+                            stateOnly++
+                            android.util.Log.w(
+                                "NostrRepository",
+                                "fetchMlsMessages($groupIdHex): needsSelfUpdate id=${event.id} reason=${result.reason} — scheduling recovery commit"
+                            )
+                            scheduleMlsSelfUpdate(groupIdHex)
+                            MlsProcessPolicy.StateUpdated
+                        }
                         is uniffi.nurunuru.FfiMlsProcessResult.StateUpdate -> {
                             val kind = result.kind
                             android.util.Log.d(
@@ -572,6 +591,41 @@ private suspend fun NostrRepository.publishPendingMlsSelfUpdates(
     // advance this device epoch and make peers miss later application messages.
     android.util.Log.w("NostrRepository", "publishPendingMlsSelfUpdates: suppressed for interop joined=" + joinedGroupIds.size)
     return@withContext
+}
+
+/**
+ * Issue #178 #6: prepare a recovery self-update when MDK reports a pending
+ * Proposal. Debounced to once per group per minute; the prepared commit sits
+ * in MDK as pending and the next publish path picks it up.
+ */
+private val mlsScheduledSelfUpdateAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+private val mlsSelfUpdateScope = CoroutineScope(
+    SupervisorJob() + Dispatchers.IO + CoroutineName("mls-self-update")
+)
+
+internal fun NostrRepository.scheduleMlsSelfUpdate(groupIdHex: String) {
+    val now = System.currentTimeMillis()
+    val previous = mlsScheduledSelfUpdateAt[groupIdHex]
+    if (previous != null && now - previous < 60_000L) {
+        return
+    }
+    mlsScheduledSelfUpdateAt[groupIdHex] = now
+    mlsSelfUpdateScope.launch {
+        try {
+            val rustClient = client.getRustClient() ?: return@launch
+            val commit = rustClient.mlsCreateRecoveryCommit(groupIdHex)
+            android.util.Log.i(
+                "NostrRepository",
+                "scheduleMlsSelfUpdate: prepared groupIdHex=$groupIdHex contentLen=${commit.content.length}"
+            )
+        } catch (e: Exception) {
+            android.util.Log.w(
+                "NostrRepository",
+                "scheduleMlsSelfUpdate: failed groupIdHex=$groupIdHex: ${mlsRedactedError(e)}"
+            )
+        }
+    }
 }
 
 private val mlsMessageRetryQueues = java.util.concurrent.ConcurrentHashMap<String, MutableMap<String, NostrEvent>>()
@@ -1081,9 +1135,6 @@ private suspend fun NostrRepository.publishKeyPackage(existingDTag: String? = nu
         val stableD = mlsStableKeyPackageDTag(existingDTag ?: kpData.dTag)
         val tags30443 = applyStableKeyPackageDTag(kpData.tags.filter { it.firstOrNull() != "relays" }, stableD)
             .let { base -> base + listOf(relayTag) }
-        val tags443 = (if (kpData.legacyTags.isNotEmpty()) kpData.legacyTags else tags30443.filter { it.firstOrNull() != "d" })
-            .filter { it.firstOrNull() != "relays" }
-            .let { base -> base + listOf(relayTag) }
 
         // Targeted discovery publish: add both KeyPackage relays and broad discovery relays
         // before raw publishing so Amber/internal-signing paths reach Amethyst/WhiteNoise.
@@ -1098,29 +1149,16 @@ private suspend fun NostrRepository.publishKeyPackage(existingDTag: String? = nu
             rustClient.publishEvent(kpData.kind, kpData.content, tags30443).takeIf { it.isNotEmpty() }
         }
 
-        // Marmot migration window (MDK 0.8 / spec May 2026): dual-publish a legacy
-        // kind:443 equivalent without the d tag so older WhiteNoise/Amethyst builds can invite us.
-        val eventId443 = try {
-            if (isExternalSigner()) {
-                val unsigned443 = rustClient.createUnsignedEvent(NostrKind.MLS_KEY_PACKAGE_LEGACY.toUInt(), kpData.content, tags443, myPubkeyHex)
-                signAndPublishGetId(unsigned443)
-            } else {
-                rustClient.publishEvent(NostrKind.MLS_KEY_PACKAGE_LEGACY.toUInt(), kpData.content, tags443).takeIf { it.isNotEmpty() }
-            }
-        } catch (e: Exception) {
-            android.util.Log.w("NostrRepository", "publishKeyPackage: legacy 443 publish failed: ${mlsRedactedError(e)}")
-            null
-        }
+        // Issue #178 #3: kind:443 publish removed (read path still accepts it for migration).
 
         publishMlsRelayLists()
 
-        val eventId = eventId30443 ?: eventId443
-        if (eventId != null) {
-            prefs.mlsPublishedKeyPackageEventId = eventId
+        if (eventId30443 != null) {
+            prefs.mlsPublishedKeyPackageEventId = eventId30443
             prefs.mlsPublishedKeyPackageAt = System.currentTimeMillis() / 1000
         }
-        cleanupSupersededOwnKeyPackages(setOfNotNull(eventId30443, eventId443), stableD)
-        android.util.Log.d("NostrRepository", "publishKeyPackage: 30443=" + (eventId30443 != null) + " legacy443=" + (eventId443 != null) + " stableD=" + stableD + " forceNew=" + forceNewMaterial + " kpRelays=" + keyPackageRelays.size + " discovery=" + discoveryRelays.size)
+        cleanupSupersededOwnKeyPackages(setOfNotNull(eventId30443), stableD)
+        android.util.Log.d("NostrRepository", "publishKeyPackage: 30443=" + (eventId30443 != null) + " stableD=" + stableD + " forceNew=" + forceNewMaterial + " kpRelays=" + keyPackageRelays.size + " discovery=" + discoveryRelays.size)
     } catch (e: Exception) {
         android.util.Log.e("NostrRepository", "publishKeyPackage failed: ${mlsRedactedError(e)}")
     }

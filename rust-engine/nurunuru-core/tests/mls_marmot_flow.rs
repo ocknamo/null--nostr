@@ -234,9 +234,19 @@ async fn marmot_welcome_giftwrap_and_message_flow_works() {
         .await
         .unwrap();
     match self_update_result {
+        // Issue #178 #5: a self-update commit is now reported as a structured
+        // Commit (with an empty membership delta — the self-update doesn't
+        // add/remove members) rather than the opaque StateUpdate { kind: "commit" }.
+        nurunuru_core::types::MlsProcessResult::Commit { delta, .. } => {
+            assert!(
+                delta.added_pubkeys.is_empty() && delta.removed_pubkeys.is_empty(),
+                "self-update commit must not add/remove members, got {:?}",
+                delta
+            );
+        }
         nurunuru_core::types::MlsProcessResult::StateUpdate { .. } => {}
         other => panic!(
-            "expected state update for self-update commit, got {:?}",
+            "expected commit/state-update for self-update commit, got {:?}",
             other
         ),
     }

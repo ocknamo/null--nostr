@@ -70,8 +70,13 @@ pub struct NuruNuruEngine {
     // SSE streaming subscriptions: sub_id → event buffer
     subscription_buffers: Arc<Mutex<HashMap<String, SubBuffer>>>,
 
-    // MLS / NIP-EE manager (None for read-only clients)
-    mls: Option<MlsManager>,
+    /// MLS manager — bound lazily by `login()`, re-bound by `mls_reset()`.
+    /// `Arc` so MLS calls run without holding the lock (allowing concurrent
+    /// `mls_reset` / `set_mls_db_key`). `None` for read-only/anonymous clients.
+    mls: RwLock<Option<Arc<MlsManager>>>,
+
+    /// SQLCipher key for the MLS DB. `None` => legacy unencrypted (pre-#178).
+    mls_db_key: RwLock<Option<[u8; 32]>>,
 }
 
 impl NuruNuruEngine {
@@ -114,22 +119,9 @@ impl NuruNuruEngine {
 
         let recommendation = RecommendationEngine::new(config.recommendation.clone());
 
-        // Initialise MLS manager if a non-empty mls_db_path is configured.
-        // Read-only clients (no private key) still get a manager for decryption.
-        let mls = if config.mls_db_path.is_empty() {
-            None
-        } else {
-            // The pubkey is not available yet at construction time (login() sets it).
-            // We open the DB now; the pubkey is set later when login() is called.
-            // Use an empty string as a placeholder — MDK must handle deferred identity.
-            match MlsManager::new(&config.mls_db_path, "") {
-                Ok(m) => Some(m),
-                Err(e) => {
-                    tracing::warn!("[NuruNuruEngine] MLS manager init failed (non-fatal): {e}");
-                    None
-                }
-            }
-        };
+        // MLS manager is bound lazily by `login()` so the user pubkey is
+        // *always* known before any MLS state is created. Read-only / anonymous
+        // clients keep `None`.
 
         let engine = Arc::new(Self {
             client,
@@ -143,7 +135,8 @@ impl NuruNuruEngine {
             not_interested_posts: RwLock::new(HashSet::new()),
             author_scores: RwLock::new(HashMap::new()),
             subscription_buffers: Arc::new(Mutex::new(HashMap::new())),
-            mls,
+            mls: RwLock::new(None),
+            mls_db_key: RwLock::new(None),
         });
 
         Ok(engine)
@@ -160,18 +153,15 @@ impl NuruNuruEngine {
         Ok(())
     }
 
-    /// Set the current user's public key and load their data.
+    /// Set the user's pubkey and load follow/mute lists. Binds the MLS
+    /// manager too; use [`Self::mls_reset`] when switching identities so
+    /// prior on-disk MLS state is wiped first.
     pub async fn login(&self, pubkey: PublicKey) -> Result<()> {
         {
             let mut pk = self.user_pubkey.write().await;
             *pk = Some(pubkey);
         }
-
-        // Propagate the user pubkey to the MLS manager so key-package
-        // and group-creation operations can sign on behalf of the user.
-        if let Some(mls) = &self.mls {
-            mls.set_user_pubkey(&pubkey.to_hex());
-        }
+        self.bind_mls_for_pubkey(pubkey).await?;
 
         // Load follow list, mute list in parallel
         let (follows, mutes) =
@@ -189,6 +179,72 @@ impl NuruNuruEngine {
         Ok(())
     }
 
+    async fn bind_mls_for_pubkey(&self, pubkey: PublicKey) -> Result<()> {
+        if self.config.mls_db_path.is_empty() {
+            return Ok(());
+        }
+
+        let pubkey_hex = pubkey.to_hex();
+        let db_key = *self.mls_db_key.read().await;
+        let result = match db_key {
+            Some(key) => MlsManager::new_with_key(&self.config.mls_db_path, &pubkey_hex, key),
+            None => MlsManager::new(&self.config.mls_db_path, &pubkey_hex),
+        };
+
+        match result {
+            Ok(manager) => {
+                *self.mls.write().await = Some(Arc::new(manager));
+                Ok(())
+            }
+            Err(e) => {
+                tracing::warn!("[NuruNuruEngine] MLS bind failed (non-fatal): {e}");
+                *self.mls.write().await = None;
+                Ok(())
+            }
+        }
+    }
+
+    /// Set the SQLCipher key for the MLS DB. Call before `login()`; calling
+    /// after login drops the in-memory manager so the next bind picks it up.
+    pub async fn set_mls_db_key(&self, key: [u8; 32]) {
+        *self.mls_db_key.write().await = Some(key);
+        *self.mls.write().await = None;
+    }
+
+    /// Issue #178 #11: wipe + reopen the MLS DB for a new identity (logout/
+    /// login change on the same device).
+    pub async fn mls_reset(&self, new_pubkey: PublicKey) -> Result<()> {
+        if self.config.mls_db_path.is_empty() {
+            return Err(NuruNuruError::MlsError(
+                "mls_reset: no mls_db_path configured".to_string(),
+            ));
+        }
+
+        // Drop the existing manager first so the file handle is released
+        // before we unlink it.
+        *self.mls.write().await = None;
+
+        let db_path = self.config.mls_db_path.clone();
+        let sidecars = [
+            db_path.clone(),
+            format!("{db_path}-wal"),
+            format!("{db_path}-shm"),
+            format!("{db_path}-journal"),
+        ];
+        for path in &sidecars {
+            match std::fs::remove_file(path) {
+                Ok(()) => tracing::info!("[MLS] mls_reset removed {}", path),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => tracing::warn!("[MLS] mls_reset could not remove {}: {}", path, e),
+            }
+        }
+
+        // Update the in-memory identity too so subsequent calls see the new
+        // pubkey even if `login()` is skipped.
+        *self.user_pubkey.write().await = Some(new_pubkey);
+        self.bind_mls_for_pubkey(new_pubkey).await
+    }
+
     /// Get the current user's public key.
     pub async fn current_pubkey(&self) -> Option<PublicKey> {
         *self.user_pubkey.read().await
@@ -199,6 +255,12 @@ impl NuruNuruEngine {
             .signer()
             .await
             .map_err(|e| NuruNuruError::MlsError(format!("test signer unavailable: {e}")))
+    }
+
+    /// Test-only view into the immutable config (no `pub` setters; see
+    /// `set_mls_db_key` / `mls_reset` for the runtime mutation surface).
+    pub fn config_for_tests(&self) -> &NuruNuruConfig {
+        &self.config
     }
 
     // ─── Profile ──────────────────────────────────────────────
@@ -1216,9 +1278,15 @@ impl NuruNuruEngine {
 
     // ─── MLS / NIP-EE Delegation ─────────────────────────────────────────
 
-    fn require_mls(&self) -> Result<&MlsManager> {
+    /// Acquire a handle to the bound MLS manager, or error if MLS is not
+    /// initialised. Clones the `Arc` and releases the read lock so the MLS
+    /// call can run without blocking concurrent `mls_reset` / configuration.
+    async fn require_mls(&self) -> Result<Arc<MlsManager>> {
         self.mls
+            .read()
+            .await
             .as_ref()
+            .cloned()
             .ok_or_else(|| NuruNuruError::MlsError("MLS not initialised for this client".into()))
     }
 
@@ -1227,7 +1295,9 @@ impl NuruNuruEngine {
     /// Uses the engine's configured relay list for the `relays` tag.
     pub async fn mls_create_key_package(&self) -> Result<KeyPackageEventData> {
         let relay_urls: Vec<RelayUrl> = self.client.relays().await.keys().cloned().collect();
-        self.require_mls()?.create_key_package_event(&relay_urls)
+        self.require_mls()
+            .await?
+            .create_key_package_event(&relay_urls)
     }
 
     /// Strictly validate a KeyPackage event JSON (MIP-00).
@@ -1235,7 +1305,8 @@ impl NuruNuruEngine {
     /// This validates required tags/capabilities and verifies `i` (KeyPackageRef)
     /// against decoded content via MDK parser.
     pub async fn mls_validate_key_package_event(&self, key_package_event_json: &str) -> Result<()> {
-        self.require_mls()?
+        self.require_mls()
+            .await?
             .validate_key_package_event(key_package_event_json)
     }
 
@@ -1244,19 +1315,22 @@ impl NuruNuruEngine {
         &self,
         key_package_event_json: &str,
     ) -> Result<()> {
-        self.require_mls()?
+        self.require_mls()
+            .await?
             .delete_consumed_key_package_from_event_json(key_package_event_json)
     }
 
     /// Delete consumed KeyPackage private/init-key material using the exact hash_ref returned at creation.
     pub async fn mls_delete_consumed_key_package_by_hash_ref(&self, hash_ref: &[u8]) -> Result<()> {
-        self.require_mls()?
+        self.require_mls()
+            .await?
             .delete_consumed_key_package_by_hash_ref(hash_ref)
     }
 
     /// Return MLS group IDs (hex) that need self-update per MDK state tracking.
     pub async fn mls_groups_needing_self_update(&self, threshold_secs: u64) -> Result<Vec<String>> {
-        self.require_mls()?
+        self.require_mls()
+            .await?
             .groups_needing_self_update(threshold_secs)
     }
 
@@ -1267,7 +1341,8 @@ impl NuruNuruEngine {
         admin_pubkeys: Vec<String>,
         relays: Vec<String>,
     ) -> Result<MlsGroupInfo> {
-        self.require_mls()?
+        self.require_mls()
+            .await?
             .create_group(name, admin_pubkeys, relays)
     }
 
@@ -1286,7 +1361,8 @@ impl NuruNuruEngine {
         key_package_event_json: &str,
     ) -> Result<AddMemberResult> {
         let mut result = self
-            .require_mls()?
+            .require_mls()
+            .await?
             .add_member(group_id_hex, key_package_event_json)?;
 
         // Apply NIP-59 gift-wrap to the Welcome rumor if present
@@ -1334,7 +1410,9 @@ impl NuruNuruEngine {
         group_id_hex: &str,
         content: &str,
     ) -> Result<EncryptedMessageData> {
-        self.require_mls()?.create_message(group_id_hex, content)
+        self.require_mls()
+            .await?
+            .create_message(group_id_hex, content)
     }
 
     /// Decrypt/process an incoming Kind-445 event.
@@ -1343,7 +1421,8 @@ impl NuruNuruEngine {
         group_id_hex: &str,
         event_json: &str,
     ) -> Result<DecryptedMessage> {
-        self.require_mls()?
+        self.require_mls()
+            .await?
             .process_message(group_id_hex, event_json)
     }
 
@@ -1353,7 +1432,8 @@ impl NuruNuruEngine {
         group_id_hex: &str,
         event_json: &str,
     ) -> Result<MlsProcessResult> {
-        self.require_mls()?
+        self.require_mls()
+            .await?
             .process_message_result(group_id_hex, event_json)
     }
 
@@ -1486,14 +1566,67 @@ impl NuruNuruEngine {
 
     /// Process an incoming Welcome event and join the group.
     ///
-    /// Accepts both:
-    /// - Kind 1059 (NIP-59 gift-wrapped Welcome, Marmot MIP-02) — unwraps automatically
-    /// - Kind 444 (legacy NIP-EE signed/unsigned Welcome) — normalizes to MDK's unsigned rumor shape
+    /// Accepts Kind 1059 (NIP-59 gift-wrap, Marmot MIP-02), Kind 444 (legacy
+    /// signed/unsigned Welcome), or a raw unwrapped rumor JSON.
     pub async fn mls_process_welcome(&self, welcome_event_json: &str) -> Result<MlsGroupInfo> {
-        // Try to parse as a signed Event first (gift-wrap or legacy)
+        let (wrapper_event_id, rumor) = self.unwrap_welcome_input(welcome_event_json).await?;
+        tracing::info!(
+            "[MLS] normalized welcome: {}",
+            Self::welcome_debug_summary(&wrapper_event_id, &rumor)
+        );
+        let mls = self.require_mls().await?;
+        mls.process_welcome_rumor(&wrapper_event_id, &rumor)
+            .map_err(|e| {
+                NuruNuruError::MlsError(format!(
+                    "{}; {}",
+                    e,
+                    Self::welcome_debug_summary(&wrapper_event_id, &rumor)
+                ))
+            })
+    }
+
+    /// Issue #178 #4: stage a Welcome for accept/decline UX. Accepts the same
+    /// input formats as [`Self::mls_process_welcome`].
+    pub async fn mls_preview_welcome(&self, welcome_event_json: &str) -> Result<PendingWelcome> {
+        let (wrapper_event_id, rumor) = self.unwrap_welcome_input(welcome_event_json).await?;
+        let mls = self.require_mls().await?;
+        mls.preview_welcome_rumor(&wrapper_event_id, &rumor)
+            .map_err(|e| {
+                NuruNuruError::MlsError(format!(
+                    "{}; {}",
+                    e,
+                    Self::welcome_debug_summary(&wrapper_event_id, &rumor)
+                ))
+            })
+    }
+
+    /// Accept a previously previewed Welcome by its inner Welcome rumor event id (Kind 444).
+    pub async fn mls_accept_welcome(&self, welcome_event_id_hex: &str) -> Result<PendingWelcome> {
+        let id = EventId::from_hex(welcome_event_id_hex)
+            .map_err(|e| NuruNuruError::MlsError(format!("Invalid welcome event id: {e}")))?;
+        self.require_mls().await?.accept_pending_welcome(&id)
+    }
+
+    /// Decline a previously previewed Welcome by its inner Welcome rumor event id (Kind 444).
+    pub async fn mls_decline_welcome(&self, welcome_event_id_hex: &str) -> Result<()> {
+        let id = EventId::from_hex(welcome_event_id_hex)
+            .map_err(|e| NuruNuruError::MlsError(format!("Invalid welcome event id: {e}")))?;
+        self.require_mls().await?.decline_pending_welcome(&id)
+    }
+
+    /// List Welcomes that have been previewed but not yet accepted/declined.
+    pub async fn mls_get_pending_welcomes(&self) -> Result<Vec<PendingWelcome>> {
+        self.require_mls().await?.get_pending_welcomes()
+    }
+
+    /// Normalise any welcome input (kind:1059 gift-wrap, signed kind:444, raw
+    /// rumor JSON) into `(wrapper_event_id, rumor)` for MDK.
+    async fn unwrap_welcome_input(
+        &self,
+        welcome_event_json: &str,
+    ) -> Result<(EventId, UnsignedEvent)> {
         if let Ok(event) = serde_json::from_str::<nostr::Event>(welcome_event_json) {
             if event.kind == nostr::Kind::GiftWrap {
-                // NIP-59 unwrap: Kind 1059 → Kind 13 seal → Kind 444 rumor
                 let signer =
                     self.client.signer().await.map_err(|e| {
                         NuruNuruError::MlsError(format!("No signer for unwrap: {e}"))
@@ -1510,22 +1643,8 @@ impl NuruNuruEngine {
                     )));
                 }
                 let rumor = Self::normalize_marmot_welcome_rumor(unwrapped.rumor)?;
-                tracing::info!(
-                    "[MLS] normalized welcome: {}",
-                    Self::welcome_debug_summary(&event.id, &rumor)
-                );
-                return self
-                    .require_mls()?
-                    .process_welcome_rumor(&event.id, &rumor)
-                    .map_err(|e| {
-                        NuruNuruError::MlsError(format!(
-                            "{}; {}",
-                            e,
-                            Self::welcome_debug_summary(&event.id, &rumor)
-                        ))
-                    });
+                return Ok((event.id, rumor));
             }
-
             if event.kind == nostr::Kind::MlsWelcome || event.kind.as_u16() == 10_444 {
                 let rumor = UnsignedEvent {
                     id: Some(event.id),
@@ -1536,41 +1655,15 @@ impl NuruNuruEngine {
                     content: event.content,
                 };
                 let rumor = Self::normalize_marmot_welcome_rumor(rumor)?;
-                tracing::info!(
-                    "[MLS] normalized welcome: {}",
-                    Self::welcome_debug_summary(&event.id, &rumor)
-                );
-                return self
-                    .require_mls()?
-                    .process_welcome_rumor(&event.id, &rumor)
-                    .map_err(|e| {
-                        NuruNuruError::MlsError(format!(
-                            "{}; {}",
-                            e,
-                            Self::welcome_debug_summary(&event.id, &rumor)
-                        ))
-                    });
+                return Ok((event.id, rumor));
             }
         }
 
-        // Legacy/raw rumor JSON.
         let rumor: UnsignedEvent = serde_json::from_str(welcome_event_json)
             .map_err(|e| NuruNuruError::MlsError(format!("Invalid welcome JSON: {e}")))?;
         let mut rumor = Self::normalize_marmot_welcome_rumor(rumor)?;
         let wrapper_event_id = rumor.id();
-        tracing::info!(
-            "[MLS] normalized welcome: {}",
-            Self::welcome_debug_summary(&wrapper_event_id, &rumor)
-        );
-        self.require_mls()?
-            .process_welcome_rumor(&wrapper_event_id, &rumor)
-            .map_err(|e| {
-                NuruNuruError::MlsError(format!(
-                    "{}; {}",
-                    e,
-                    Self::welcome_debug_summary(&wrapper_event_id, &rumor)
-                ))
-            })
+        Ok((wrapper_event_id, rumor))
     }
 
     /// Retrieve decrypted message history for a group from MDK's local SQLite.
@@ -1579,17 +1672,19 @@ impl NuruNuruEngine {
         group_id_hex: &str,
         limit: u64,
     ) -> Result<Vec<DecryptedMessage>> {
-        self.require_mls()?.get_message_history(group_id_hex, limit)
+        self.require_mls()
+            .await?
+            .get_message_history(group_id_hex, limit)
     }
 
     /// List all MLS groups the user belongs to.
     pub async fn mls_list_groups(&self) -> Result<Vec<MlsGroupInfo>> {
-        self.require_mls()?.list_groups()
+        self.require_mls().await?.list_groups()
     }
 
     /// Get metadata for a single MLS group.
     pub async fn mls_get_group_info(&self, group_id_hex: &str) -> Result<MlsGroupInfo> {
-        self.require_mls()?.get_group_info(group_id_hex)
+        self.require_mls().await?.get_group_info(group_id_hex)
     }
 
     // NOTE: mls_self_demote() will be added when mdk-core releases self_demote().
@@ -1598,7 +1693,7 @@ impl NuruNuruEngine {
     /// Leave a group (publishes self-removal commit event data).
     /// Uses SelfRemove proposal internally (Marmot MIP-03).
     pub async fn mls_leave_group(&self, group_id_hex: &str) -> Result<EncryptedMessageData> {
-        self.require_mls()?.leave_group(group_id_hex)
+        self.require_mls().await?.leave_group(group_id_hex)
     }
 
     /// Remove a member from a group.
@@ -1607,13 +1702,16 @@ impl NuruNuruEngine {
         group_id_hex: &str,
         member_pubkey: &str,
     ) -> Result<EncryptedMessageData> {
-        self.require_mls()?
+        self.require_mls()
+            .await?
             .remove_member(group_id_hex, member_pubkey)
     }
 
-    /// Merge the pending commit for a group after publishing to relays.
+    /// Merge a pending commit **only after** the matching commit event was
+    /// successfully published. Issue #178 #2: calling this on every receive
+    /// poll forks the group if a prior publish silently failed.
     pub async fn mls_merge_pending_commit(&self, group_id_hex: &str) -> Result<()> {
-        self.require_mls()?.merge_pending_commit(group_id_hex)
+        self.require_mls().await?.merge_pending_commit(group_id_hex)
     }
 
     /// Create a recovery self-update commit event for stuck pending proposals.
@@ -1621,12 +1719,43 @@ impl NuruNuruEngine {
         &self,
         group_id_hex: &str,
     ) -> Result<EncryptedMessageData> {
-        self.require_mls()?.create_recovery_commit(group_id_hex)
+        self.require_mls()
+            .await?
+            .create_recovery_commit(group_id_hex)
     }
 
     /// Clear (rollback) pending commit for recovery from stuck MLS state.
     pub async fn mls_clear_pending_commit(&self, group_id_hex: &str) -> Result<()> {
-        self.require_mls()?.clear_pending_commit(group_id_hex)
+        self.require_mls().await?.clear_pending_commit(group_id_hex)
+    }
+
+    // ─── MLS subscription helpers (issue #178 #9, #10) ────────────────────
+
+    /// Issue #178 #9: subscribe to my Welcomes (kind:1059 #p=self). Returns
+    /// the engine sub_id; poll via [`Self::poll_subscription`].
+    pub async fn mls_subscribe_welcomes(&self, since: Option<Timestamp>) -> Result<String> {
+        let my_pk = self
+            .current_pubkey()
+            .await
+            .ok_or(NuruNuruError::NoSigningMethod)?;
+        let mut filter = Filter::new().kind(Kind::GiftWrap).pubkey(my_pk);
+        if let Some(ts) = since {
+            filter = filter.since(ts);
+        }
+        self.subscribe_stream(filter).await
+    }
+
+    /// Issue #178 #10: subscribe to KeyPackage rotations (kind:30443) from
+    /// the given contacts. Empty list = all kind:30443 (expensive).
+    pub async fn mls_subscribe_keypackage_rotations(
+        &self,
+        contact_pubkeys: Vec<PublicKey>,
+    ) -> Result<String> {
+        let mut filter = Filter::new().kind(Kind::from(30443u16));
+        if !contact_pubkeys.is_empty() {
+            filter = filter.authors(contact_pubkeys);
+        }
+        self.subscribe_stream(filter).await
     }
 }
 

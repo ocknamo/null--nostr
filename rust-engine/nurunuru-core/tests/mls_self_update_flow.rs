@@ -182,10 +182,17 @@ async fn post_join_self_update_full_roundtrip_allows_bidirectional_messages() {
         .await
         .unwrap();
     match self_update_result {
+        // Issue #178 #5: structured Commit with empty member delta.
+        nurunuru_core::types::MlsProcessResult::Commit { delta, .. } => {
+            assert!(
+                delta.added_pubkeys.is_empty() && delta.removed_pubkeys.is_empty(),
+                "self-update must have empty member delta, got {delta:?}"
+            );
+        }
         nurunuru_core::types::MlsProcessResult::StateUpdate { kind } => {
             assert_eq!(kind, "commit", "self-update must process as a commit");
         }
-        other => panic!("expected self-update state update, got {other:?}"),
+        other => panic!("expected self-update commit, got {other:?}"),
     }
 
     // Regression lock: after Bob's post-join self-update, both directions must

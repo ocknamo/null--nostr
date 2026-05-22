@@ -30,6 +30,8 @@ rusqlite = { version = "0.37.0", features = ["bundled-sqlcipher-vendored-openssl
 mdk-storage-traits = { git = "https://github.com/marmot-protocol/mdk.git", rev = "592a582cf421f87292fba11e5e23a3861b2ec9e0", package = "mdk-storage-traits" }
 hex = "0.4"
 base64 = "0.22"
+hkdf = "0.12"
+sha2 = "0.10"
 
 [profile.release]
 lto = true
