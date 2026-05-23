@@ -1,5 +1,6 @@
 package io.nurunuru.app.ui.screens
 
+import android.app.Activity
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -85,20 +86,16 @@ fun MainScreen(
 
     val activeRelays = remember { app.prefs.nip65Relays.map { it.url }.ifEmpty { app.prefs.relays.toList() } }
     val recommendationEngine = remember { app.recommendationEngine }
-    val nostrClient = remember {
-        if (!hasInternalKey && app.prewarmedNostrClient != null && app.prefs.nip65Relays.isEmpty()) {
+    val loginMethod = app.prefs.loginMethod
+    val nostrClient = remember(loginMethod, activeRelays) {
+        if (loginMethod != "nosskey" && !hasInternalKey && app.prewarmedNostrClient != null && app.prefs.nip65Relays.isEmpty()) {
             // Reuse the startup pre-warmed client only before a NIP-65 relay list is known.
-            // Once login sync has loaded user relays, build the client with those relays so
-            // users with relay lists do not continue on the default startup relays.
+            // Nosskey must NOT reuse this client because it was created with ExternalSigner;
+            // it needs a NosskeySigner so startup does not touch SecureKeyManager.
             app.prewarmedNostrClient!!
         } else {
-            val signer = if (hasInternalKey) {
-                io.nurunuru.app.data.InternalSigner(keyManager)
-            } else {
-                io.nurunuru.app.data.ExternalSigner.apply {
-                    setCurrentUser(pubkeyHex)
-                }
-            }
+            val activity = context as? Activity
+            val signer = authViewModel.buildSigner(activity)
             NostrClient(
                 context = context,
                 relays = activeRelays,

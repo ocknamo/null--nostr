@@ -395,3 +395,20 @@ LLM Wiki の時系列ログです。追記専用として扱います。
 
 - `https://www.nullnull.app/.well-known/assetlinks.json` が Vercel/CDN 上で古い placeholder fingerprint を返し続けるため、Android 実機テスト中は cache を無効化。
 - `app/.well-known/assetlinks.json/route.js` と `next.config.js` の Cache-Control を `no-cache, no-store, must-revalidate` に変更。
+
+## [2026-05-24] fix | Android Nosskey MainScreen signer crash
+
+- Android 実機で「はじめる」を押した後に crash する問題を logcat で確認。
+- Crash:
+  - `java.lang.IllegalStateException: Key not unlocked in SecureKeyManager`
+  - `InternalSigner.ensureKeys(InternalSigner.kt:21)`
+  - `NostrClient.<init>(NostrClient.kt:40)`
+  - `MainScreen.kt:102`
+- 原因: Passkey/Nosskey 登録後の `MainScreen` が `hasInternalKey == false` の経路で `ExternalSigner` / prewarmed client を使う想定のままになっており、実際には `NostrClient` 初期化時に nsec/Keychain 前提の signer 経路に落ちていた。
+- 修正:
+  - `MainScreen.kt` で `app.prefs.loginMethod` を参照。
+  - `loginMethod == "nosskey"` の場合は prewarmed external client を再利用せず、`authViewModel.buildSigner(activity)` で `NosskeySigner` を構築。
+  - `Activity` を `LocalContext.current as? Activity` から渡す。
+- 検証:
+  - `cd android && ./gradlew assembleDebug` 成功。
+  - 接続実機 `9DNBNF45Y9AQFEY9` に `adb install -r android/app/build/outputs/apk/debug/app-debug.apk` 成功。
