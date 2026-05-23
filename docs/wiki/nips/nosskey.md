@@ -1,0 +1,186 @@
+# Nosskey — Passkey-Derived Nostr Keys (draft NIP / nosskey-sdk)
+
+## Summary
+
+Nosskey (a portmanteau of **Nos**tr + pass**key**) is a draft NIP and open-source
+SDK that derives the Nostr secp256k1 secret key directly from the WebAuthn
+**PRF extension** output of a platform Passkey. The secret is **never persisted
+to disk** — only a small `{ credentialId, pubkey, salt, username? }` metadata
+record is kept. Each signing / NIP-04 / NIP-44 operation re-prompts the user
+for a Face ID / Touch ID / 指紋認証 assertion to recompute the secret.
+
+Reference:
+- SDK: <https://github.com/ocknamo/nosskey-sdk>
+- Draft NIP: `docs/nip-draft.md` in the nosskey-sdk repository.
+
+null--nostr ships first-class Nosskey support on all three platforms (Web,
+iOS, Android) in the new-user onboarding flow.
+
+## How it works (PRF Direct Method)
+
+1. Register a WebAuthn Passkey with the PRF extension enabled.
+2. To sign anything, request an assertion with a fixed PRF salt
+   `"nostr-pwk"` (UTF-8 bytes `0x6e 0x6f 0x73 0x74 0x72 0x2d 0x70 0x77 0x6b`,
+   hex `6e6f7374722d70776b`).
+3. The 32-byte PRF output IS the secp256k1 Schnorr private key.
+4. Wipe the secret from memory after use.
+
+The same passkey + same salt deterministically yields the same Nostr key, so
+even if the local metadata is lost the user can re-derive their identity by
+re-registering with the device's existing passkey credential.
+
+## Standard salt
+
+The canonical PRF salt across implementations is the UTF-8 string `"nostr-pwk"`.
+
+- hex: `6e6f7374722d70776b`
+- bytes: `[0x6e, 0x6f, 0x73, 0x74, 0x72, 0x2d, 0x70, 0x77, 0x6b]`
+
+The legacy value `6e6f7374722d6b6579` (`"nostr-key"`) appears in older nosskey
+SDK releases and in this repo's pre-2026-05-23 Web sign-up. `nosskey-sdk@^0.0.4`
+auto-normalises legacy salt values to the standard one on load; new keys
+across all three platforms are now created with the standard salt.
+
+## Current behavior
+
+### Web (`components/SignUpModal.js`, `components/LoginScreen.js`)
+
+- Uses `nosskey-sdk@^0.0.4` from npm. Lazy-loaded in `LoginScreen.js` and
+  `app/page.js`.
+- `NosskeyManager` is created with `storageKey: 'nurunuru_nosskey'` and a
+  1-hour key cache.
+- 6-step sign-up wizard (`SignUpModal.js`):
+  1. `welcome` — calls `createPasskey({ rp: { name: 'ぬるぬる' }, … })`. **1st** biometric prompt.
+  2. `backup`  — calls `exportNostrKey(null, credentialId)` to surface the
+     derived nsec for optional copy. **2nd** biometric prompt. Stores
+     `keyInfo = { credentialId, pubkey, salt: '6e6f7374722d70776b' }`.
+  3. `relay`   — region picker → recommended relays.
+  4. `profile` — kind 0 metadata + kind 10002 NIP-65 relay list publish.
+  5. `tutorial` — `#nostrはじめました` first post.
+  6. `success` — show npub.
+- Subsequent logins call `NosskeyManager.createNostrKey()` with no
+  `credentialId` so the browser shows the passkey picker.
+
+### iOS (`ios/NuruNuru/Data/NosskeyManager.swift`, `NosskeySigner.swift`)
+
+- Native `AuthenticationServices` framework. No third-party SDK.
+- Available only on iOS 18.0+ (`PRF` extension shipped with that release).
+  On iOS 17 the UI shows the classic "アカウントを作成する" button + caption
+  "パスキー対応はiOS 18以降で利用できます".
+- `NosskeyManager` (`@MainActor`) wraps:
+  - `ASAuthorizationPlatformPublicKeyCredentialRegistrationRequest.prf =
+    .checkForSupport` for registration.
+  - `ASAuthorizationPlatformPublicKeyCredentialAssertionRequest.prf =
+    .inputValues(saltInput1: …)` for every secret derivation.
+- `NosskeySigner` implements the common `EventSigner` protocol so it slots
+  into existing `NostrRepository` paths without further refactoring. It keeps
+  a 5-minute in-memory PRF cache to avoid prompting the user on every event.
+- Sign-up wizard skips the `backup` step for the passkey path (5 steps
+  instead of 6) — the passkey itself is the backup via iCloud Keychain.
+- `rpId = "www.nullnull.app"`. For real device registration, a
+  `webcredentials:www.nullnull.app` Associated Domains entitlement and an
+  `apple-app-site-association` file at
+  `https://www.nullnull.app/.well-known/apple-app-site-association`
+  must be deployed:
+  ```json
+  { "webcredentials": { "apps": ["66G7S3P755.io.nurunuru.app"] } }
+  ```
+  iOS Simulator accepts the request regardless.
+
+### Android (`android/.../data/NosskeyManager.kt`, `signers/NosskeySigner.kt`)
+
+- `androidx.credentials.CredentialManager` 1.2.2 (already in deps).
+- Requires Android API 28+ (Credential Manager + PRF).
+- The PRF extension is requested via the request JSON
+  `"extensions": { "prf": { "eval": { "first": "<saltBase64Url>" } } }` for
+  assertion, and `"extensions": { "prf": {} }` for registration.
+- `NosskeySigner` implements the existing `AppSigner` interface used by
+  `NostrRepository` and `NostrClient`.
+- `LoginScreen.kt` shows "パスキーでログイン" only when stored keyInfo exists.
+  `SignUpModal.kt` shows "パスキーで登録" as primary + "従来の方法で作成（nsec）"
+  as secondary when the device supports it. Sign-up wizard switches to a
+  5-step flow (skips backup) for the passkey path.
+- `rpId = "www.nullnull.app"`. Production rollout requires
+  `https://nullnull.app/.well-known/assetlinks.json` binding the application
+  ID `io.nurunuru.app` to the RP.
+
+## Storage shape
+
+```jsonc
+// Persisted record (UserDefaults / SharedPreferences / localStorage)
+{
+  "credentialId": "<hex (iOS, Android) or base64url (Android raw)>",
+  "pubkey":       "<32-byte secp256k1 x-only public key, lowercase hex>",
+  "salt":         "6e6f7374722d70776b",
+  "username":     "user"            // optional
+}
+```
+
+The secret key is **never** stored. It's derived on demand via biometric
+prompt and zeroized after use.
+
+## Platform notes
+
+| Concern | Web | iOS | Android |
+|---|---|---|---|
+| Library | `nosskey-sdk@^0.0.4` | Native `AuthenticationServices` (iOS 18+) | `androidx.credentials` 1.2.2 (API 28+) |
+| Storage key | `nurunuru_nosskey` (localStorage) | `nurunuru_nosskey_keyinfo` (UserDefaults) | `nurunuru_nosskey` SharedPreferences |
+| Login method flag | `nurunuru_login_method = 'nosskey'` | `loginMethod = "nosskey"` | `loginMethod = "nosskey"` |
+| Signer | `NosskeyManager.signEvent` | `NosskeySigner` (`EventSigner` impl) | `NosskeySigner` (`AppSigner` impl) |
+| Cache TTL | 60 min | 5 min | 5 min |
+| RP ID | `location.host` (auto) | `"www.nullnull.app"` | `"www.nullnull.app"` |
+| Sign-up step count | 6 | 5 (skip backup) | 5 (skip backup) |
+| Fallback | nostr-login extension | nsec / NIP-46 | nsec / NIP-55 (Amber) |
+
+## Source references
+
+- Web
+  - `components/SignUpModal.js` (uses `NosskeyManager.createPasskey` /
+    `exportNostrKey`; salt updated to `6e6f7374722d70776b` 2026-05-23)
+  - `components/LoginScreen.js`
+  - `app/page.js` (rehydration of `NosskeyManager` on reload)
+- iOS
+  - `ios/NuruNuru/Data/NosskeyManager.swift` (PRF orchestration)
+  - `ios/NuruNuru/Data/NosskeySigner.swift` (event signing with cached secret)
+  - `ios/NuruNuru/Data/EventSigner.swift` (shared protocol for
+    InternalSigner / NosskeySigner)
+  - `ios/NuruNuru/ViewModels/AuthViewModel.swift`
+    (`generateNewAccountWithPasskey`, `loginWithPasskey`,
+    `currentSessionSigner`)
+  - `ios/NuruNuru/Views/Screens/LoginView.swift` (`SignUpWelcomeStep`,
+    `SignUpSheet.generateAccountWithPasskey`)
+  - `ios/NuruNuru/Data/AppPreferences.swift` (`loginMethod`)
+  - `ios/NuruNuru/Data/NostrRepository.swift` (injectable `signer:` arg)
+- Android
+  - `android/app/src/main/kotlin/io/nurunuru/app/data/NosskeyManager.kt`
+  - `android/app/src/main/kotlin/io/nurunuru/app/data/signers/NosskeySigner.kt`
+  - `android/app/src/main/kotlin/io/nurunuru/app/viewmodel/AuthViewModel.kt`
+    (`generateNewAccountWithPasskey`, `loginWithPasskey`, `buildSigner`)
+  - `android/app/src/main/kotlin/io/nurunuru/app/ui/screens/LoginScreen.kt`
+    (uncommented + wired passkey login button)
+  - `android/app/src/main/kotlin/io/nurunuru/app/ui/components/SignUpModal.kt`
+    (`onNextWithPasskey`, 5-step progress when passkey)
+  - `android/app/src/main/kotlin/io/nurunuru/app/data/prefs/AppPreferences.kt`
+    (`loginMethod`)
+
+## Related pages
+
+- [[../features/onboarding|features/onboarding]] — 6-step sign-up wizard
+  (5-step for passkey path).
+- [[nip-46|NIP-46: Nostr Connect]] — Web/iOS external signing path.
+- [[../decisions/adr-0010-passkey-prf-direct-method|ADR-0010]] — why we chose
+  the PRF Direct Method over an encryption/decryption Passkey scheme.
+
+## Open questions
+
+- Apple/Google Passkey backup quality varies by region. Cross-device sync
+  reliability needs more telemetry before we promote nosskey as the default
+  path over nsec.
+- Production AASA (iOS) and assetlinks.json (Android) files for
+  `nullnull.app` are **not** yet deployed. Until they ship, registration on
+  physical devices fails; Simulator/emulator paths work.
+- iOS deployment-target bump from 17.0 → 18.0 is not done. iOS 17 users see
+  the classic nsec flow with a "iOS 18以降で利用できます" notice.
+- Should `NosskeyKeyInfo.username` be exposed in profile copy ("@user")
+  somewhere in Settings? Currently we hardcode `"user"` to avoid asking the
+  user up-front.

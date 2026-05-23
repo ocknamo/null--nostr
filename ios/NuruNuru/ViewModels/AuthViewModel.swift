@@ -32,15 +32,27 @@ final class AuthViewModel {
     let keyManager: SecureKeyManager
     let prefs: AppPreferences
     let externalSigner: ExternalSigner
+    /// Passkey / nosskey "PRF direct" manager. Hidden behind `@MainActor` because
+    /// `ASAuthorizationController` is UIKit-bound. Only used on iOS 18+.
+    let nosskeyManager: NosskeyManager
+
+    /// In-memory signer for the active nosskey session (if any). Re-created on
+    /// each login so the PRF cache lifetime is per-session.
+    private var nosskeySigner: NosskeySigner?
 
     // MARK: - Init
 
     init(keyManager: SecureKeyManager = SecureKeyManager(),
          prefs: AppPreferences = AppPreferences(),
-         externalSigner: ExternalSigner = ExternalSigner()) {
+         externalSigner: ExternalSigner = ExternalSigner(),
+         nosskeyManager: NosskeyManager? = nil) {
         self.keyManager = keyManager
         self.prefs = prefs
         self.externalSigner = externalSigner
+        // NosskeyManager.init is @MainActor — fall back to MainActor.assumeIsolated
+        // when no instance is injected. We're called from the app start-up path
+        // which is already main-thread.
+        self.nosskeyManager = nosskeyManager ?? MainActor.assumeIsolated { NosskeyManager() }
         checkStoredLogin()
     }
 
@@ -59,6 +71,19 @@ final class AuthViewModel {
         if prefs.isExternalSigner {
             state = .loggedIn(pubkeyHex: pubkey)
             return
+        }
+
+        // Nosskey / Passkey path: the secret is never on disk — every signing
+        // operation re-prompts the user for Face ID / Touch ID. We only verify
+        // that the credential metadata is still around, then mark logged in.
+        if prefs.loginMethod == "nosskey" {
+            let stored = MainActor.assumeIsolated { nosskeyManager.loadStoredKeyInfo() }
+            if let info = stored {
+                state = .loggedIn(pubkeyHex: info.pubkey)
+                return
+            }
+            // Metadata vanished (e.g. user wiped UserDefaults) → fall through to
+            // the standard logged-out path.
         }
 
         if keyManager.hasStoredKey() {
@@ -138,7 +163,129 @@ final class AuthViewModel {
     func completeRegistration(pubkeyHex: String) {
         prefs.publicKeyHex = pubkeyHex
         prefs.isExternalSigner = false
+        // If the active sign-up path was nsec, normalise loginMethod accordingly.
+        // The Passkey path sets `loginMethod = "nosskey"` inside
+        // `generateNewAccountWithPasskey` already; we don't overwrite it here.
+        if prefs.loginMethod != "nosskey" {
+            prefs.loginMethod = "nsec"
+        }
         state = .loggedIn(pubkeyHex: pubkeyHex)
+    }
+
+    // MARK: - Sign Up via Passkey (nosskey "PRF Direct Method")
+
+    /// Create a new Nostr account whose private key is the PRF output of a
+    /// freshly registered Passkey. The secret is **never** persisted; on every
+    /// subsequent signing operation it is re-derived via biometric assertion.
+    ///
+    /// Requires iOS 18+. Returns `nil` if the platform doesn't support PRF or
+    /// the user cancels the system prompt.
+    @MainActor
+    func generateNewAccountWithPasskey(username: String) async -> GeneratedAccount? {
+        guard NosskeyManager.isPlatformSupported else {
+            state = .error("パスキー新規登録は iOS 18 以降が必要です")
+            return nil
+        }
+
+        do {
+            let keyInfo = try await nosskeyManager.createPasskey(
+                username: username,
+                displayName: username.isEmpty ? "ぬるぬるユーザー" : username
+            )
+            // Derive once to cross-validate the pubkey and seed the in-memory cache.
+            var secret = try await nosskeyManager.deriveSecretKey(for: keyInfo)
+            defer {
+                let secretCount = secret.count
+                secret.withUnsafeMutableBufferPointer {
+                    $0.baseAddress?.initialize(repeating: 0, count: secretCount)
+                }
+            }
+            // The nsec/npub are returned to the UI primarily for the optional
+            // settings-screen export; the sign-up wizard SKIPS the backup step
+            // for nosskey users because the Passkey itself is the backup.
+            let nsec = NostrKeyUtils.encodeNsec(secret) ?? ""
+            let npub = NostrKeyUtils.encodeNpub(
+                NostrKeyUtils.hexToBytes(keyInfo.pubkey) ?? []
+            ) ?? ""
+
+            // Persist credential metadata.
+            nosskeyManager.saveKeyInfo(keyInfo)
+            prefs.loginMethod = "nosskey"
+            prefs.publicKeyHex = keyInfo.pubkey
+            prefs.isExternalSigner = false
+
+            // Build the session signer and warm its cache so the immediately
+            // following profile / relay-list / tutorial publishes succeed
+            // without triggering yet another biometric prompt.
+            let signer = NosskeySigner(nosskeyManager: nosskeyManager, keyInfo: keyInfo)
+            try? await signer.warmCache()
+            nosskeySigner = signer
+
+            return GeneratedAccount(pubkeyHex: keyInfo.pubkey, nsec: nsec, npub: npub)
+        } catch let err as NosskeyError {
+            if case .userCancelled = err { return nil }
+            state = .error(err.errorDescription ?? "パスキーの登録に失敗しました")
+            return nil
+        } catch {
+            state = .error("パスキーの登録に失敗しました: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    /// Verify a previously registered Passkey by performing a PRF assertion and
+    /// move the session to `loggedIn`. Used by the LoginView "パスキーでログイン"
+    /// button.
+    @MainActor
+    func loginWithPasskey() async -> Bool {
+        guard NosskeyManager.isPlatformSupported else {
+            state = .error("パスキーログインは iOS 18 以降が必要です")
+            return false
+        }
+        guard let keyInfo = nosskeyManager.loadStoredKeyInfo() else {
+            state = .error("パスキーが登録されていません。先に新規登録してください")
+            return false
+        }
+        do {
+            var secret = try await nosskeyManager.deriveSecretKey(for: keyInfo)
+            defer {
+                let secretCount = secret.count
+                secret.withUnsafeMutableBufferPointer {
+                    $0.baseAddress?.initialize(repeating: 0, count: secretCount)
+                }
+            }
+            prefs.publicKeyHex = keyInfo.pubkey
+            prefs.isExternalSigner = false
+            prefs.loginMethod = "nosskey"
+
+            let signer = NosskeySigner(nosskeyManager: nosskeyManager, keyInfo: keyInfo)
+            try? await signer.warmCache()
+            nosskeySigner = signer
+
+            state = .loggedIn(pubkeyHex: keyInfo.pubkey)
+            return true
+        } catch let err as NosskeyError {
+            if case .userCancelled = err { return false }
+            state = .error(err.errorDescription ?? "パスキーログインに失敗しました")
+            return false
+        } catch {
+            state = .error("パスキーログインに失敗しました: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// Build / refresh a signer appropriate for the current session.
+    /// Used by repositories created on the fly during sign-up.
+    @MainActor
+    func currentSessionSigner() async -> EventSigner? {
+        if prefs.loginMethod == "nosskey",
+           let keyInfo = nosskeyManager.loadStoredKeyInfo() {
+            if let existing = nosskeySigner { return existing }
+            let signer = NosskeySigner(nosskeyManager: nosskeyManager, keyInfo: keyInfo)
+            try? await signer.warmCache()
+            nosskeySigner = signer
+            return signer
+        }
+        return nil  // caller will default to InternalSigner
     }
 
     // MARK: - NIP-46 Nostr Connect
@@ -189,6 +336,11 @@ final class AuthViewModel {
             MlsDbKeyStore.clearExternalKey(pubkeyHex: pubkey)
         }
         keyManager.deleteAll()
+        // Drop nosskey credential metadata; the Passkey itself remains on the
+        // device (managed by iCloud Keychain / OS Settings) and can be reused
+        // on next sign-up.
+        MainActor.assumeIsolated { nosskeyManager.clearStoredKeyInfo() }
+        nosskeySigner = nil
         prefs.clear()
         state = .loggedOut
     }
@@ -228,9 +380,13 @@ final class AuthViewModel {
             tempPrefs.mainRelay = targetRelayUrls.first ?? "wss://yabu.me"
             tempPrefs.publicKeyHex = prefs.publicKeyHex
 
+            // Pick the signer for the active session — nosskey when the user just
+            // registered with Passkey, otherwise the default Keychain-backed one.
+            let sessionSigner = await currentSessionSigner()
             let repo = NostrRepository(
                 keyManager: tempKeyManager,
-                prefs: tempPrefs
+                prefs: tempPrefs,
+                signer: sessionSigner
             )
 
             // 接続 — 一時リポジトリの client に直接接続
@@ -238,7 +394,12 @@ final class AuthViewModel {
             try await Task.sleep(nanoseconds: 1_500_000_000)
 
             // プロフィール発行
-            let pubkeyHex = keyManager.getStoredPublicKeyHex() ?? ""
+            // nosskey 経路では keyManager に何も保存されていないため、署名側 (signer)
+            // の pubkey を信頼する。nsec 経路はこれまで通り keyManager 経由。
+            let pubkeyHex: String = {
+                if prefs.loginMethod == "nosskey", let key = prefs.publicKeyHex { return key }
+                return keyManager.getStoredPublicKeyHex() ?? ""
+            }()
             let profile = UserProfile(
                 pubkey: pubkeyHex,
                 name: name,
@@ -328,9 +489,11 @@ final class AuthViewModel {
             tempPrefs.mainRelay = targetRelayUrls.first ?? "wss://yabu.me"
             tempPrefs.publicKeyHex = prefs.publicKeyHex
 
+            let sessionSigner = await currentSessionSigner()
             let repo = NostrRepository(
                 keyManager: keyManager,
-                prefs: tempPrefs
+                prefs: tempPrefs,
+                signer: sessionSigner
             )
 
             await repo.client.connect(relayUrls: targetRelayUrls)

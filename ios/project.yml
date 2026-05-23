@@ -74,6 +74,7 @@ targets:
         CURRENT_PROJECT_VERSION: "6"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: "66G7S3P755"
+        CODE_SIGN_ENTITLEMENTS: NuruNuru/NuruNuru.entitlements
         # iPhone only. iPadOS support is intentionally disabled for Review.
         TARGETED_DEVICE_FAMILY: "1"
         ENABLE_HARDENED_RUNTIME: YES

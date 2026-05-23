@@ -61,14 +61,14 @@ enum ImageUploadError: LocalizedError {
 /// Android: `ImageUploadUtils.kt` に対応。
 struct ImageUploadService {
 
-    private let signer: InternalSigner?
+    private let signer: EventSigner?
 
     /// タイムアウト。Android OkHttp 実装に合わせ、画像アップロード中の
     /// 読み書きが 30 秒を超えても即タイムアウトしないよう余裕を持たせる。
     private let requestTimeoutInterval: TimeInterval = 60
     private let resourceTimeoutInterval: TimeInterval = 90
 
-    init(signer: InternalSigner?) {
+    init(signer: EventSigner?) {
         self.signer = signer
     }
 

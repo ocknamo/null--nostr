@@ -259,3 +259,110 @@ LLM Wiki の時系列ログです。追記専用として扱います。
   - `docs/wiki/features/onboarding.md`: 「Tutorial step contract」セクションを pre-fill + no-auto-completion 規約に書き換え + Android/iOS の投稿ボタン条件を更新 + Open questions に「先頭改行 1 文字分の 140 文字制限への影響」を追記。
 - finalize: Android `publishTutorialPost` の t タグ抽出を `distinct → lowercase` から `lowercase → distinct` に修正。Web (`toLowerCase()` 後に `seen` 重複排除) / iOS (`lowercased()` 後に `seen.insert`) と同じ「lowercase-first → distinct」順に揃え、`#Foo` と `#foo` を本文に混在させた時の `t` タグ重複を 3 プラットフォーム同一挙動 (1 個に正規化) で扱うようにした。下流 `tags = foundTags.map { listOf("t", it) }` も二重 lowercase を解消。シナリオ検証 6 ケース (pre-fill そのまま / 本文追記 + pre-fill 残し / ハッシュタグだけ削除 + 本文あり / 全部削除 / 140 文字超 / `#Foo` と `#foo` 混在) すべて 3 プラットフォーム同一結果で通過。
 - NIP サポート / design-token / 依存に変更なし。AGENTS.md 不変。
+
+
+## [2026-05-23] feat | Nosskey (Passkey/PRF direct) sign-up across iOS + Android
+
+- **新規登録オンボーディングに Passkey 経路を追加**。iOS と Android で
+  [nosskey "PRF Direct Method"](./nips/nosskey.md) ベースの新規登録を実装した。
+  Web は 2025 年以前から `nosskey-sdk@^0.0.4` で対応済みのため、本変更で
+  3 プラットフォームの parity を確立。
+- **設計判断**: [[decisions/adr-0010-passkey-prf-direct-method|ADR-0010]] を新規起票。
+  PRF Direct Method を採用し、秘密鍵をディスクに保存しない方針。
+- **Salt 統一**: Web の `components/SignUpModal.js` が使っていた旧誤値
+  `6e6f7374722d6b6579` (`"nostr-key"`) を、nosskey-sdk 標準値
+  `6e6f7374722d70776b` (`"nostr-pwk"`) に修正。SDK 自身が読み込み時に旧値を
+  自動正規化するため既存ユーザーへの影響なし。
+- **iOS (iOS 18+ 必須)**:
+  - 新規ファイル: `ios/NuruNuru/Data/NosskeyManager.swift` (≈410 行,
+    `AuthenticationServices` の `ASAuthorizationController` +
+    `ASAuthorizationPlatformPublicKeyCredential*` を MainActor でラップし、
+    PRF 拡張による secret 導出を実装)。
+  - 新規ファイル: `ios/NuruNuru/Data/NosskeySigner.swift` (≈357 行,
+    新規 `EventSigner` プロトコルを実装。5 分 TTL の in-memory PRF キャッシュ
+    + NIP-04 / NIP-44 v2 / Schnorr 署名)。
+  - 新規ファイル: `ios/NuruNuru/Data/EventSigner.swift` (`InternalSigner` と
+    `NosskeySigner` の共通プロトコル)。`InternalSigner` は同プロトコルに準拠する
+    よう改修 (シグネチャ互換)。
+  - 修正: `ios/NuruNuru/ViewModels/AuthViewModel.swift` に
+    `generateNewAccountWithPasskey(username:)`, `loginWithPasskey()`,
+    `currentSessionSigner()` を追加。`checkStoredLogin()` に
+    `loginMethod == "nosskey"` ブランチ。`logout()` で
+    `nosskeyManager.clearStoredKeyInfo()` も実行。
+  - 修正: `ios/NuruNuru/Views/Screens/LoginView.swift` の `SignUpWelcomeStep` に
+    `onNextWithPasskey` クロージャと `passkeyAvailable` プロパティを追加。
+    Passkey 対応端末では「**パスキーで登録**」が primary、
+    「従来の方法で作成（nsec）」が secondary。`SignUpSheet.usingPasskey` 状態と
+    `progress` 5 分割計算を追加 (Passkey 経路は backup ステップをスキップ)。
+  - 修正: `ios/NuruNuru/Data/NostrRepository.swift` の `signer` 型を
+    `InternalSigner` から `EventSigner` プロトコルへ。`init` に
+    `signer: EventSigner? = nil` 引数を追加し、サインアップ経路から
+    `NosskeySigner` を注入可能に。
+  - 修正: `ios/NuruNuru/Data/AppPreferences.swift` に `loginMethod: String?`
+    (`"nsec" | "nosskey" | "external"`) を追加 + `clear()` でも削除。
+  - 既定 RP ID は `"www.nullnull.app"`。本番デプロイには
+    `https://www.nullnull.app/.well-known/apple-app-site-association` と
+    `webcredentials:www.nullnull.app` Associated Domains entitlement が必要
+    (現状未デプロイ → 物理端末では未動作、Simulator では動作)。
+- **Android (API 28+ 必須)**:
+  - 新規ファイル:
+    `android/app/src/main/kotlin/io/nurunuru/app/data/NosskeyManager.kt`
+    (≈365 行, `androidx.credentials.CredentialManager` + PRF 拡張 JSON)。
+  - 新規ファイル:
+    `android/app/src/main/kotlin/io/nurunuru/app/data/signers/NosskeySigner.kt`
+    (≈153 行, `AppSigner` 実装)。
+  - 修正: `AuthViewModel.kt` に `generateNewAccountWithPasskey(activity,
+    username)`, native `loginWithPasskey(activity)` (旧 Custom Tabs スタブを置換),
+    `buildSigner(activity)` を追加。`checkStoredLogin` に
+    `loginMethod == "nosskey"` ブランチ。
+  - 修正: `ui/components/SignUpModal.kt` の `WelcomeStep` に
+    `onNextWithPasskey` パラメータと「**パスキーで登録**」/
+    「従来の方法で作成（nsec）」UI を追加。`SignUpModal` に
+    `usingPasskey` 状態 + 5/6 ステップ progress 切替。
+  - 修正: `ui/screens/LoginScreen.kt` でコメントアウトされていた
+    「パスキーでログイン」ボタンを復活し、`NosskeyManager.loadStoredKeyInfo()` が
+    存在するときだけ表示。Web round-trip スタブを native
+    `CredentialManager` 経由のフローに置換。
+  - 修正: `data/prefs/AppPreferences.kt` に `loginMethod` 追加 (plainPrefs)。
+  - 既定 RP ID は `"www.nullnull.app"`。本番デプロイには
+    `https://nullnull.app/.well-known/assetlinks.json` で
+    `applicationId = io.nurunuru.app` を RP に紐付ける必要あり
+    (現状未デプロイ → Emulator/Play Store-installed device の Google Password
+    Manager 経路のみ動作確認可能)。
+- **Wiki**: `docs/wiki/nips/nosskey.md` (新規, ≈186 行), 既存
+  `docs/wiki/features/onboarding.md` に「Passkey (nosskey) sign-up path」
+  セクション追加, `docs/wiki/nips/README.md` に Nosskey draft 行追加,
+  `docs/wiki/decisions/adr-0010-passkey-prf-direct-method.md` (新規, ≈126 行)。
+- **依存追加なし**: iOS は OS 同梱の `AuthenticationServices` のみ。Android は
+  既にあった `androidx.credentials:1.2.2` + `credentials-play-services-auth` を
+  そのまま使用。
+- **互換性**: nsec / NIP-46 (iOS) / NIP-55 Amber (Android) / nostr-login (Web)
+  の既存ログイン経路はすべて温存。
+
+## [2026-05-24] fix | iOS real-device Passkey registration requires Associated Domains
+
+- 実機テストで「パスキーの登録に失敗しました」が表示される問題を調査。原因は iOS native Passkey が `rpId = "www.nullnull.app"` を使う場合に必須となる Associated Domains / AASA が未設定だったため。
+- iOS アプリ側:
+  - `ios/NuruNuru/NuruNuru.entitlements` を新規追加し、`com.apple.developer.associated-domains = ["webcredentials:www.nullnull.app"]` を設定。
+  - `ios/project.yml` に `CODE_SIGN_ENTITLEMENTS: NuruNuru/NuruNuru.entitlements` を追加し、XcodeGen 後の project に反映。
+- Web 配信側:
+  - `public/.well-known/apple-app-site-association` を新規追加。内容は `webcredentials.apps = ["66G7S3P755.io.nurunuru.app"]`。
+  - `next.config.js` に `/.well-known/apple-app-site-association` と `/.well-known/assetlinks.json` の `Content-Type: application/json` header を追加。
+  - 既存 `public/.well-known/assetlinks.json` の package 名を `app.nurunuru` から実際の Android `applicationId = io.nurunuru.app` に修正。証明書 fingerprint は `REPLACE_WITH_YOUR_SIGNING_CERTIFICATE_SHA256` のままなので、本番 Play/App signing fingerprint で差し替えが必要。
+- UX: `SignUpSheet.generateAccountWithPasskey()` の fallback error を「実機では nullnull.app の webcredentials 設定が必要です」と明示する文言に改善。
+- 検証: `cd ios && /opt/homebrew/bin/xcodegen generate --spec project.yml && xcodebuild -scheme NuruNuru -destination 'platform=iOS Simulator,name=iPhone 17' -skipPackagePluginValidation -quiet build` 成功 (warnings のみ)。
+- 注意: 実機で再テストするには、Web 側の AASA file を `https://www.nullnull.app/.well-known/apple-app-site-association` にデプロイし、Apple Developer portal の App ID で Associated Domains capability を有効化した provisioning profile で再署名・再インストールする必要がある。iOS は AASA を cache するため、失敗が続く場合は app 削除→再インストール、または端末再起動を行う。
+
+## [2026-05-24] fix | iOS Passkey RP ID follows canonical www.nullnull.app
+
+- 実機で引き続き「webcredentials 設定が必要です」と表示される件を live URL で確認。
+  `https://nullnull.app/.well-known/apple-app-site-association` は `https://www.nullnull.app/...` に 307 redirect し、その先が 404 だった。
+- iOS native Passkey / Associated Domains は redirect や 404 に厳しく、アプリ entitlement が正しくても AASA が canonical host で 200 JSON 配信されていないと登録できない。
+- 対応:
+  - `NosskeyManager.defaultRpId` を `"nullnull.app"` から canonical host の `"www.nullnull.app"` に変更。
+  - entitlement に `webcredentials:www.nullnull.app` を追加し、互換用に `webcredentials:nullnull.app` も残した。
+  - `app/.well-known/apple-app-site-association/route.js` を追加し、Vercel / Next.js App Router で AASA を 200 JSON として返す route handler を追加。
+  - `app/.well-known/assetlinks.json/route.js` も追加し、Android Digital Asset Links も App Router 側から返せるようにした。
+  - `LoginView.swift` のエラー文言を `www.nullnull.app` に更新。
+- 検証: iOS Simulator build OK (`xcodebuild ... build`, exit 0)。
+- 実機再テスト手順: この Web 変更を Vercel にデプロイ後、`curl -i https://www.nullnull.app/.well-known/apple-app-site-association` が `200` + `Content-Type: application/json` + `webcredentials.apps = ["66G7S3P755.io.nurunuru.app"]` を返すことを確認し、アプリを削除→再インストールして AASA cache を更新する。

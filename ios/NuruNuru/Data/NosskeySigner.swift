@@ -4,50 +4,107 @@ import Foundation
 import P256K
 import Security
 
-/// nsec-based Nostr signer backed by SecureKeyManager.
-/// Mirrors Android InternalSigner.
+/// Passkey/PRF-direct backed Nostr signer.
 ///
-/// Phase 1: Schnorr event signing (NIP-01).
-/// Phase 3: NIP-04 encrypt / decrypt for DMs and NIP-07 bridge.
-final class InternalSigner: EventSigner {
+/// Implements the same `EventSigner` protocol as `InternalSigner`, so it slots into
+/// any call site that currently constructs an `InternalSigner` (NostrRepository,
+/// SignUpSheet, etc.) without further refactoring.
+///
+/// The secret key is **never** stored on disk. Each `signEvent` / NIP-04 / NIP-44
+/// call resolves the 32-byte PRF output via `NosskeyManager.deriveSecretKey`, which
+/// prompts the user for a Face ID / Touch ID assertion. To avoid prompting on every
+/// reactive UI tick we keep a short-lived in-memory cache (default 5 min).
+///
+/// The cache is opt-in: pass `cacheTTL: 0` to disable.
+final class NosskeySigner: EventSigner {
 
-    private let keyManager: SecureKeyManager
+    private let nosskeyManager: NosskeyManager
+    private let keyInfo: NosskeyKeyInfo
+    private let rpId: String
+    private let cacheTTL: TimeInterval
 
-    init(keyManager: SecureKeyManager) {
-        self.keyManager = keyManager
+    private var cachedSecret: [UInt8]?
+    private var cachedAt: Date?
+
+    init(
+        nosskeyManager: NosskeyManager,
+        keyInfo: NosskeyKeyInfo,
+        rpId: String = NosskeyManager.defaultRpId,
+        cacheTTL: TimeInterval = 5 * 60
+    ) {
+        self.nosskeyManager = nosskeyManager
+        self.keyInfo = keyInfo
+        self.rpId = rpId
+        self.cacheTTL = cacheTTL
     }
 
-    // MARK: - Public Key
+    deinit {
+        // Best-effort zeroize on dealloc.
+        zeroizeCache()
+    }
 
-    /// Returns the x-only public key as lowercase hex.
+    // MARK: - Cache control
+
+    /// Pre-warm the cache so subsequent synchronous calls (`signEvent`, NIP-04,
+    /// NIP-44) succeed without throwing.
+    ///
+    /// Call this from a UI layer that can `await` (e.g. a Task in the sign-up
+    /// composer) right before doing one or more synchronous publishes.
+    @MainActor
+    func warmCache() async throws {
+        if isCacheFresh() { return }
+        let secret = try await nosskeyManager.deriveSecretKey(for: keyInfo, rpId: rpId)
+        cachedSecret = secret
+        cachedAt = Date()
+    }
+
+    /// Force-clear the cached secret key.
+    func zeroizeCache() {
+        if cachedSecret != nil {
+            cachedSecret?.withUnsafeMutableBufferPointer { ptr in
+                ptr.baseAddress?.initialize(repeating: 0, count: ptr.count)
+            }
+        }
+        cachedSecret = nil
+        cachedAt = nil
+    }
+
+    private func isCacheFresh() -> Bool {
+        guard cachedSecret != nil, let at = cachedAt else { return false }
+        guard cacheTTL > 0 else { return false }
+        return Date().timeIntervalSince(at) < cacheTTL
+    }
+
+    /// Returns a copy of the cached secret, or throws if the cache is cold.
+    /// Callers must zeroize the returned buffer after use.
+    private func requireCachedSecretCopy() throws -> [UInt8] {
+        guard let secret = cachedSecret, isCacheFresh() else {
+            // Cold cache — the caller should have awaited `warmCache()` first.
+            throw NosskeyError.assertionFailed(
+                "パスキーのキャッシュが切れています。再度認証してください"
+            )
+        }
+        return Array(secret)
+    }
+
+    // MARK: - EventSigner
+
     func getPublicKeyHex() -> String? {
-        keyManager.getStoredPublicKeyHex()
+        keyInfo.pubkey
     }
 
-    // MARK: - Event Signing (NIP-01 Schnorr)
-
-    /// Build and sign a Nostr event.
     func signEvent(
         kind: Int,
         tags: [[String]],
         content: String,
-        createdAt: Int64 = Int64(Date().timeIntervalSince1970)
+        createdAt: Int64
     ) throws -> NostrEvent {
-        guard let pubkeyHex = getPublicKeyHex() else {
-            throw SignerError.keyNotUnlocked
-        }
-        guard var keyBytes = keyManager.getKeyBytesCopy() else {
-            throw SignerError.keyNotUnlocked
-        }
-        defer {
-            keyBytes.withUnsafeMutableBufferPointer { ptr in
-                ptr.baseAddress?.initialize(repeating: 0, count: ptr.count)
-            }
-        }
+        var secret = try requireCachedSecretCopy()
+        defer { zeroize(&secret) }
 
         return try NostrKeyUtils.buildAndSign(
-            privateKeyBytes: keyBytes,
-            publicKeyHex:    pubkeyHex,
+            privateKeyBytes: secret,
+            publicKeyHex:    keyInfo.pubkey,
             kind:            kind,
             tags:            tags,
             content:         content,
@@ -55,31 +112,26 @@ final class InternalSigner: EventSigner {
         )
     }
 
-    // MARK: - NIP-04 Encryption
+    // MARK: - NIP-04
 
-    /// NIP-04: Encrypt plaintext for `receiverPubkeyHex` (x-only 32-byte hex).
-    /// Returns `base64(ciphertext)?iv=base64(iv)` or nil on failure.
-    /// The AES key is the 32-byte x-coordinate of the ECDH shared point (no hashing).
     func nip04Encrypt(receiverPubkeyHex: String, plaintext: String) -> String? {
-        guard var keyBytes = keyManager.getKeyBytesCopy() else { return nil }
-        defer { zeroize(&keyBytes) }
+        guard var secret = try? requireCachedSecretCopy() else { return nil }
+        defer { zeroize(&secret) }
 
-        guard let sharedKey = nip04SharedKey(privKeyBytes: keyBytes, peerPubkeyHex: receiverPubkeyHex)
+        guard let sharedKey = nip04SharedKey(privKeyBytes: secret, peerPubkeyHex: receiverPubkeyHex)
         else { return nil }
 
         var iv = [UInt8](repeating: 0, count: 16)
         guard SecRandomCopyBytes(kSecRandomDefault, 16, &iv) == errSecSuccess else { return nil }
-
         guard let encrypted = aesCBCEncrypt(key: sharedKey, iv: iv, plaintext: plaintext) else { return nil }
         return Data(encrypted).base64EncodedString() + "?iv=" + Data(iv).base64EncodedString()
     }
 
-    /// NIP-04: Decrypt a `base64(ct)?iv=base64(iv)` ciphertext from `senderPubkeyHex`.
     func nip04Decrypt(senderPubkeyHex: String, ciphertext: String) -> String? {
-        guard var keyBytes = keyManager.getKeyBytesCopy() else { return nil }
-        defer { zeroize(&keyBytes) }
+        guard var secret = try? requireCachedSecretCopy() else { return nil }
+        defer { zeroize(&secret) }
 
-        guard let sharedKey = nip04SharedKey(privKeyBytes: keyBytes, peerPubkeyHex: senderPubkeyHex)
+        guard let sharedKey = nip04SharedKey(privKeyBytes: secret, peerPubkeyHex: senderPubkeyHex)
         else { return nil }
 
         let parts = ciphertext.components(separatedBy: "?iv=")
@@ -88,61 +140,50 @@ final class InternalSigner: EventSigner {
               let ivData = Data(base64Encoded: parts[1]),
               ivData.count == 16
         else { return nil }
-
         return aesCBCDecrypt(key: sharedKey, iv: [UInt8](ivData), ciphertext: [UInt8](ctData))
     }
 
-    // MARK: - NIP-44 Encryption (v2)
+    // MARK: - NIP-44 v2
 
-    /// NIP-44 v2: `recipientPubkeyHex` 向けに `plaintext` を暗号化する。
-    /// 出力は base64 エンコード済みの "version(1) || nonce(32) || ciphertext || mac(32)" 形式。
-    /// - Returns: 暗号化済み文字列。失敗時は `nil`。
     func nip44Encrypt(recipientPubkeyHex: String, plaintext: String) -> String? {
-        guard var keyBytes = keyManager.getKeyBytesCopy() else { return nil }
-        defer { zeroize(&keyBytes) }
+        guard var secret = try? requireCachedSecretCopy() else { return nil }
+        defer { zeroize(&secret) }
 
-        guard let sharedX = nip04SharedKey(privKeyBytes: keyBytes, peerPubkeyHex: recipientPubkeyHex),
+        guard let sharedX = nip04SharedKey(privKeyBytes: secret, peerPubkeyHex: recipientPubkeyHex),
               let convKey = nip44ConversationKey(sharedX: sharedX)
         else { return nil }
 
         var nonce = [UInt8](repeating: 0, count: 32)
         guard SecRandomCopyBytes(kSecRandomDefault, 32, &nonce) == errSecSuccess else { return nil }
-
         guard let (cKey, cNonce, hKey) = nip44MessageKeys(conversationKey: convKey, nonce: nonce) else { return nil }
 
         guard let plainData = plaintext.data(using: .utf8) else { return nil }
         let padded     = Array(nip44Pad(plainData))
         let ciphertext = chacha20Stream(key: cKey, nonce: cNonce, data: padded)
-
         let mac = Array(HMAC<CryptoKit.SHA256>.authenticationCode(
             for: Data(nonce + ciphertext),
             using: SymmetricKey(data: Data(hKey))
         ))
-
         return Data([UInt8(2)] + nonce + ciphertext + mac).base64EncodedString()
     }
 
-    /// NIP-44 v2: `senderPubkeyHex` からの `ciphertext` を復号する。
-    /// - Returns: 復号済みプレーンテキスト。検証失敗・フォーマットエラー時は `nil`。
     func nip44Decrypt(senderPubkeyHex: String, ciphertext: String) -> String? {
-        guard var keyBytes = keyManager.getKeyBytesCopy() else { return nil }
-        defer { zeroize(&keyBytes) }
+        guard var secret = try? requireCachedSecretCopy() else { return nil }
+        defer { zeroize(&secret) }
 
         guard let raw = Data(base64Encoded: ciphertext) else { return nil }
         let bytes = Array(raw)
-        // version(1) + nonce(32) + ct(≥1) + mac(32) = 最低 66 バイト
         guard bytes.count > 66, bytes[0] == 2 else { return nil }
         let macStart = bytes.count - 32
         let nonce = Array(bytes[1..<33])
         let ct    = Array(bytes[33..<macStart])
         let mac   = Array(bytes.suffix(32))
 
-        guard let sharedX = nip04SharedKey(privKeyBytes: keyBytes, peerPubkeyHex: senderPubkeyHex),
+        guard let sharedX = nip04SharedKey(privKeyBytes: secret, peerPubkeyHex: senderPubkeyHex),
               let convKey = nip44ConversationKey(sharedX: sharedX),
               let (cKey, cNonce, hKey) = nip44MessageKeys(conversationKey: convKey, nonce: nonce)
         else { return nil }
 
-        // HMAC 検証
         let expectedMac = Array(HMAC<CryptoKit.SHA256>.authenticationCode(
             for: Data(nonce + ct),
             using: SymmetricKey(data: Data(hKey))
@@ -153,35 +194,16 @@ final class InternalSigner: EventSigner {
         guard let unpadded = nip44Unpad(Data(plainPadded)) else { return nil }
         return String(data: unpadded, encoding: .utf8)
     }
-
-    // MARK: - Errors
-
-    enum SignerError: LocalizedError {
-        case keyNotUnlocked
-        case invalidPublicKey
-
-        var errorDescription: String? {
-            switch self {
-            case .keyNotUnlocked:   return ErrorMessages.noSigningMethod
-            case .invalidPublicKey: return "公開鍵の形式が正しくありません"
-            }
-        }
-    }
 }
 
-// MARK: - Private NIP-04 Helpers
+// MARK: - Shared crypto helpers (mirrored from InternalSigner)
 
-private extension InternalSigner {
+private extension NosskeySigner {
 
-    /// Compute the 32-byte NIP-04 shared key via secp256k1 ECDH.
-    /// Result = x-coordinate of (privKey × peerPubKey).
-    /// Using 0x02 prefix for x-only pubkey is correct: negation in secp256k1 preserves x.
     func nip04SharedKey(privKeyBytes: [UInt8], peerPubkeyHex: String) -> [UInt8]? {
         guard let peerPubBytes = NostrKeyUtils.hexToBytes(peerPubkeyHex),
               peerPubBytes.count == 32
         else { return nil }
-
-        // x-only (32 B) → compressed (33 B) with even-parity assumption (0x02)
         let compressedPubData = Data([0x02] + peerPubBytes)
 
         guard let privKey = try? P256K.KeyAgreement.PrivateKey(dataRepresentation: Data(privKeyBytes)),
@@ -189,7 +211,6 @@ private extension InternalSigner {
               let shared  = try? privKey.sharedSecretFromKeyAgreement(with: pubKey, format: .compressed)
         else { return nil }
 
-        // compressed = [prefix(1), x(32)] — take the x-coordinate only
         return shared.withUnsafeBytes { buf -> [UInt8]? in
             let bytes = Array(buf)
             guard bytes.count >= 33 else { return nil }
@@ -197,7 +218,6 @@ private extension InternalSigner {
         }
     }
 
-    /// AES-256-CBC encrypt with PKCS7 padding (CommonCrypto).
     func aesCBCEncrypt(key: [UInt8], iv: [UInt8], plaintext: String) -> [UInt8]? {
         guard let data = plaintext.data(using: .utf8) else { return nil }
         let inBytes = [UInt8](data)
@@ -206,45 +226,36 @@ private extension InternalSigner {
         let status = CCCrypt(
             CCOperation(kCCEncrypt), CCAlgorithm(kCCAlgorithmAES),
             CCOptions(kCCOptionPKCS7Padding),
-            key, kCCKeySizeAES256,
-            iv,
+            key, kCCKeySizeAES256, iv,
             inBytes, inBytes.count,
-            &outBuffer, outBuffer.count,
-            &numOut
+            &outBuffer, outBuffer.count, &numOut
         )
         guard status == kCCSuccess else { return nil }
         return Array(outBuffer[..<numOut])
     }
 
-    /// AES-256-CBC decrypt with PKCS7 padding (CommonCrypto).
     func aesCBCDecrypt(key: [UInt8], iv: [UInt8], ciphertext: [UInt8]) -> String? {
         var outBuffer = [UInt8](repeating: 0, count: ciphertext.count + kCCBlockSizeAES128)
         var numOut = 0
         let status = CCCrypt(
             CCOperation(kCCDecrypt), CCAlgorithm(kCCAlgorithmAES),
             CCOptions(kCCOptionPKCS7Padding),
-            key, kCCKeySizeAES256,
-            iv,
+            key, kCCKeySizeAES256, iv,
             ciphertext, ciphertext.count,
-            &outBuffer, outBuffer.count,
-            &numOut
+            &outBuffer, outBuffer.count, &numOut
         )
         guard status == kCCSuccess else { return nil }
         return String(bytes: Array(outBuffer[..<numOut]), encoding: .utf8)
     }
 
-    /// Zero-fill a byte array to prevent key material from lingering in memory.
     func zeroize(_ bytes: inout [UInt8]) {
         bytes.withUnsafeMutableBufferPointer { ptr in
             ptr.baseAddress?.initialize(repeating: 0, count: ptr.count)
         }
     }
 
-    // MARK: - NIP-44 Private Helpers
-
-    /// HKDF-SHA256 で NIP-44 v2 conversation key を導出する。
-    /// IKM = ECDH x-coordinate, salt = empty, info = "nip44-v2", len = 32
-    private func nip44ConversationKey(sharedX: [UInt8]) -> [UInt8]? {
+    // NIP-44 v2 — same as InternalSigner private helpers (kept local for symmetry).
+    func nip44ConversationKey(sharedX: [UInt8]) -> [UInt8]? {
         let info = Data("nip44-v2".utf8)
         return HKDF<CryptoKit.SHA256>.deriveKey(
             inputKeyMaterial: SymmetricKey(data: Data(sharedX)),
@@ -253,12 +264,7 @@ private extension InternalSigner {
         ).withUnsafeBytes { Array($0) }
     }
 
-    /// HKDF-SHA256 で 76 バイトの message keys を導出し、
-    /// (chacha_key[32], chacha_nonce[12], hmac_key[32]) を返す。
-    private func nip44MessageKeys(
-        conversationKey: [UInt8],
-        nonce: [UInt8]
-    ) -> ([UInt8], [UInt8], [UInt8])? {
+    func nip44MessageKeys(conversationKey: [UInt8], nonce: [UInt8]) -> ([UInt8], [UInt8], [UInt8])? {
         let info = Data("nip44-v2".utf8)
         let raw  = HKDF<CryptoKit.SHA256>.deriveKey(
             inputKeyMaterial: SymmetricKey(data: Data(conversationKey)),
@@ -270,27 +276,24 @@ private extension InternalSigner {
         return (Array(raw[0..<32]), Array(raw[32..<44]), Array(raw[44..<76]))
     }
 
-    /// NIP-44 v2 padding: 2-byte BE length prefix + zero-padded to `calcPaddedLen`.
-    private func nip44Pad(_ data: Data) -> Data {
-        let len       = data.count
-        let padded    = nip44CalcPaddedLen(len)
-        var result    = Data(repeating: 0, count: padded + 2)
-        result[0]     = UInt8((len >> 8) & 0xff)
-        result[1]     = UInt8(len & 0xff)
+    func nip44Pad(_ data: Data) -> Data {
+        let len    = data.count
+        let padded = nip44CalcPaddedLen(len)
+        var result = Data(repeating: 0, count: padded + 2)
+        result[0]  = UInt8((len >> 8) & 0xff)
+        result[1]  = UInt8(len & 0xff)
         result.replaceSubrange(2..<(2 + len), with: data)
         return result
     }
 
-    /// NIP-44 v2 unpad: reads 2-byte BE length and extracts the actual content.
-    private func nip44Unpad(_ data: Data) -> Data? {
+    func nip44Unpad(_ data: Data) -> Data? {
         guard data.count >= 2 else { return nil }
         let len = (Int(data[0]) << 8) | Int(data[1])
         guard len > 0, data.count >= len + 2 else { return nil }
         return data.subdata(in: 2..<(2 + len))
     }
 
-    /// NIP-44 v2 padded length formula (matches the reference TypeScript spec).
-    private func nip44CalcPaddedLen(_ len: Int) -> Int {
+    func nip44CalcPaddedLen(_ len: Int) -> Int {
         guard len > 0 else { return 32 }
         if len <= 32 { return 32 }
         let v        = len - 1
@@ -299,10 +302,7 @@ private extension InternalSigner {
         return chunk * ((len - 1) / chunk + 1)
     }
 
-    // MARK: - ChaCha20 Stream Cipher (RFC 7539)
-
-    /// XOR `data` with the ChaCha20 keystream (key=32B, nonce=12B, counter starts at 0).
-    private func chacha20Stream(key: [UInt8], nonce: [UInt8], data: [UInt8]) -> [UInt8] {
+    func chacha20Stream(key: [UInt8], nonce: [UInt8], data: [UInt8]) -> [UInt8] {
         var result:  [UInt8] = [UInt8](repeating: 0, count: data.count)
         var counter: UInt32  = 0
         var offset           = 0
@@ -316,11 +316,10 @@ private extension InternalSigner {
         return result
     }
 
-    /// Produce one 64-byte ChaCha20 keystream block (RFC 7539, 20 rounds).
-    private func chacha20Block(key: [UInt8], counter: UInt32, nonce: [UInt8]) -> [UInt8] {
+    func chacha20Block(key: [UInt8], counter: UInt32, nonce: [UInt8]) -> [UInt8] {
         var s = [UInt32](repeating: 0, count: 16)
         s[0] = 0x61707865; s[1] = 0x3320646e; s[2] = 0x79622d32; s[3] = 0x6b206574
-        for i in 0..<8 { s[4 + i] = cc20LE32(key,   i * 4) }
+        for i in 0..<8 { s[4 + i] = cc20LE32(key, i * 4) }
         s[12] = counter
         s[13] = cc20LE32(nonce, 0)
         s[14] = cc20LE32(nonce, 4)
@@ -345,14 +344,14 @@ private extension InternalSigner {
         return out
     }
 
-    private func cc20QR(_ s: inout [UInt32], _ a: Int, _ b: Int, _ c: Int, _ d: Int) {
+    func cc20QR(_ s: inout [UInt32], _ a: Int, _ b: Int, _ c: Int, _ d: Int) {
         s[a] = s[a] &+ s[b]; s[d] ^= s[a]; s[d] = (s[d] << 16) | (s[d] >> 16)
         s[c] = s[c] &+ s[d]; s[b] ^= s[c]; s[b] = (s[b] << 12) | (s[b] >> 20)
         s[a] = s[a] &+ s[b]; s[d] ^= s[a]; s[d] = (s[d] <<  8) | (s[d] >> 24)
         s[c] = s[c] &+ s[d]; s[b] ^= s[c]; s[b] = (s[b] <<  7) | (s[b] >> 25)
     }
 
-    private func cc20LE32(_ b: [UInt8], _ off: Int) -> UInt32 {
+    func cc20LE32(_ b: [UInt8], _ off: Int) -> UInt32 {
         UInt32(b[off]) | (UInt32(b[off+1]) << 8) | (UInt32(b[off+2]) << 16) | (UInt32(b[off+3]) << 24)
     }
 }

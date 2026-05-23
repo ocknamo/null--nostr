@@ -67,6 +67,18 @@ final class AppPreferences {
         static let mlsKeyPackageRelays = "nurunuru_mls_key_package_relays"
         static let mlsInboxRelays = "nurunuru_mls_inbox_relays"
         static let hasAcceptedTerms = "nurunuru_has_accepted_terms"
+        static let loginMethod    = "nurunuru_login_method"
+    }
+
+    /// Active authentication backend for the current session.
+    /// Valid values: `"nsec"`, `"nosskey"`, `"external"`, or `nil` (logged out).
+    /// Stored as plain string (non-sensitive metadata only).
+    var loginMethod: String? {
+        get { defaults.string(forKey: Keys.loginMethod) }
+        set {
+            if let value = newValue { defaults.set(value, forKey: Keys.loginMethod) }
+            else { defaults.removeObject(forKey: Keys.loginMethod) }
+        }
     }
 
     var hasAcceptedTerms: Bool {
@@ -414,7 +426,8 @@ final class AppPreferences {
          Keys.mlsKeyPackageStableDTag,
          Keys.mlsRejectedWelcomeRetryAfterById,
          Keys.mlsKeyPackageRelays,
-         Keys.mlsInboxRelays].forEach { defaults.removeObject(forKey: $0) }
+         Keys.mlsInboxRelays,
+         Keys.loginMethod].forEach { defaults.removeObject(forKey: $0) }
     }
 }
 

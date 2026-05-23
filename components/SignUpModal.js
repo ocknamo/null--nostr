@@ -129,7 +129,7 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
             nosskeyManager.constructor.bytesToHex(credentialId) :
             Array.from(credentialId).map(b => b.toString(16).padStart(2, '0')).join(''),
           pubkey: pk,
-          salt: '6e6f7374722d6b6579' // Default salt used in SDK
+          salt: '6e6f7374722d70776b' // "nostr-pwk" — standard nosskey PRF eval salt (NIP draft / nosskey-sdk normalizes legacy values)
         }
 
         // Update manager and storage

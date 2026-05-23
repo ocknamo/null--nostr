@@ -569,14 +569,19 @@ struct SignUpSheet: View {
     @State private var selectedRelays: [Nip65Relay]?
     @State private var isLoading = false
     @State private var error = ""
+    /// True when the active sign-up wizard is using the Passkey (nosskey) path
+    /// instead of the classic nsec path. Passkey path skips the "backup" step
+    /// (the passkey itself is the backup), so the wizard runs 5 steps instead of 6.
+    @State private var usingPasskey = false
 
     private var progress: CGFloat {
+        let total: CGFloat = usingPasskey ? 5.0 : 6.0
         switch step {
-        case "welcome":  return 1.0 / 6.0
-        case "backup":   return 2.0 / 6.0
-        case "relay":    return 3.0 / 6.0
-        case "profile":  return 4.0 / 6.0
-        case "tutorial": return 5.0 / 6.0
+        case "welcome":  return 1.0 / total
+        case "backup":   return 2.0 / total
+        case "relay":    return (usingPasskey ? 2.0 : 3.0) / total
+        case "profile":  return (usingPasskey ? 3.0 : 4.0) / total
+        case "tutorial": return (usingPasskey ? 4.0 : 5.0) / total
         default:         return 1.0
         }
     }
@@ -606,10 +611,18 @@ struct SignUpSheet: View {
                             switch step {
                             case "welcome":
                                 SignUpWelcomeStep(
-                                    onNext: { generateAccount() },
+                                    onNext: {
+                                        usingPasskey = false
+                                        generateAccount()
+                                    },
+                                    onNextWithPasskey: {
+                                        usingPasskey = true
+                                        generateAccountWithPasskey()
+                                    },
                                     onClose: { isPresented = false },
                                     isLoading: isLoading,
-                                    error: error
+                                    error: error,
+                                    passkeyAvailable: NosskeyManager.isPlatformSupported
                                 )
                             case "backup":
                                 if let account = generatedAccount {
@@ -688,6 +701,26 @@ struct SignUpSheet: View {
                 step = "backup"
             } else {
                 error = "アカウント作成に失敗しました"
+            }
+            isLoading = false
+        }
+    }
+
+    /// Nosskey "PRF direct" sign-up. Skips the nsec backup step because the
+    /// passkey itself acts as the recoverable backup (iCloud Keychain / OS).
+    private func generateAccountWithPasskey() {
+        isLoading = true
+        error = ""
+        Task {
+            let acc = await viewModel.generateNewAccountWithPasskey(username: "user")
+            if let acc {
+                generatedAccount = acc
+                step = "relay"
+            } else {
+                usingPasskey = false
+                if error.isEmpty {
+                    error = "パスキーの登録に失敗しました。実機では www.nullnull.app の webcredentials 設定が必要です。"
+                }
             }
             isLoading = false
         }
@@ -893,16 +926,20 @@ private struct SignUpTutorialStep: View {
 
 private struct SignUpWelcomeStep: View {
     let onNext: () -> Void
+    var onNextWithPasskey: (() -> Void)? = nil
     let onClose: () -> Void
     let isLoading: Bool
     let error: String
+    /// True when the platform supports the WebAuthn PRF extension (iOS 18+).
+    /// Drives whether the "パスキーで登録" primary button is visible.
+    var passkeyAvailable: Bool = false
 
     @Environment(\.nuruTheme) private var theme
 
     var body: some View {
         VStack(spacing: NuruSpacing.space5) {
             SignUpIconBox(
-                systemName: "person.badge.plus",
+                systemName: passkeyAvailable ? "faceid" : "person.badge.plus",
                 containerColor: NuruColors.lineGreen.opacity(0.1),
                 iconColor: NuruColors.lineGreen
             )
@@ -911,10 +948,17 @@ private struct SignUpWelcomeStep: View {
                 Text("新規登録")
                     .font(NuruFont.titleLarge())
                     .foregroundStyle(theme.textPrimary)
-                Text("新しいNostrアカウントを作成します。\n秘密鍵はデバイス内に安全に保存されます。")
-                    .font(NuruFont.bodySmall())
-                    .foregroundStyle(theme.textSecondary)
-                    .multilineTextAlignment(.center)
+                if passkeyAvailable {
+                    Text("Face ID または Touch ID で安全に登録します。\n秘密鍵を保管する必要はありません。")
+                        .font(NuruFont.bodySmall())
+                        .foregroundStyle(theme.textSecondary)
+                        .multilineTextAlignment(.center)
+                } else {
+                    Text("新しいNostrアカウントを作成します。\n秘密鍵はデバイス内に安全に保存されます。")
+                        .font(NuruFont.bodySmall())
+                        .foregroundStyle(theme.textSecondary)
+                        .multilineTextAlignment(.center)
+                }
             }
 
             if !error.isEmpty {
@@ -923,20 +967,59 @@ private struct SignUpWelcomeStep: View {
                     .foregroundStyle(NuruColors.colorError)
             }
 
-            Button(action: onNext) {
-                Group {
-                    if isLoading {
-                        ProgressView().tint(.white).scaleEffect(0.8)
-                    } else {
-                        Text("アカウントを作成する")
-                            .font(NuruFont.buttonLarge())
+            if passkeyAvailable, let passkeyAction = onNextWithPasskey {
+                // Primary: Passkey path.
+                Button(action: passkeyAction) {
+                    Group {
+                        if isLoading {
+                            ProgressView().tint(.white).scaleEffect(0.8)
+                        } else {
+                            HStack(spacing: NuruSpacing.space2) {
+                                Image(systemName: "faceid")
+                                    .font(.system(size: 18, weight: .semibold))
+                                Text("パスキーで登録")
+                                    .font(NuruFont.buttonLarge())
+                            }
+                        }
                     }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 56)
                 }
-                .frame(maxWidth: .infinity)
-                .frame(height: 56)
+                .buttonStyle(NuruPrimaryButtonStyle(isDisabled: isLoading))
+                .disabled(isLoading)
+
+                // Secondary: classic nsec sign-up.
+                Button(action: onNext) {
+                    Text("従来の方法で作成（nsec）")
+                        .font(NuruFont.bodyMedium())
+                        .foregroundStyle(theme.textSecondary)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                }
+                .disabled(isLoading)
+            } else {
+                Button(action: onNext) {
+                    Group {
+                        if isLoading {
+                            ProgressView().tint(.white).scaleEffect(0.8)
+                        } else {
+                            Text("アカウントを作成する")
+                                .font(NuruFont.buttonLarge())
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 56)
+                }
+                .buttonStyle(NuruPrimaryButtonStyle(isDisabled: isLoading))
+                .disabled(isLoading)
+
+                if !NosskeyManager.isPlatformSupported {
+                    Text("パスキー対応はiOS 18以降で利用できます")
+                        .font(NuruFont.labelSmall())
+                        .foregroundStyle(theme.textTertiary)
+                        .multilineTextAlignment(.center)
+                }
             }
-            .buttonStyle(NuruPrimaryButtonStyle(isDisabled: isLoading))
-            .disabled(isLoading)
 
             Button("キャンセル", action: onClose)
                 .font(NuruFont.bodyMedium())

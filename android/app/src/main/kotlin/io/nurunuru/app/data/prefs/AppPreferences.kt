@@ -158,6 +158,19 @@ class AppPreferences(context: Context) {
         get() = securePrefs.getBoolean(KEY_IS_EXTERNAL_SIGNER, false)
         set(value) = securePrefs.edit().putBoolean(KEY_IS_EXTERNAL_SIGNER, value).apply()
 
+    /**
+     * Tracks which authentication backend produced the current session.
+     * Valid values: "nsec", "nosskey", "amber", "external", or null when logged out.
+     * Stored in plainPrefs because it is just metadata — the actual key/credential
+     * material lives in SecureKeyManager / NosskeyManager / the external signer.
+     */
+    var loginMethod: String?
+        get() = plainPrefs.getString(KEY_LOGIN_METHOD, null)
+        set(value) {
+            if (value == null) plainPrefs.edit().remove(KEY_LOGIN_METHOD).apply()
+            else plainPrefs.edit().putString(KEY_LOGIN_METHOD, value).apply()
+        }
+
     var recentSearches: List<String>
         get() {
             val jsonStr = plainPrefs.getString(KEY_RECENT_SEARCHES, "[]") ?: "[]"
@@ -410,6 +423,7 @@ class AppPreferences(context: Context) {
         private const val KEY_MLS_CONSUMED_KEY_PACKAGE_EVENT_IDS = "mls_consumed_key_package_event_ids"
         private const val KEY_MLS_KEY_PACKAGE_RELAYS = "mls_key_package_relays"
         private const val KEY_MLS_INBOX_RELAYS = "mls_inbox_relays"
+        private const val KEY_LOGIN_METHOD = "login_method"
     }
 }
 

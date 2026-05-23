@@ -20,7 +20,11 @@ actor NostrRepository {
     let client: NostrClient
     private let keyManager: SecureKeyManager
     let prefs: AppPreferences
-    let signer: InternalSigner
+    /// Signer abstraction. Real implementations are `InternalSigner` (nsec/Keychain)
+    /// or `NosskeySigner` (Passkey/PRF direct). External signers (NIP-46) take a
+    /// different code path — they bypass this property and use `externalSigner`
+    /// in `NostrRepository+ExternalSign.swift`.
+    let signer: EventSigner
     /// Optional Rust FFI engine (Phase 5). Lazily initialized for Talk/MLS.
     var mlsClient: MlsFFIBridge?
     /// Two-layer cache: in-memory LRU + UserDefaults persistence.
@@ -110,14 +114,17 @@ actor NostrRepository {
     init(
         keyManager: SecureKeyManager,
         prefs: AppPreferences,
-        mlsClient: MlsFFIBridge? = nil
+        mlsClient: MlsFFIBridge? = nil,
+        signer: EventSigner? = nil
     ) {
         self.keyManager = keyManager
         self.prefs = prefs
-        let signer = InternalSigner(keyManager: keyManager)
-        self.signer = signer
+        // If the caller (e.g. AuthViewModel during a Passkey sign-up) injects a
+        // signer we honor it. Otherwise default to the existing nsec-backed path.
+        let resolvedSigner: EventSigner = signer ?? InternalSigner(keyManager: keyManager)
+        self.signer = resolvedSigner
         self.client = NostrClient(authEventSigner: { relayUrl, challenge in
-            try signer.signEvent(
+            try resolvedSigner.signEvent(
                 kind: 22242,
                 tags: [["relay", relayUrl], ["challenge", challenge]],
                 content: ""

@@ -50,6 +50,7 @@ null--nostr は複数の Nostr Implementation Possibilities を扱います。�
 |---|---|---|---|
 | NIP-A5 | Mini-app feature | Scroll mini-app definitions/favorites kind 1227/10027. | `ScrollRunner.kt`, `ScrollsApp.kt`, `NostrRepositoryScrolls.kt`, `ScrollsView.swift` |
 | NIP-B7 | Blossom-related | Blossom blob upload/fallback handling. | `ImageUploadService.swift`, `AvatarView.swift`, `ImageUploadUtils.kt` |
+| Nosskey (draft NIP) | Active across 3 platforms | Passkey-derived Nostr keys via WebAuthn PRF extension. New-user onboarding default on Web; opt-in primary button on iOS 18+ / Android API 28+. | [[nosskey]] |
 
 ## Blossom / BUD specs
 
@@ -78,6 +79,7 @@ null--nostr は複数の Nostr Implementation Possibilities を扱います。�
 - [[nip-58]] — badges.
 - [[nip-59]] — gift wrap.
 - [[nip-65]] — Relay List Metadata / outbox model.
+- [[nosskey]] — Passkey-derived Nostr keys (PRF Direct Method, draft NIP).
 - [[nip-70]] — protected events.
 - [[nip-71]] — short video / ろくなな.
 - [[nip-98]] — HTTP upload auth and Blossom auth.

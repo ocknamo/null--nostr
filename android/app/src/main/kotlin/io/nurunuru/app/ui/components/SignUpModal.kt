@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import androidx.activity.ComponentActivity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -38,6 +39,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import io.nurunuru.app.data.GeohashUtils
+import io.nurunuru.app.data.NosskeyManager
 import io.nurunuru.app.data.RelayDiscovery
 import io.nurunuru.app.data.models.Nip65Relay
 import io.nurunuru.app.data.models.UserProfile
@@ -74,9 +76,12 @@ fun SignUpModal(
     var selectedRelays by remember { mutableStateOf<List<Nip65Relay>?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
+    var usingPasskey by remember { mutableStateOf(false) }
 
     val nuruColors = LocalNuruColors.current
     val signUpScope = rememberCoroutineScope()
+    val signUpContext = LocalContext.current
+    val signUpActivity = signUpContext as? ComponentActivity
 
     // This is intentionally a normal opaque full-screen composable, not Dialog.
     // Dialog is a separate window and can reveal LoginScreen for a frame while
@@ -110,12 +115,15 @@ fun SignUpModal(
                     shape = RoundedCornerShape(24.dp)
                 ) {
                     Column {
+                        // 5 steps when registering via Passkey (no nsec backup needed),
+                        // 6 steps for the classic nsec flow.
+                        val totalSteps = if (usingPasskey) 5f else 6f
                         val progress = when (step) {
-                            "welcome" -> 1f / 6f
-                            "backup" -> 2f / 6f
-                            "relay" -> 3f / 6f
-                            "profile" -> 4f / 6f
-                            "tutorial" -> 5f / 6f
+                            "welcome" -> 1f / totalSteps
+                            "backup" -> 2f / totalSteps
+                            "relay" -> (if (usingPasskey) 2f else 3f) / totalSteps
+                            "profile" -> (if (usingPasskey) 3f else 4f) / totalSteps
+                            "tutorial" -> (if (usingPasskey) 4f else 5f) / totalSteps
                             else -> 1f
                         }
                         Box(modifier = Modifier.fillMaxWidth().height(4.dp).background(nuruColors.bgSecondary)) {
@@ -132,6 +140,7 @@ fun SignUpModal(
                             when (step) {
                                 "welcome" -> WelcomeStep(
                                     onNext = {
+                                        usingPasskey = false
                                         isLoading = true
                                         error = ""
                                         val acc = viewModel.generateNewAccount()
@@ -142,6 +151,31 @@ fun SignUpModal(
                                             error = "アカウント作成に失敗しました"
                                         }
                                         isLoading = false
+                                    },
+                                    onNextWithPasskey = {
+                                        val act = signUpActivity
+                                        if (act == null) {
+                                            error = "パスキーの登録に失敗しました"
+                                        } else {
+                                            usingPasskey = true
+                                            isLoading = true
+                                            error = ""
+                                            signUpScope.launch {
+                                                val acc = viewModel.generateNewAccountWithPasskey(
+                                                    activity = act,
+                                                    username = "user"
+                                                )
+                                                if (acc != null) {
+                                                    generatedAccount = acc
+                                                    // Passkey flow skips the nsec backup step.
+                                                    step = "relay"
+                                                } else {
+                                                    usingPasskey = false
+                                                    error = "パスキーの登録に失敗しました"
+                                                }
+                                                isLoading = false
+                                            }
+                                        }
                                     },
                                     onClose = onClose,
                                     isLoading = isLoading,
@@ -159,16 +193,35 @@ fun SignUpModal(
                                 )
                                 "profile" -> {
                                     val coroutineScope = rememberCoroutineScope()
-                                    val internalSigner = remember { io.nurunuru.app.data.InternalSigner(viewModel.keyManager) }
+                                    // Pick the appropriate signer for the active sign-up flow.
+                                    // - nosskey: NosskeySigner triggers a biometric prompt per signature.
+                                    // - nsec   : InternalSigner reuses the freshly-unlocked SecureKeyManager key.
+                                    val profileSigner = remember(usingPasskey) {
+                                        if (usingPasskey && signUpActivity != null) {
+                                            val keyInfo = viewModel.nosskeyManager
+                                                .loadStoredKeyInfo(signUpActivity)
+                                            if (keyInfo != null) {
+                                                io.nurunuru.app.data.signers.NosskeySigner(
+                                                    signUpActivity,
+                                                    viewModel.nosskeyManager,
+                                                    keyInfo
+                                                )
+                                            } else {
+                                                io.nurunuru.app.data.InternalSigner(viewModel.keyManager)
+                                            }
+                                        } else {
+                                            io.nurunuru.app.data.InternalSigner(viewModel.keyManager)
+                                        }
+                                    }
                                     ProfileStep(
-                                        uploadSigner = internalSigner,
+                                        uploadSigner = profileSigner,
                                         onFinish = { name, about, picture, banner, nip05, lud16, website, birthday ->
                                             isLoading = true
                                             coroutineScope.launch {
                                                 val relayTriples: List<Triple<String, Boolean, Boolean>>? =
                                                     selectedRelays?.map { Triple(it.url, it.read, it.write) }
                                                 val publishedProfile = viewModel.publishInitialMetadata(
-                                                    signer = internalSigner,
+                                                    signer = profileSigner,
                                                     name = name,
                                                     about = about,
                                                     picture = picture,
@@ -193,14 +246,30 @@ fun SignUpModal(
                                 }
                                 "tutorial" -> {
                                     val coroutineScope = rememberCoroutineScope()
-                                    val internalSigner = remember { io.nurunuru.app.data.InternalSigner(viewModel.keyManager) }
+                                    val tutorialSigner = remember(usingPasskey) {
+                                        if (usingPasskey && signUpActivity != null) {
+                                            val keyInfo = viewModel.nosskeyManager
+                                                .loadStoredKeyInfo(signUpActivity)
+                                            if (keyInfo != null) {
+                                                io.nurunuru.app.data.signers.NosskeySigner(
+                                                    signUpActivity,
+                                                    viewModel.nosskeyManager,
+                                                    keyInfo
+                                                )
+                                            } else {
+                                                io.nurunuru.app.data.InternalSigner(viewModel.keyManager)
+                                            }
+                                        } else {
+                                            io.nurunuru.app.data.InternalSigner(viewModel.keyManager)
+                                        }
+                                    }
                                     TutorialStep(
                                         onPost = { content, onResult ->
                                             coroutineScope.launch {
                                                 val relayTriples: List<Triple<String, Boolean, Boolean>>? =
                                                     selectedRelays?.map { Triple(it.url, it.read, it.write) }
                                                 val ok = viewModel.publishTutorialPost(
-                                                    signer = internalSigner,
+                                                    signer = tutorialSigner,
                                                     content = content,
                                                     relays = relayTriples
                                                 )
@@ -218,7 +287,7 @@ fun SignUpModal(
                                         signUpScope.launch {
                                             kotlinx.coroutines.yield()
                                             onSuccess(pubkey)
-                                            viewModel.completeRegistration(pubkey)
+                                            viewModel.completeRegistration(pubkey, signUpActivity)
                                         }
                                     }
                                 )
@@ -234,11 +303,14 @@ fun SignUpModal(
 @Composable
 fun WelcomeStep(
     onNext: () -> Unit,
+    onNextWithPasskey: () -> Unit,
     onClose: () -> Unit,
     isLoading: Boolean,
     error: String
 ) {
     val nuruColors = LocalNuruColors.current
+    val context = LocalContext.current
+    val passkeyAvailable = remember { NosskeyManager().isPlatformSupported(context) }
 
     IconBox(icon = Icons.Default.PersonAdd, containerColor = LineGreen.copy(alpha = 0.1f), iconColor = LineGreen)
 
@@ -256,15 +328,63 @@ fun WelcomeStep(
         Text(error, color = Color.Red, fontSize = 12.sp)
     }
 
-    Button(
-        onClick = onNext,
-        modifier = Modifier.fillMaxWidth().height(56.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = LineGreen),
-        shape = RoundedCornerShape(16.dp),
-        enabled = !isLoading
-    ) {
-        if (isLoading) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
-        else Text("アカウントを作成する", fontWeight = FontWeight.Bold)
+    // Passkey-first registration button (shown only on supported devices).
+    if (passkeyAvailable) {
+        Button(
+            onClick = onNextWithPasskey,
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = LineGreen),
+            shape = RoundedCornerShape(16.dp),
+            enabled = !isLoading
+        ) {
+            if (isLoading) {
+                CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
+            } else {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Fingerprint,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = Color.White
+                    )
+                    Text("パスキーで登録", fontWeight = FontWeight.Bold, color = Color.White)
+                }
+            }
+        }
+        Text(
+            "パスキーは Face ID / Touch ID / 指紋認証 を使って安全に登録します。",
+            fontSize = 12.sp,
+            color = nuruColors.textSecondary,
+            textAlign = TextAlign.Center
+        )
+    }
+
+    // Classic nsec registration — shown as secondary on passkey-capable devices,
+    // or as the only primary option when CredentialManager is unavailable.
+    if (passkeyAvailable) {
+        OutlinedButton(
+            onClick = onNext,
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+            shape = RoundedCornerShape(16.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, LineGreen),
+            enabled = !isLoading
+        ) {
+            Text("従来の方法で作成（nsec）", fontWeight = FontWeight.Bold, color = LineGreen)
+        }
+    } else {
+        Button(
+            onClick = onNext,
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = LineGreen),
+            shape = RoundedCornerShape(16.dp),
+            enabled = !isLoading
+        ) {
+            if (isLoading) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
+            else Text("アカウントを作成する", fontWeight = FontWeight.Bold)
+        }
     }
 
     TextButton(onClick = onClose) {

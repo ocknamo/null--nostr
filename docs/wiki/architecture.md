@@ -44,3 +44,19 @@ null--nostr は、Web / Android / iOS の UI 層と、Nostr 処理・暗号・�
 - [[platforms/android]]
 - [[platforms/ios]]
 - [[platforms/rust-engine]]
+
+
+## Passkey / Nosskey signer abstraction (2026-05-23)
+
+iOS / Android で Passkey ("PRF Direct Method") による新規登録に対応した。
+詳細は [[nips/nosskey]] と [[decisions/adr-0010-passkey-prf-direct-method|ADR-0010]]。
+
+| Platform | Manager | Signer | 共通プロトコル |
+|---|---|---|---|
+| iOS | `NosskeyManager` (`ios/NuruNuru/Data/NosskeyManager.swift`) | `NosskeySigner` | `EventSigner` (`ios/NuruNuru/Data/EventSigner.swift`) |
+| Android | `NosskeyManager` (`android/.../data/NosskeyManager.kt`) | `NosskeySigner` (`.../data/signers/NosskeySigner.kt`) | 既存 `AppSigner` |
+| Web | `nosskey-sdk@^0.0.4` の `NosskeyManager` クラス | SDK 内包 | 既存の `signEventNip07` 経路 |
+
+iOS は `NostrRepository.init(... , signer: EventSigner? = nil)` から signer を
+明示注入可能に変更。Android は `AuthViewModel.buildSigner(activity)` で
+`loginMethod` に応じて Internal / Nosskey / External signer を切り替える。

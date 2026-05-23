@@ -125,3 +125,56 @@
 - pre-fill された `\n#nostrはじめました` の先頭改行は 1 文字としてカウントされる
   (140 文字制限に対して 13 文字分を初期消費する)。本文を 127 文字以内に収める制約を
   どう案内するか (例: カウンター UI で「のこり 127 文字」を表示する等) は要再検討。
+
+
+## Passkey (nosskey) sign-up path
+
+2026-05-23 以降、3 プラットフォームすべてで Passkey (nosskey "PRF Direct Method")
+による新規登録に対応した。詳細仕様は [[../nips/nosskey|nips/nosskey]] と
+[[../decisions/adr-0010-passkey-prf-direct-method|ADR-0010]] を参照。
+
+### Step 数の分岐
+
+| 経路 | ステップ数 | フロー |
+|---|---|---|
+| nsec (従来) | 6 | welcome → backup → relay → profile → tutorial → success |
+| Passkey (nosskey) | **5** | welcome → relay → profile → tutorial → success (backup を **スキップ**) |
+
+Passkey 経路で backup を省く理由は「Passkey 自体が iCloud Keychain / Google
+Password Manager で同期されるリカバリ手段であり、nsec を別途バックアップさせる
+必要がないため」(see ADR-0010)。
+
+### Welcome ステップの UI 分岐
+
+| 環境 | primary ボタン | secondary |
+|---|---|---|
+| Web | 「アカウントを作成する」(常に Passkey 経路) | — |
+| iOS 18+ / Android API 28+ (PRF 対応) | 「**パスキーで登録**」(Face ID / Touch ID / 指紋認証) | 「従来の方法で作成（nsec）」 |
+| iOS 17 / Android < 28 (PRF 非対応) | 「アカウントを作成する」(nsec) | キャプション「パスキー対応は iOS 18 以降で利用できます」 |
+
+### 既存セッションのログイン
+
+| 経路 | UI 表示条件 |
+|---|---|
+| Web | 「パスキーでログイン」常時 (PublicKeyCredential サポート時のみ) |
+| Android | 「パスキーでログイン」ボタンは `NosskeyManager.loadStoredKeyInfo() != null` のときだけ表示 |
+| iOS | 現在は LoginView 直下の従来ボタン群を維持 — `loginWithPasskey()` メソッドは ViewModel 側に実装済み (UI 露出は次フェーズ) |
+
+### 投稿フロー内の Signer 解決
+
+サインアップ直後の profile / relayList / tutorial 発行は一時的な
+`NostrRepository` で行うが、その signer は `loginMethod` を見て自動で切り替わる:
+
+- iOS: `AuthViewModel.currentSessionSigner() async -> EventSigner?` が
+  `prefs.loginMethod == "nosskey"` のとき `NosskeySigner` を返す。null のとき
+  Repository は既定の `InternalSigner` を構築する。
+- Android: `AuthViewModel.buildSigner(activity)` が同様に分岐する。
+  Activity が必要なため、UI 層から明示的に渡す。
+
+### ログアウト時の挙動
+
+- iOS: `nosskeyManager.clearStoredKeyInfo()` でローカル metadata を削除。
+  Passkey 自体は iCloud Keychain / OS Settings 側に残り、再登録時に再利用可能。
+- Android: 同様に SharedPreferences から削除。Google Password Manager 側に
+  Passkey は残る。
+- 3 プラットフォーム共通で `prefs.loginMethod` を null にクリア。
