@@ -381,3 +381,12 @@ LLM Wiki の時系列ログです。追記専用として扱います。
   - `AuthViewModel.getNsecForCurrentAccount() async` を追加。`loginMethod == "nosskey"` の場合は Passkey 認証で PRF secret を導出し、nsec encode 後に secret を zeroize。
   - `SettingsView` の秘密鍵表示を async 化し、「取得中…」表示を追加。
 - 検証: iOS Simulator build OK (`xcodebuild ... build`, exit 0)。
+
+## [2026-05-24] fix | Android Passkey RP ID and debug assetlinks for real-device test
+
+- Android Nosskey実機テスト準備として、`NosskeyManager.RP_ID` を iOS/Web と同じ canonical host の `www.nullnull.app` に統一。
+- ローカル debug keystore の SHA-256 fingerprint を取得し、`app/.well-known/assetlinks.json/route.js` と `public/.well-known/assetlinks.json` に追加。
+  - Debug SHA-256: `45:CD:CB:AD:A9:F4:35:A0:A3:62:80:05:9C:02:FE:7A:B1:7C:CB:09:CE:05:E2:93:BB:C6:CF:08:27:04:05:60`
+- `./gradlew assembleDebug` 成功。
+- 接続済み Android 実機 `9DNBNF45Y9AQFEY9` に debug APK を `adb install -r` でインストール成功。
+- 注意: production / Play Store 配布では Play App Signing の SHA-256 fingerprint を assetlinks に追加する必要がある。Proton Pass / 1Password / Bitwarden 等の外部 Passkey provider は、その provider が WebAuthn PRF/hmac-secret extension に対応している場合のみ Nosskey direct method で動作する。

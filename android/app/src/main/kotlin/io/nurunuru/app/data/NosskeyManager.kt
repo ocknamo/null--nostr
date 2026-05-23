@@ -345,7 +345,7 @@ class NosskeyManager {
 
     companion object {
         const val STANDARD_SALT_HEX = "6e6f7374722d70776b" // UTF-8 "nostr-pwk"
-        const val RP_ID = "nullnull.app"
+        const val RP_ID = "www.nullnull.app"
         const val RP_NAME = "ぬるぬる"
 
         private const val TAG = "NosskeyManager"

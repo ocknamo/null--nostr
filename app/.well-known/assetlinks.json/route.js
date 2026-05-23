@@ -10,7 +10,9 @@ const body = [
       namespace: 'android_app',
       package_name: 'io.nurunuru.app',
       sha256_cert_fingerprints: [
-        'REPLACE_WITH_YOUR_SIGNING_CERTIFICATE_SHA256',
+        // Local debug keystore used by `./gradlew assembleDebug` / adb install.
+        '45:CD:CB:AD:A9:F4:35:A0:A3:62:80:05:9C:02:FE:7A:B1:7C:CB:09:CE:05:E2:93:BB:C6:CF:08:27:04:05:60',
+        // TODO: Add the Play App Signing SHA-256 fingerprint before production release.
       ],
     },
   },
