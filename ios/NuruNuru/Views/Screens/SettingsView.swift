@@ -44,6 +44,8 @@ struct SettingsView: View {
     @State private var securityExpanded: Bool = false
     @State private var autoSignEnabled:  Bool = true
     @State private var showNsec:         Bool = false
+    @State private var exportedNsec:     String? = nil
+    @State private var isExportingNsec:  Bool = false
 
     // MARK: - Mini-apps
 
@@ -348,7 +350,20 @@ struct SettingsView: View {
 
                     // Show Nsec Button
                     Button {
-                        showNsec.toggle()
+                        if showNsec {
+                            showNsec = false
+                            exportedNsec = nil
+                        } else {
+                            showNsec = true
+                            isExportingNsec = true
+                            Task {
+                                let nsec = await authViewModel.getNsecForCurrentAccount()
+                                await MainActor.run {
+                                    exportedNsec = nsec
+                                    isExportingNsec = false
+                                }
+                            }
+                        }
                     } label: {
                         Text(showNsec ? "秘密鍵を隠す" : "秘密鍵を表示")
                             .font(.system(size: 14))
@@ -377,7 +392,7 @@ struct SettingsView: View {
     }
 
     private var nsecDisplay: some View {
-        let nsec = authViewModel.getNsecTemporary() ?? "取得できません"
+        let nsec = isExportingNsec ? "取得中…" : (exportedNsec ?? "取得できません")
         return VStack(spacing: NuruSpacing.space2) {
             // Warning
             VStack(alignment: .leading, spacing: 4) {

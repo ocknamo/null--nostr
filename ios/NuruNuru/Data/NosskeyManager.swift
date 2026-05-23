@@ -118,19 +118,26 @@ final class NosskeyManager: NSObject {
     /// Strong-retain the controller during the async hop so the delegate fires.
     private var activeController: ASAuthorizationController?
 
+    /// Passkey creation result that includes the freshly derived PRF secret.
+    /// The caller must zeroize `secretKey` after use.
+    struct NosskeyCreationResult {
+        let keyInfo: NosskeyKeyInfo
+        var secretKey: [UInt8]
+    }
+
     override init() {
         super.init()
     }
 
     // MARK: - Public API
 
-    /// Create a new Passkey credential with PRF support and derive the corresponding
-    /// secp256k1 x-only public key from the first PRF output.
-    func createPasskey(
+    /// Create a new Passkey credential with PRF support and return both keyInfo
+    /// and the freshly-derived PRF secret. Caller must zeroize `secretKey`.
+    func createPasskeyWithSecret(
         username: String,
         displayName: String,
         rpId: String = NosskeyManager.defaultRpId
-    ) async throws -> NosskeyKeyInfo {
+    ) async throws -> NosskeyCreationResult {
         guard #available(iOS 18.0, *) else { throw NosskeyError.unsupported }
 
         // 32-byte random user handle — required by WebAuthn spec for new accounts.
@@ -155,10 +162,16 @@ final class NosskeyManager: NSObject {
             name: username.isEmpty ? "nurunuru-user" : username,
             userID: userId
         )
-        // Ask the authenticator to advertise PRF support during registration.
-        // `checkForSupport` returns only the support flag; we evaluate PRF via an
-        // immediate assertion below to retrieve the 32-byte secret.
-        request.prf = ASAuthorizationPublicKeyCredentialPRFRegistrationInput.checkForSupport
+        // Ask the authenticator to evaluate the PRF during registration using the
+        // standard Nosskey salt. When iOS returns `prf.first`, registration and PRF
+        // derivation happen in a single system sheet. If it returns nil, we fall
+        // back to one assertion below (still far fewer prompts than re-deriving in
+        // AuthViewModel + NosskeySigner).
+        let registrationPrfInput = ASAuthorizationPublicKeyCredentialPRFRegistrationInput.InputValues(
+            saltInput1: NosskeyManager.nosskeySalt
+        )
+        request.prf = ASAuthorizationPublicKeyCredentialPRFRegistrationInput
+            .inputValues(registrationPrfInput)
 
         let controller = ASAuthorizationController(authorizationRequests: [request])
         controller.delegate = self
@@ -193,17 +206,28 @@ final class NosskeyManager: NSObject {
         // Derive secp256k1 x-only public key from the 32-byte PRF output.
         let pubkeyHex = try derivePubkeyHex(fromPrfBytes: [UInt8](prfBytes))
 
-        // Zero the PRF copy — caller never sees the secret.
-        var prfCopy = [UInt8](prfBytes)
-        zeroize(&prfCopy)
-
         let info = NosskeyKeyInfo(
             credentialId: result.credentialId,
             pubkey: pubkeyHex,
             salt: NosskeyManager.nosskeySalt,
             username: username.isEmpty ? nil : username
         )
-        return info
+        return NosskeyCreationResult(keyInfo: info, secretKey: [UInt8](prfBytes))
+    }
+
+    /// Compatibility wrapper for call sites that only need metadata.
+    func createPasskey(
+        username: String,
+        displayName: String,
+        rpId: String = NosskeyManager.defaultRpId
+    ) async throws -> NosskeyKeyInfo {
+        var result = try await createPasskeyWithSecret(
+            username: username,
+            displayName: displayName,
+            rpId: rpId
+        )
+        defer { zeroize(&result.secretKey) }
+        return result.keyInfo
     }
 
     /// Re-derive the 32-byte secp256k1 secret by prompting for a Passkey assertion.

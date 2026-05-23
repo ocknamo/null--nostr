@@ -125,6 +125,9 @@ struct LoginView: View {
             // Initial state: 新規登録 + ログイン
             VStack(spacing: NuruSpacing.space4) {
                 signUpButton
+                if NosskeyManager.isPlatformSupported {
+                    passkeyLoginButton
+                }
                 loginToggleButton
             }
         } else {
@@ -148,6 +151,24 @@ struct LoginView: View {
         }
         .buttonStyle(NuruPrimaryButtonStyle())
         .shadow(color: NuruColors.lineGreen.opacity(0.25), radius: 8, x: 0, y: 4)
+    }
+
+    private var passkeyLoginButton: some View {
+        Button {
+            requestTermsAgreement(for: .passkeyLogin)
+        } label: {
+            HStack(spacing: NuruSpacing.space3) {
+                Image(systemName: "faceid")
+                    .font(.system(size: 20))
+                    .foregroundStyle(NuruColors.lineGreen)
+                Text("パスキーでログイン")
+                    .font(NuruFont.buttonMedium())
+                    .foregroundStyle(NuruColors.lineGreen)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 56)
+        }
+        .buttonStyle(NuruSecondaryButtonStyle(theme: theme))
     }
 
     private var loginToggleButton: some View {
@@ -174,6 +195,7 @@ struct LoginView: View {
     private enum TermsStartAction {
         case signUp
         case login
+        case passkeyLogin
     }
 
     private func requestTermsAgreement(for action: TermsStartAction) {
@@ -182,7 +204,7 @@ struct LoginView: View {
         case .signUp:
             // 新規登録は毎回利用規約を表示する（同意済みでも再確認）
             showTermsAgreement = true
-        case .login:
+        case .login, .passkeyLogin:
             if viewModel.prefs.hasAcceptedTerms {
                 performPendingTermsAction()
             } else {
@@ -201,6 +223,8 @@ struct LoginView: View {
             withAnimation(.easeInOut(duration: NuruSpacing.durationNormal)) {
                 showNsecLogin = true
             }
+        case .passkeyLogin:
+            Task { await viewModel.loginWithPasskey() }
         }
     }
 

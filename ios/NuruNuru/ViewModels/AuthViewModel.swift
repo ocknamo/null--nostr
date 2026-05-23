@@ -188,12 +188,14 @@ final class AuthViewModel {
         }
 
         do {
-            let keyInfo = try await nosskeyManager.createPasskey(
+            var creation = try await nosskeyManager.createPasskeyWithSecret(
                 username: username,
                 displayName: username.isEmpty ? "ぬるぬるユーザー" : username
             )
-            // Derive once to cross-validate the pubkey and seed the in-memory cache.
-            var secret = try await nosskeyManager.deriveSecretKey(for: keyInfo)
+            let keyInfo = creation.keyInfo
+            // Reuse the PRF secret produced during registration. This avoids the
+            // previous 3-4 repeated biometric prompts (create → derive → warmCache).
+            var secret = creation.secretKey
             defer {
                 let secretCount = secret.count
                 secret.withUnsafeMutableBufferPointer {
@@ -214,11 +216,11 @@ final class AuthViewModel {
             prefs.publicKeyHex = keyInfo.pubkey
             prefs.isExternalSigner = false
 
-            // Build the session signer and warm its cache so the immediately
-            // following profile / relay-list / tutorial publishes succeed
-            // without triggering yet another biometric prompt.
+            // Build the session signer and seed its cache with the same secret.
+            // This prevents extra prompts during immediate profile / relay-list /
+            // tutorial publication.
             let signer = NosskeySigner(nosskeyManager: nosskeyManager, keyInfo: keyInfo)
-            try? await signer.warmCache()
+            signer.primeCache(secret: secret)
             nosskeySigner = signer
 
             return GeneratedAccount(pubkeyHex: keyInfo.pubkey, nsec: nsec, npub: npub)
@@ -258,7 +260,7 @@ final class AuthViewModel {
             prefs.loginMethod = "nosskey"
 
             let signer = NosskeySigner(nosskeyManager: nosskeyManager, keyInfo: keyInfo)
-            try? await signer.warmCache()
+            signer.primeCache(secret: secret)
             nosskeySigner = signer
 
             state = .loggedIn(pubkeyHex: keyInfo.pubkey)
@@ -336,10 +338,10 @@ final class AuthViewModel {
             MlsDbKeyStore.clearExternalKey(pubkeyHex: pubkey)
         }
         keyManager.deleteAll()
-        // Drop nosskey credential metadata; the Passkey itself remains on the
-        // device (managed by iCloud Keychain / OS Settings) and can be reused
-        // on next sign-up.
-        MainActor.assumeIsolated { nosskeyManager.clearStoredKeyInfo() }
+        // Do NOT clear NosskeyKeyInfo on logout. It is non-secret metadata
+        // (credentialId/pubkey/salt) required for "パスキーでログイン" after logout.
+        // The actual secret remains inside the Passkey and is re-derived only
+        // after biometric authentication.
         nosskeySigner = nil
         prefs.clear()
         state = .loggedOut
@@ -524,5 +526,30 @@ final class AuthViewModel {
         guard let hex = keyManager.getKeyHexTemporary() else { return nil }
         guard let privBytes = NostrKeyUtils.hexToBytes(hex) else { return nil }
         return NostrKeyUtils.encodeNsec(privBytes)
+    }
+
+    /// Export nsec for the active account. For Nosskey users this prompts for
+    /// Passkey authentication, derives the PRF secret once, encodes it as nsec,
+    /// then zeroizes the temporary bytes. This is intentionally explicit: it is
+    /// the escape hatch for migration to other Nostr apps.
+    @MainActor
+    func getNsecForCurrentAccount() async -> String? {
+        if prefs.loginMethod == "nosskey" {
+            guard let keyInfo = nosskeyManager.loadStoredKeyInfo() else { return nil }
+            do {
+                var secret = try await nosskeyManager.deriveSecretKey(for: keyInfo)
+                defer {
+                    let secretCount = secret.count
+                    secret.withUnsafeMutableBufferPointer {
+                        $0.baseAddress?.initialize(repeating: 0, count: secretCount)
+                    }
+                }
+                return NostrKeyUtils.encodeNsec(secret)
+            } catch {
+                AppLogger.log("Auth", "getNsecForCurrentAccount(nosskey) failed: \(error)")
+                return nil
+            }
+        }
+        return getNsecTemporary()
     }
 }

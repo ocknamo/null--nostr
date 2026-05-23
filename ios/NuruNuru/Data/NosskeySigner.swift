@@ -58,6 +58,14 @@ final class NosskeySigner: EventSigner {
         cachedAt = Date()
     }
 
+    /// Prime the in-memory cache with a freshly-derived PRF secret.
+    /// The input is copied; caller remains responsible for zeroizing its own buffer.
+    func primeCache(secret: [UInt8]) {
+        zeroizeCache()
+        cachedSecret = Array(secret)
+        cachedAt = Date()
+    }
+
     /// Force-clear the cached secret key.
     func zeroizeCache() {
         if cachedSecret != nil {

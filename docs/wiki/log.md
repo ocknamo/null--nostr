@@ -366,3 +366,18 @@ LLM Wiki の時系列ログです。追記専用として扱います。
   - `LoginView.swift` のエラー文言を `www.nullnull.app` に更新。
 - 検証: iOS Simulator build OK (`xcodebuild ... build`, exit 0)。
 - 実機再テスト手順: この Web 変更を Vercel にデプロイ後、`curl -i https://www.nullnull.app/.well-known/apple-app-site-association` が `200` + `Content-Type: application/json` + `webcredentials.apps = ["66G7S3P755.io.nurunuru.app"]` を返すことを確認し、アプリを削除→再インストールして AASA cache を更新する。
+
+## [2026-05-24] fix | iOS Nosskey prompt count, nsec export, and passkey login
+
+- iOS 実機テストで Passkey 認証が 4 回前後繰り返される問題を修正。
+  - `NosskeyManager.createPasskeyWithSecret()` を追加し、登録時に得た PRF secret を `keyInfo` と一緒に返すようにした。
+  - 登録リクエストの PRF 指定を `.checkForSupport` から `.inputValues("nostr-pwk")` に変更。iOS が registration PRF output を返せる場合は登録シート 1 回で secret 取得まで完了する。返せない環境では fallback assertion 1 回のみ。
+  - `AuthViewModel.generateNewAccountWithPasskey()` から重複 `deriveSecretKey()` と `NosskeySigner.warmCache()` を削除し、同じ secret を `NosskeySigner.primeCache(secret:)` に投入。profile / relayList / tutorial 投稿直前の追加プロンプトを避ける。
+  - `loginWithPasskey()` も取得済み secret を signer cache に投入するよう変更。
+- ログアウト後に Passkey ログインできない問題を修正。
+  - `logout()` で `NosskeyKeyInfo` を削除しないように変更。`credentialId/pubkey/salt` は非秘密 metadata であり、ログアウト後の「パスキーでログイン」に必要。
+  - `LoginView` の初期ボタン群に「パスキーでログイン」を追加し、`AuthViewModel.loginWithPasskey()` に接続。
+- ミニアプリタブ > セキュリティ設定で nosskey ユーザーの秘密鍵取得ができない問題を修正。
+  - `AuthViewModel.getNsecForCurrentAccount() async` を追加。`loginMethod == "nosskey"` の場合は Passkey 認証で PRF secret を導出し、nsec encode 後に secret を zeroize。
+  - `SettingsView` の秘密鍵表示を async 化し、「取得中…」表示を追加。
+- 検証: iOS Simulator build OK (`xcodebuild ... build`, exit 0)。
