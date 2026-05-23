@@ -24,8 +24,25 @@ import { autoDetectRelays, formatDistance, REGION_COORDINATES, selectRelaysByReg
  * 3. Automatic relay setup based on geolocation
  * 4. Profile setup and metadata publishing
  */
+// チュートリアル投稿で使用する固定ハッシュタグ。
+// 本文に書かれた `#xxx` は `t` タグとして抽出して送信する (PostModal.js と同一)。
+//
+// 既定本文に `\n#nostrはじめました` を pre-fill し、ユーザーが何もしなくても
+// エディタ上に常時ハッシュタグが見える状態にする。
+// (「付けてもないハッシュタグを勝手につけられた」という不信感を回避するため)
+//
+// ユーザーが意図的にハッシュタグ行を消した場合は、その状態のまま投稿する
+// (自動補完・自動付与は一切しない。3 プラットフォーム共通の規約)。
+// 1 行目を空にすることで、ユーザーが先頭にカーソルを置けば
+// 「本文 → 改行 → #nostrはじめました」の配置が自然に成立する。
+//
+// placeholder は本文を全て消した時のガイドとしてのみ機能 (pre-fill 時は非表示)。
+const TUTORIAL_HASHTAG = 'nostrはじめました'
+const TUTORIAL_DEFAULT_CONTENT = `\n#${TUTORIAL_HASHTAG}`
+const TUTORIAL_PLACEHOLDER = `いまどうしてる？\n#${TUTORIAL_HASHTAG}`
+
 export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
-  const [step, setStep] = useState('welcome') // welcome, backup, relay, profile, success
+  const [step, setStep] = useState('welcome') // welcome, backup, relay, profile, tutorial, success
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [createdPubkey, setCreatedPubkey] = useState(null)
@@ -35,6 +52,12 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
   const [recommendedRelays, setRecommendedRelays] = useState([])
   const [locationInfo, setLocationInfo] = useState(null)
   const [selectionMode, setSelectionMode] = useState('auto') // auto, manual
+
+  // チュートリアル投稿用ステート
+  const [tutorialContent, setTutorialContent] = useState(TUTORIAL_DEFAULT_CONTENT)
+  const [tutorialPosting, setTutorialPosting] = useState(false)
+  const [tutorialPosted, setTutorialPosted] = useState(false)
+  const [tutorialError, setTutorialError] = useState('')
 
   // Profile setup state
   const [profileForm, setProfileForm] = useState({
@@ -264,14 +287,74 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
         })))
       }
 
-      setStep('success')
+      setStep('tutorial')
     } catch (e) {
       console.error('Setup publication failed, but account is created:', e)
-      // Proceed to success anyway
-      setStep('success')
+      // プロフィール発行に失敗しても、アカウントは作成済みなのでチュートリアルへ進む。
+      setStep('tutorial')
     } finally {
       setLoading(false)
     }
+  }
+
+  // チュートリアル投稿: kind:1 を発行する。
+  // 既定 pre-fill により本文末尾に `#nostrはじめました` が表示されているため、
+  // ユーザーが消さない限り自動的にハッシュタグ付きで送信される。
+  // ユーザーがハッシュタグ行を削除した場合は、削除した状態のまま送信する
+  // (自動補完・自動末尾付与は行わない。「勝手に付けられた」を回避する規約)。
+  const handlePostTutorial = async () => {
+    // trim せず原文を送信する (pre-fill 由来の先頭改行を残せる)。
+    // ただし完全に空白のみの場合は空投稿扱いで送信ボタンが押せないため、
+    // 長さチェック用に trim 後の長さも見ておく。
+    const finalContent = tutorialContent
+
+    setTutorialPosting(true)
+    setTutorialError('')
+
+    try {
+      // 本文から #タグ を抽出して t タグ化 (PostModal.js と同じ正規表現)。
+      // ユーザーが #nostrはじめました を消していれば t タグも付与されない (意図尊重)。
+      const hashtagRegex = /#([^\s#\u3000]+)/g
+      const seen = new Set()
+      const tags = []
+      let match
+      while ((match = hashtagRegex.exec(finalContent)) !== null) {
+        const t = match[1].toLowerCase()
+        if (!seen.has(t)) {
+          seen.add(t)
+          tags.push(['t', t])
+        }
+      }
+
+      if (finalContent.length > 140) {
+        throw new Error('140文字以内で入力してください')
+      }
+      if (finalContent.trim().length === 0) {
+        throw new Error('本文を入力してください')
+      }
+
+      const targetRelays = recommendedRelays.length > 0
+        ? recommendedRelays.map(r => r.url)
+        : undefined
+
+      const ev = createEventTemplate(1, finalContent, tags)
+      ev.pubkey = createdPubkey
+      const signed = await signEventNip07(ev)
+      if (!signed) throw new Error('署名に失敗しました')
+
+      const published = await publishEvent(signed, targetRelays)
+      if (!published) throw new Error('リレーへの送信に失敗しました')
+      setTutorialPosted(true)
+    } catch (e) {
+      console.error('Tutorial post failed:', e)
+      setTutorialError(e?.message || '投稿に失敗しました')
+    } finally {
+      setTutorialPosting(false)
+    }
+  }
+
+  const handleSkipTutorial = () => {
+    setStep('success')
   }
 
   const handleComplete = () => {
@@ -292,13 +375,14 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
     <div className="fixed inset-0 z-50 flex items-center justify-center modal-overlay p-4" onClick={onClose}>
       <div className="w-full max-w-md bg-[var(--bg-primary)] rounded-3xl overflow-hidden shadow-2xl animate-scaleIn" onClick={e => e.stopPropagation()}>
 
-        {/* Progress bar */}
+        {/* Progress bar (6 steps: welcome / backup / relay / profile / tutorial / success) */}
         <div className="h-1.5 w-full bg-[var(--bg-secondary)] flex">
           <div className={`h-full bg-[var(--line-green)] transition-all duration-500 ${
-            step === 'welcome' ? 'w-1/5' :
-            step === 'backup' ? 'w-2/5' :
-            step === 'relay' ? 'w-3/5' :
-            step === 'profile' ? 'w-4/5' : 'w-full'
+            step === 'welcome' ? 'w-1/6' :
+            step === 'backup' ? 'w-2/6' :
+            step === 'relay' ? 'w-3/6' :
+            step === 'profile' ? 'w-4/6' :
+            step === 'tutorial' ? 'w-5/6' : 'w-full'
           }`} />
         </div>
 
@@ -608,6 +692,90 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
               >
                 {loading ? '保存中...' : 'セットアップを完了する'}
               </button>
+            </div>
+          )}
+
+          {step === 'tutorial' && (
+            <div className="space-y-5 animate-fadeIn">
+              <div className="text-center">
+                {/* ぬるぬるブランドカラー (LineGreen) に統一。chat-bubble アイコン。 */}
+                <div className="w-14 h-14 mx-auto rounded-full flex items-center justify-center mb-3" style={{ backgroundColor: 'rgba(6, 199, 85, 0.1)' }}>
+                  <svg className="w-7 h-7" style={{ color: 'var(--line-green)' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z" />
+                  </svg>
+                </div>
+                <h2 className="text-xl font-bold text-[var(--text-primary)] mb-1">はじめての投稿</h2>
+                <p className="text-[var(--text-secondary)] text-xs">
+                  チュートリアルとして「#nostrはじめました」をつけて、はじめての投稿をしてみましょう。
+                </p>
+              </div>
+
+              {tutorialPosted ? (
+                <div className="space-y-4">
+                  <div className="p-4 bg-green-500/10 rounded-2xl flex items-start gap-3 border border-green-500/20">
+                    <svg className="w-5 h-5 text-[var(--line-green)] flex-shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                    <div>
+                      <p className="text-sm font-bold text-[var(--text-primary)]">投稿しました！</p>
+                      <p className="text-xs text-[var(--text-secondary)] mt-1">
+                        Nostr の世界へようこそ。タイムラインで「#nostrはじめました」を検索すると、同じ仲間が見つかります。
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setStep('success')}
+                    className="w-full btn-line py-4 text-lg font-bold"
+                  >
+                    次へ進む
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div>
+                    {/*
+                      `#nostrはじめました` は既定で pre-fill されているため、エディタを開いた瞬間から
+                      ユーザーには常時ハッシュタグが見えている (「勝手に付けられた」を回避する規約)。
+                      ユーザーが消したら消した状態のまま投稿される (自動補完なし)。
+                      プレースホルダーは本文を全て消した時のガイドとしてのみ表示される。
+                    */}
+                    <textarea
+                      value={tutorialContent}
+                      onChange={(e) => setTutorialContent(e.target.value)}
+                      maxLength={140}
+                      placeholder={TUTORIAL_PLACEHOLDER}
+                      className="w-full bg-[var(--bg-secondary)] border-none rounded-xl px-4 py-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] placeholder:opacity-70 focus:ring-2 focus:ring-[var(--line-green)] h-28 resize-none whitespace-pre-wrap"
+                    />
+                    <div className="flex justify-end mt-1">
+                      <span className={`text-[10px] ${tutorialContent.length > 140 ? 'text-red-500' : 'text-[var(--text-tertiary)]'}`}>
+                        {tutorialContent.length}/140
+                      </span>
+                    </div>
+                  </div>
+
+                  {tutorialError && (
+                    <div className="p-3 bg-red-500/10 rounded-xl">
+                      <p className="text-red-500 text-xs">{tutorialError}</p>
+                    </div>
+                  )}
+
+                  <button
+                    onClick={handlePostTutorial}
+                    disabled={tutorialPosting || tutorialContent.length > 140 || tutorialContent.trim().length === 0}
+                    className="w-full btn-line py-4 text-lg font-bold disabled:opacity-50"
+                  >
+                    {tutorialPosting ? '投稿中...' : '投稿する'}
+                  </button>
+
+                  <button
+                    onClick={handleSkipTutorial}
+                    disabled={tutorialPosting}
+                    className="w-full text-[var(--text-tertiary)] text-sm hover:underline disabled:opacity-50"
+                  >
+                    スキップ
+                  </button>
+                </div>
+              )}
             </div>
           )}
 

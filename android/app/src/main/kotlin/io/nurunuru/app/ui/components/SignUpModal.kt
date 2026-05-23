@@ -47,13 +47,29 @@ import io.nurunuru.app.ui.theme.LocalNuruColors
 import io.nurunuru.app.viewmodel.AuthViewModel
 import io.nurunuru.app.viewmodel.GeneratedAccount
 
+// チュートリアル投稿で使用するハッシュタグ (Web/iOS と同一)。
+//
+// 既定本文に `\n#nostrはじめました` を pre-fill し、エディタを開いた瞬間から
+// ユーザーには常にハッシュタグが見えている (「勝手に付けられた」を回避する規約)。
+// 1 行目を空にすることで、ユーザーが先頭にカーソルを置けば
+// 「本文 → 改行 → #nostrはじめました」の配置が自然に成立する。
+//
+// ユーザーが意図的にハッシュタグ行を消した場合は、その状態のまま投稿する
+// (`publishTutorialPost` は自動補完を行わない。3 プラットフォーム共通の規約)。
+//
+// プレースホルダーは本文を全て消した時のガイドとしてのみ表示される
+// (pre-fill 時は OutlinedTextField の placeholder API 仕様により非表示)。
+private const val TUTORIAL_HASHTAG = "nostrはじめました"
+private const val TUTORIAL_DEFAULT_CONTENT = "\n#nostrはじめました"
+private const val TUTORIAL_PLACEHOLDER = "いまどうしてる？\n#nostrはじめました"
+
 @Composable
 fun SignUpModal(
     viewModel: AuthViewModel,
     onClose: () -> Unit,
     onSuccess: (String) -> Unit
 ) {
-    var step by remember { mutableStateOf("welcome") } // welcome, backup, relay, profile, success, completing
+    var step by remember { mutableStateOf("welcome") } // welcome, backup, relay, profile, tutorial, success, completing
     var generatedAccount by remember { mutableStateOf<GeneratedAccount?>(null) }
     var selectedRelays by remember { mutableStateOf<List<Nip65Relay>?>(null) }
     var isLoading by remember { mutableStateOf(false) }
@@ -95,10 +111,11 @@ fun SignUpModal(
                 ) {
                     Column {
                         val progress = when (step) {
-                            "welcome" -> 0.2f
-                            "backup" -> 0.4f
-                            "relay" -> 0.6f
-                            "profile" -> 0.8f
+                            "welcome" -> 1f / 6f
+                            "backup" -> 2f / 6f
+                            "relay" -> 3f / 6f
+                            "profile" -> 4f / 6f
+                            "tutorial" -> 5f / 6f
                             else -> 1f
                         }
                         Box(modifier = Modifier.fillMaxWidth().height(4.dp).background(nuruColors.bgSecondary)) {
@@ -167,11 +184,30 @@ fun SignUpModal(
                                                     isLoading = false
                                                     return@launch
                                                 }
-                                                step = "success"
+                                                step = "tutorial"
                                                 isLoading = false
                                             }
                                         },
                                         isLoading = isLoading
+                                    )
+                                }
+                                "tutorial" -> {
+                                    val coroutineScope = rememberCoroutineScope()
+                                    val internalSigner = remember { io.nurunuru.app.data.InternalSigner(viewModel.keyManager) }
+                                    TutorialStep(
+                                        onPost = { content, onResult ->
+                                            coroutineScope.launch {
+                                                val relayTriples: List<Triple<String, Boolean, Boolean>>? =
+                                                    selectedRelays?.map { Triple(it.url, it.read, it.write) }
+                                                val ok = viewModel.publishTutorialPost(
+                                                    signer = internalSigner,
+                                                    content = content,
+                                                    relays = relayTriples
+                                                )
+                                                onResult(ok)
+                                            }
+                                        },
+                                        onNext = { step = "success" }
                                     )
                                 }
                                 "success" -> SuccessStep(
@@ -682,6 +718,158 @@ fun ProfileStep(
     ) {
         if (isLoading) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
         else Text("セットアップを完了する", fontWeight = FontWeight.Bold)
+    }
+}
+
+/**
+ * Onboarding tutorial step — `#nostrはじめました` ハッシュタグ付きで最初の kind:1 を投稿する。
+ *
+ * - 既定本文: `\n#nostrはじめました` を pre-fill。エディタを開いた瞬間から
+ *   ユーザーには常時ハッシュタグが見えている (「勝手に付けられた」を回避する規約)。
+ * - ユーザーが意図的にハッシュタグ行を削除した場合は、その状態のまま投稿する。
+ *   `AuthViewModel.publishTutorialPost` は本文への自動補完・末尾付与を一切行わない。
+ * - 本文中の `#xxx` のみが `t` タグとして抽出される (PostModal と同一規約)。
+ * - 140 文字制限を強制。本文が空 (trim 後 0 文字) の場合は投稿ボタンを無効化。
+ * - 投稿成功時は確認カードを表示してから「次へ進む」で success ステップへ。
+ * - 「スキップ」で投稿せずに次のステップへ進める。
+ * - 吹き出しアイコンはぬるぬるブランドカラー (LineGreen) に統一。
+ * - プレースホルダー (薄い灰色) は本文を全て消した時のガイドとしてのみ表示。
+ *
+ * @param onPost  本文を渡して非同期投稿。結果コールバックを返す。
+ * @param onNext  次のステップ (success) に遷移するコールバック。
+ */
+@Composable
+fun TutorialStep(
+    onPost: (String, (Boolean) -> Unit) -> Unit,
+    onNext: () -> Unit
+) {
+    val nuruColors = LocalNuruColors.current
+    var content by remember { mutableStateOf(TUTORIAL_DEFAULT_CONTENT) }
+    var isPosting by remember { mutableStateOf(false) }
+    var posted by remember { mutableStateOf(false) }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+
+    // ぬるぬるブランドカラー (LineGreen) に統一。アイコンは吹き出し (Forum)。
+    IconBox(
+        icon = Icons.Default.Forum,
+        containerColor = LineGreen.copy(alpha = 0.1f),
+        iconColor = LineGreen
+    )
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text("はじめての投稿", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = nuruColors.textPrimary)
+        Text(
+            "チュートリアルとして「#nostrはじめました」をつけて、はじめての投稿をしてみましょう。",
+            fontSize = 13.sp,
+            color = nuruColors.textSecondary,
+            textAlign = TextAlign.Center
+        )
+    }
+
+    if (posted) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = LineGreen.copy(alpha = 0.1f)),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.padding(16.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = LineGreen,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(12.dp))
+                Column {
+                    Text("投稿しました！", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = nuruColors.textPrimary)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Nostr の世界へようこそ。タイムラインで「#nostrはじめました」を検索すると、同じ仲間が見つかります。",
+                        fontSize = 12.sp,
+                        color = nuruColors.textSecondary
+                    )
+                }
+            }
+        }
+
+        Button(
+            onClick = onNext,
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = LineGreen),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Text("次へ進む", fontWeight = FontWeight.Bold)
+        }
+    } else {
+        // 既定で `\n#nostrはじめました` が pre-fill されているため、エディタを開いた瞬間から
+        // ユーザーには常時ハッシュタグが見えている (「勝手に付けられた」を回避する規約)。
+        // ユーザーがハッシュタグを消したら、消した状態のまま投稿される (自動補完なし)。
+        // プレースホルダーは本文を全て消した時のガイドとしてのみ表示される。
+        OutlinedTextField(
+            value = content,
+            onValueChange = { newValue ->
+                // 140 文字制限を超える入力は受け付けない (PostModal と同じ制約)
+                if (newValue.length <= 140) content = newValue
+            },
+            label = { Text("本文") },
+            placeholder = {
+                Text(
+                    TUTORIAL_PLACEHOLDER,
+                    color = nuruColors.textTertiary
+                )
+            },
+            modifier = Modifier.fillMaxWidth().height(140.dp),
+            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = LineGreen, focusedLabelColor = LineGreen),
+            shape = RoundedCornerShape(12.dp)
+        )
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Text(
+                "${content.length}/140",
+                fontSize = 11.sp,
+                color = if (content.length >= 140) Color.Red else nuruColors.textTertiary
+            )
+        }
+
+        if (errorMsg != null) {
+            Text(errorMsg!!, color = Color.Red, fontSize = 12.sp)
+        }
+
+        Button(
+            onClick = {
+                errorMsg = null
+                isPosting = true
+                onPost(content) { ok ->
+                    isPosting = false
+                    if (ok) {
+                        posted = true
+                    } else {
+                        errorMsg = "投稿に失敗しました。通信状況を確認してください。"
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = LineGreen),
+            shape = RoundedCornerShape(16.dp),
+            // 本文が空 (trim 後 0 文字) の場合は投稿不可。
+            // pre-fill された `#nostrはじめました` を残せばそのまま投稿可能。
+            enabled = !isPosting && content.trim().isNotEmpty()
+        ) {
+            if (isPosting) {
+                CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
+            } else {
+                Text("投稿する", fontWeight = FontWeight.Bold)
+            }
+        }
+
+        TextButton(onClick = onNext, enabled = !isPosting) {
+            Text("スキップ", color = nuruColors.textTertiary)
+        }
     }
 }
 

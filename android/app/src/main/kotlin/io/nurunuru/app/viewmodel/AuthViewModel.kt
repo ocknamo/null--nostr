@@ -259,6 +259,96 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * 新規作成チュートリアル投稿。
+     * オンボーディング最終段階で kind:1 ノートを発行する。
+     *
+     * - 本文は UI 側 (TutorialStep) で既定として `\n#nostrはじめました` が pre-fill されており、
+     *   ユーザーがそのまま投稿すればハッシュタグ付きで送信される。
+     * - ユーザーが意図的にハッシュタグ行を削除した場合は、削除した状態のまま送信する。
+     *   この関数は本文への自動補完・末尾付与を一切行わない (「勝手に付けられた」を回避する規約)。
+     * - 本文中の `#xxx` のみを抽出して `t` タグを生成する (PostModal と同一規約)。
+     * - `publishInitialMetadata` と同じ一時 NostrClient を生成して送信する
+     *   (この時点では prefs にリレーが入っていても client が起動していない)。
+     * - 140 文字超 / 空本文の場合は送信せず `false` を返す。
+     *
+     * @return 投稿成功時 true。
+     */
+    suspend fun publishTutorialPost(
+        signer: io.nurunuru.app.data.AppSigner,
+        content: String,
+        relays: List<Triple<String, Boolean, Boolean>>? = null
+    ): Boolean = withContext(Dispatchers.IO) {
+        try {
+            // 本文は UI 側で pre-fill 済み (`\n#nostrはじめました`)。
+            // ユーザーが意図的にハッシュタグを消した場合は、消した状態のまま送信する
+            // (自動補完・末尾付与は一切行わない。3 プラットフォーム共通の規約)。
+            // trim せず原文を送信して、pre-fill 由来の先頭改行を尊重する。
+            val finalContent = content
+
+            // 本文中の `#xxx` のみを `t` タグとして抽出 (PostModal.kt と同一規約)。
+            // ユーザーがハッシュタグを消していれば t タグも付かない (意図尊重)。
+            // Web (SignUpModal.js) / iOS (AuthViewModel.swift) と同じく
+            // 「lowercase → distinct」の順で正規化し、`#Foo` と `#foo` を同一視する。
+            val hashtagRegex = Regex("#([\\w\\u3040-\\u309F\\u30A0-\\u30FF\\u4E00-\\u9FFF\\uFF00-\\uFFEF]+)")
+            val foundTags = hashtagRegex.findAll(finalContent)
+                .map { it.groupValues[1].lowercase() }
+                .distinct()
+                .toList()
+
+            if (finalContent.length > 140) {
+                android.util.Log.w("AuthViewModel", "publishTutorialPost: content exceeds 140 chars")
+                return@withContext false
+            }
+            if (finalContent.trim().isEmpty()) {
+                android.util.Log.w("AuthViewModel", "publishTutorialPost: content is empty")
+                return@withContext false
+            }
+            val tags = foundTags.map { listOf("t", it) }  // foundTags は既に lowercase 正規化済み
+
+            val targetRelays = relays?.map { it.first }
+                ?: prefs.nip65Relays.map { it.url }.ifEmpty {
+                    listOf("wss://yabu.me", "wss://relay-jp.nostr.wirednet.jp", "wss://r.kojira.io")
+                }
+
+            val client = NostrClient(
+                context = getApplication(),
+                relays = targetRelays,
+                signer = signer
+            )
+            try {
+                client.connect()
+                delay(1500)
+
+                val cache = io.nurunuru.app.data.cache.NostrCache(getApplication())
+                val recommendationEngine = io.nurunuru.app.data.RecommendationEngine(getApplication())
+                val repository = NostrRepository(client, prefs, cache, recommendationEngine)
+
+                val result = repository.publishNote(
+                    content = finalContent,
+                    customTags = tags
+                )
+                delay(800)
+
+                if (result == null) {
+                    android.util.Log.w("AuthViewModel", "publishTutorialPost: publishNote returned null")
+                    false
+                } else {
+                    android.util.Log.d("AuthViewModel", "publishTutorialPost OK: ${result.id}")
+                    true
+                }
+            } finally {
+                // 例外パスでも必ず接続を閉じる (リレー接続リーク防止)。
+                try { client.disconnect() } catch (e: Exception) {
+                    android.util.Log.w("AuthViewModel", "publishTutorialPost: disconnect failed", e)
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("AuthViewModel", "publishTutorialPost failed", e)
+            false
+        }
+    }
+
     fun completeRegistration(pubKeyHex: String) {
         // 秘密鍵は既に SecureKeyManager に保存済み。
         // 「はじめる」タップ時はログイン状態を先に反映し、LoginScreen/新規登録画面へ

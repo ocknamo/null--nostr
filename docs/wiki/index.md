@@ -40,6 +40,7 @@
 | Page | Summary |
 |---|---|
 | [[features/timeline]] | フォロー / おすすめタイムライン、投稿表示、リアクション状態。 |
+| [[features/onboarding]] | 新規登録 6 ステップ + `#nostrはじめました` チュートリアル投稿。 |
 | [[features/post-composer]] | 投稿作成、140文字制限、画像アップロード、リレー指定、NIP-70。 |
 | [[features/notifications]] | 通知一覧、Kind 6 / Kind 1 #p、ポーリング、表示仕様。 |
 | [[features/search]] | Android の高度検索、NIP-50、検索演算子、クライアント側フィルタ。 |

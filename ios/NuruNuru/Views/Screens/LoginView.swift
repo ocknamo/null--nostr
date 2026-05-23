@@ -540,14 +540,30 @@ struct NuruOutlineButtonStyle: ButtonStyle {
     }
 }
 
-// MARK: - Sign Up Sheet (5-step wizard — mirrors Android SignUpModal.kt)
+// チュートリアル投稿で使用する固定ハッシュタグ (Web/Android と同一)。
+//
+// 既定本文に `\n#nostrはじめました` を pre-fill し、エディタを開いた瞬間から
+// ユーザーには常にハッシュタグが見えている (「勝手に付けられた」を回避する規約)。
+// 1 行目を空にすることで、ユーザーが先頭にカーソルを置けば
+// 「本文 → 改行 → #nostrはじめました」の配置が自然に成立する。
+//
+// ユーザーが意図的にハッシュタグ行を消した場合は、その状態のまま投稿する
+// (`publishTutorialPost` は自動補完を行わない。3 プラットフォーム共通の規約)。
+//
+// プレースホルダーは本文を全て消した時のガイドとしてのみ表示される
+// (pre-fill 時は ZStack オーバーレイの content.isEmpty 条件により非表示)。
+private let kTutorialHashtag = "nostrはじめました"
+private let kTutorialDefaultContent = "\n#nostrはじめました"
+private let kTutorialPlaceholder = "いまどうしてる？\n#nostrはじめました"
+
+// MARK: - Sign Up Sheet (6-step wizard — mirrors Android SignUpModal.kt)
 
 struct SignUpSheet: View {
     @Binding var isPresented: Bool
     @Environment(AuthViewModel.self) private var viewModel
     @Environment(\.nuruTheme) private var theme
 
-    // Step: welcome → backup → relay → profile → success
+    // Step: welcome → backup → relay → profile → tutorial → success
     @State private var step = "welcome"
     @State private var generatedAccount: AuthViewModel.GeneratedAccount?
     @State private var selectedRelays: [Nip65Relay]?
@@ -556,11 +572,12 @@ struct SignUpSheet: View {
 
     private var progress: CGFloat {
         switch step {
-        case "welcome": return 0.2
-        case "backup":  return 0.4
-        case "relay":   return 0.6
-        case "profile": return 0.8
-        default:        return 1.0
+        case "welcome":  return 1.0 / 6.0
+        case "backup":   return 2.0 / 6.0
+        case "relay":    return 3.0 / 6.0
+        case "profile":  return 4.0 / 6.0
+        case "tutorial": return 5.0 / 6.0
+        default:         return 1.0
         }
     }
 
@@ -616,6 +633,16 @@ struct SignUpSheet: View {
                                         )
                                     },
                                     isLoading: isLoading
+                                )
+                            case "tutorial":
+                                SignUpTutorialStep(
+                                    onPost: { content in
+                                        return await viewModel.publishTutorialPost(
+                                            content: content,
+                                            relays: selectedRelays
+                                        )
+                                    },
+                                    onNext: { step = "success" }
                                 )
                             case "success":
                                 SignUpSuccessStep(
@@ -685,8 +712,179 @@ struct SignUpSheet: View {
                 birthday: birthday,
                 relays: relayTriples
             )
-            step = "success"
+            // プロフィール発行後はチュートリアル投稿ステップへ。
+            // (発行に失敗してもアカウントは作成済みなので進める。)
+            step = "tutorial"
             isLoading = false
+        }
+    }
+}
+
+// MARK: - Step 4.5: Tutorial Post (#nostrはじめました)
+
+/// オンボーディング最終ステップ — `#nostrはじめました` ハッシュタグ付きの kind:1 を投稿する。
+/// Android `TutorialStep` と Web `tutorial` ステップに対応。
+///
+/// - 既定本文: `\n#nostrはじめました` を pre-fill。エディタを開いた瞬間から
+///   ユーザーには常時ハッシュタグが見えている (「勝手に付けられた」を回避する規約)。
+/// - ユーザーが意図的にハッシュタグ行を削除した場合は、その状態のまま投稿する。
+///   `AuthViewModel.publishTutorialPost` は本文への自動補完・末尾付与を一切行わない。
+/// - 本文中の `#xxx` のみが `t` タグとして抽出される (PostSheet と同一規約)。
+/// - 140 文字制限を強制。本文が空 (trim 後 0 文字) の場合は投稿ボタンを無効化。
+/// - 投稿完了時は確認カード → 「次へ進む」で success へ
+/// - 「スキップ」で投稿せずに success へ進める
+/// - 吹き出しアイコンはぬるぬるブランドカラー (`NuruColors.lineGreen`) に統一。
+/// - プレースホルダー (`theme.textTertiary` 薄い灰色 ZStack オーバーレイ) は
+///   本文を全て消した時のガイドとしてのみ表示される (`content.isEmpty` のみ重ね描画)。
+private struct SignUpTutorialStep: View {
+    let onPost: (String) async -> Bool
+    let onNext: () -> Void
+
+    @Environment(\.nuruTheme) private var theme
+    @State private var content: String = kTutorialDefaultContent
+    @State private var isPosting: Bool = false
+    @State private var posted: Bool = false
+    @State private var errorMessage: String? = nil
+
+    private var remaining: Int { UI.postMaxLength - content.count }
+    // 本文が空 (trim 後 0 文字) の場合は投稿不可。
+    // pre-fill された `#nostrはじめました` を残せばそのまま投稿可能。
+    // publishTutorialPost は自動補完を行わないため、消したら消えたまま送信される。
+    private var canPost: Bool {
+        remaining >= 0 && !isPosting && !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        VStack(spacing: NuruSpacing.space5) {
+            // ぬるぬるブランドカラー (LineGreen) に統一。アイコンは吹き出し。
+            SignUpIconBox(
+                systemName: "bubble.left.and.bubble.right.fill",
+                containerColor: NuruColors.lineGreen.opacity(0.1),
+                iconColor: NuruColors.lineGreen
+            )
+
+            VStack(spacing: NuruSpacing.space2) {
+                Text("はじめての投稿")
+                    .font(NuruFont.titleMedium())
+                    .foregroundStyle(theme.textPrimary)
+                Text("チュートリアルとして「#nostrはじめました」をつけて、はじめての投稿をしてみましょう。")
+                    .font(NuruFont.bodySmall())
+                    .foregroundStyle(theme.textSecondary)
+                    .multilineTextAlignment(.center)
+            }
+
+            if posted {
+                // Posted confirmation card
+                HStack(alignment: .top, spacing: NuruSpacing.space3) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle(NuruColors.lineGreen)
+                    VStack(alignment: .leading, spacing: NuruSpacing.space1) {
+                        Text("投稿しました！")
+                            .font(NuruFont.bodyMedium())
+                            .fontWeight(.bold)
+                            .foregroundStyle(theme.textPrimary)
+                        Text("Nostr の世界へようこそ。タイムラインで「#nostrはじめました」を検索すると、同じ仲間が見つかります。")
+                            .font(NuruFont.labelSmall())
+                            .foregroundStyle(theme.textSecondary)
+                    }
+                }
+                .padding(NuruSpacing.space4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(NuruColors.lineGreen.opacity(0.1))
+                .cornerRadius(NuruSpacing.radiusXl)
+
+                Button {
+                    onNext()
+                } label: {
+                    Text("次へ進む")
+                        .font(NuruFont.buttonMedium())
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 56)
+                }
+                .buttonStyle(NuruPrimaryButtonStyle())
+            } else {
+                // Editor (TextEditor は placeholder API を持たないため、ZStack で薄い灰色の
+                //         オーバーレイ Text を重ねる。content.isEmpty の時だけ表示)。
+                VStack(alignment: .trailing, spacing: NuruSpacing.space1) {
+                    ZStack(alignment: .topLeading) {
+                        TextEditor(text: $content)
+                            .font(NuruFont.bodyMedium())
+                            .frame(minHeight: 120, maxHeight: 160)
+                            .padding(NuruSpacing.space2)
+                            // TextEditor のデフォルト背景 (システム白) を消して、ダーク/ライト両対応の
+                            // theme.bgSecondary を背面に通す。他の TextEditor 使用箇所
+                            // (PostSheet / QuoteRepostSheet 等) と同一の扱い。
+                            .scrollContentBackground(.hidden)
+                            .background(theme.bgSecondary)
+                            .cornerRadius(NuruSpacing.radiusMd)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: NuruSpacing.radiusMd)
+                                    .stroke(theme.borderColor, lineWidth: 1)
+                            )
+                            .onChange(of: content) { _, newValue in
+                                // 140 文字制限を強制 (PostSheet と同じ制約)
+                                if newValue.count > UI.postMaxLength {
+                                    content = String(newValue.prefix(UI.postMaxLength))
+                                }
+                            }
+
+                        if content.isEmpty {
+                            // 薄い灰色のプレースホルダーテキスト。
+                            // TextEditor 内側の padding(NuruSpacing.space2) と同じ余白 + 4 を足し、
+                            // TextEditor 内のテキスト開始位置とほぼ揃える。allowsHitTesting=false で
+                            // タップは下層の TextEditor に通す。
+                            Text(kTutorialPlaceholder)
+                                .font(NuruFont.bodyMedium())
+                                .foregroundStyle(theme.textTertiary)
+                                .padding(.horizontal, NuruSpacing.space2 + 4)
+                                .padding(.vertical, NuruSpacing.space2 + 8)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    Text("\(content.count)/\(UI.postMaxLength)")
+                        .font(NuruFont.labelSmall())
+                        .foregroundStyle(remaining < 0 ? NuruColors.colorError : theme.textTertiary)
+                }
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(NuruFont.labelSmall())
+                        .foregroundStyle(NuruColors.colorError)
+                        .multilineTextAlignment(.center)
+                }
+
+                Button {
+                    errorMessage = nil
+                    isPosting = true
+                    Task {
+                        let ok = await onPost(content)
+                        isPosting = false
+                        if ok {
+                            posted = true
+                        } else {
+                            errorMessage = "投稿に失敗しました。通信状況を確認してください。"
+                        }
+                    }
+                } label: {
+                    Group {
+                        if isPosting {
+                            ProgressView().tint(.white).scaleEffect(0.8)
+                        } else {
+                            Text("投稿する").font(NuruFont.buttonMedium())
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 56)
+                }
+                .buttonStyle(NuruPrimaryButtonStyle(isDisabled: !canPost))
+                .disabled(!canPost)
+
+                Button("スキップ") { onNext() }
+                    .font(NuruFont.bodyMedium())
+                    .foregroundStyle(theme.textTertiary)
+                    .disabled(isPosting)
+            }
         }
     }
 }

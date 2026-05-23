@@ -266,6 +266,95 @@ final class AuthViewModel {
         }
     }
 
+    // MARK: - Tutorial Post (Onboarding)
+
+    /// オンボーディング最終段階で発行する「はじめての投稿」。
+    /// Android `AuthViewModel.publishTutorialPost()` と Web `SignUpModal#handlePostTutorial` に対応。
+    ///
+    /// - 本文は UI 側 (`SignUpTutorialStep`) で既定として `\n#nostrはじめました` が
+    ///   pre-fill されており、ユーザーがそのまま投稿すればハッシュタグ付きで送信される。
+    /// - ユーザーが意図的にハッシュタグ行を削除した場合は、削除した状態のまま送信する。
+    ///   この関数は本文への自動補完・末尾付与を一切行わない (「勝手に付けられた」を回避する規約)。
+    /// - 本文中の `#xxx` のみを抽出して `t` タグを生成する (PostSheet と同一規約)。
+    /// - `publishInitialMetadata` と同じく、サインアップ用に一時 `NostrClient` + `NostrRepository` を生成して送信する。
+    /// - リレーが空の場合は default JP relay 3 つにフォールバック。
+    /// - 140 文字超 / 空本文の場合は送信せず `false` を返す。
+    ///
+    /// - Returns: 送信成功時 `true`。
+    @discardableResult
+    func publishTutorialPost(
+        content: String,
+        relays: [Nip65Relay]? = nil
+    ) async -> Bool {
+        // 本文は UI 側で pre-fill 済み。trim せず原文をそのまま送信し、
+        // pre-fill 由来の先頭改行 (本文 → 改行 → ハッシュタグの配置) を尊重する。
+        let finalContent = content
+
+        // 本文中の `#xxx` のみを抽出 (PostModal.kt / SignUpModal.js と同じ regex)。
+        // ユーザーがハッシュタグを消していれば t タグも付かない (意図尊重)。
+        let hashtagRegex = try? NSRegularExpression(
+            pattern: #"#([\p{L}\p{N}_\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\uFF00-\uFFEF]+)"#
+        )
+        var foundTags: [String] = []
+        var seen = Set<String>()
+        if let regex = hashtagRegex {
+            let nsRange = NSRange(finalContent.startIndex..., in: finalContent)
+            for match in regex.matches(in: finalContent, range: nsRange) {
+                guard match.numberOfRanges >= 2,
+                      let range = Range(match.range(at: 1), in: finalContent) else { continue }
+                let tag = String(finalContent[range]).lowercased()
+                if seen.insert(tag).inserted { foundTags.append(tag) }
+            }
+        }
+
+        guard finalContent.count <= 140 else {
+            AppLogger.log("Auth", "publishTutorialPost rejected: content exceeds 140 chars")
+            return false
+        }
+        guard !finalContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            AppLogger.log("Auth", "publishTutorialPost rejected: content is empty")
+            return false
+        }
+        let customTags: [[String]] = foundTags.map { ["t", $0] }
+
+        let targetRelayUrls: [String] = (relays?.map(\.url))
+            ?? (prefs.selectedRelays.isEmpty
+                ? ["wss://yabu.me", "wss://relay-jp.nostr.wirednet.jp", "wss://r.kojira.io"]
+                : prefs.selectedRelays)
+
+        do {
+            let tempPrefs = AppPreferences()
+            tempPrefs.selectedRelays = targetRelayUrls
+            tempPrefs.mainRelay = targetRelayUrls.first ?? "wss://yabu.me"
+            tempPrefs.publicKeyHex = prefs.publicKeyHex
+
+            let repo = NostrRepository(
+                keyManager: keyManager,
+                prefs: tempPrefs
+            )
+
+            await repo.client.connect(relayUrls: targetRelayUrls)
+            try await Task.sleep(nanoseconds: 1_500_000_000)
+
+            do {
+                _ = try await repo.publishNote(
+                    content: finalContent,
+                    customTags: customTags
+                )
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                await repo.client.disconnect()
+                return true
+            } catch {
+                // 投稿失敗時もリレー接続を閉じる (リーク防止)。
+                await repo.client.disconnect()
+                throw error
+            }
+        } catch {
+            AppLogger.log("Auth", "publishTutorialPost failed: \(error)")
+            return false
+        }
+    }
+
     // MARK: - Key Export (for settings screen)
 
     func getNsecTemporary() -> String? {

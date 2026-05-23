@@ -210,3 +210,52 @@ LLM Wiki の時系列ログです。追記専用として扱います。
 - iOS Talk now records explicit MLS exits in the persistent left-group blocklist and applies that blocklist in both `getLocalMlsGroups` (cache-first startup) and `fetchMlsGroups` (relay refresh).
 - `visibleFfiMlsGroups` now treats local hidden/left tombstones as authoritative for DMs and named groups, and no longer auto-prunes tombstones just because the visible list would otherwise be empty. This prevents a deliberately empty Talk list after leaving the last group from being repopulated from Rust SQLite/relay state.
 - `TalkViewModel.leaveGroup` removes exited named groups from both visible lists immediately, mirrors DM sibling exits into the persistent left set, and clears fresh-DM session pins for exited groups.
+
+## [2026-05-23] feat | Onboarding tutorial post step (#nostrはじめました)
+
+- Added a new "tutorial" step between `profile` and `success` in the 新規登録 (sign-up) wizard across all 3 platforms.
+- The step pre-fills `#nostrはじめました\n`, enforces 140-char limit, lets the user freely edit / append, and publishes a kind-1 note via the existing publish path with auto-extracted `t` tags (lowercased). The `nostrはじめました` tag is auto-appended to both content and `t` tags if the user removes it.
+- Web (`components/SignUpModal.js`): new `tutorial` step state + `handlePostTutorial()` using `createEventTemplate(1, ...)` → `signEventNip07` → `publishEvent`. Progress bar reflects 6 segments (was 5).
+- Android (`SignUpModal.kt` + `AuthViewModel.kt`): new `TutorialStep` composable + `AuthViewModel.publishTutorialPost(signer, content, relays)`. Uses the same temporary `NostrClient` + `NostrRepository` pattern as `publishInitialMetadata`, then calls `NostrRepository.publishNote(content, customTags = [["t", ...], ...])`.
+- iOS (`LoginView.swift` + `AuthViewModel.swift`): new `SignUpTutorialStep` view + `AuthViewModel.publishTutorialPost(content:, relays:)`. Mirrors the Android pattern with a temporary `NostrRepository`, signing via `keyManager`-backed `signer`.
+- Both confirmation copy ("投稿しました！" + 「タイムラインで「#nostrはじめました」を検索すると、同じ仲間が見つかります。」) and skip behavior are identical across platforms per [[ui/android-ios-sync]].
+- New wiki page: [[features/onboarding]] documents the 6-step contract, tutorial-step semantics, hashtag handling, and per-platform notes.
+- No NIP support change; no design-token change; no new dependency. AGENTS.md unchanged.
+
+## [2026-05-23] polish | Onboarding tutorial step (production hardening)
+
+- iOS `SignUpTutorialStep` の `TextEditor` に `scrollContentBackground(.hidden)` を追加。リポジトリ内の他 `TextEditor` 使用箇所 (PostSheet / QuoteRepostSheet / ReportSheet / 各 MiniApp) と同じ扱いに揃え、ダーク/ライトテーマでデフォルト背景 (白) が透けてしまう問題を防止。
+- Android `AuthViewModel.publishTutorialPost` で `client.connect()` 以降を `try/finally` で囲み、例外パスでも必ず `client.disconnect()` を呼ぶよう修正 (リレー接続リーク防止)。
+- iOS `AuthViewModel.publishTutorialPost` で `publishNote` 例外パスにも `await repo.client.disconnect()` を追加 (同上)。
+- 仕様・UI フロー・wiki ドキュメント (`docs/wiki/features/onboarding.md` / `docs/wiki/index.md` / `docs/wiki/log.md`) に変更なし。`wiki-lint: 0 failure(s), 0 warning(s)`。
+
+## [2026-05-23] polish | Onboarding tutorial step (UX revision: hashtag-at-end, green bubble, placeholder)
+
+- ハッシュタグ配置を変更: pre-fill していた `#nostrはじめました\n` (本文先頭) を撤廃し、デフォルト本文を空に。投稿時に `publishTutorialPost` (Web/Android/iOS いずれも) が本文末尾へ改行 + `#nostrはじめました` を自動付与するため、結果として「本文 → 改行 → ハッシュタグ」という配置が常に成立する。本文を完全に空にしたまま投稿した場合は `#nostrはじめました` 単独で送信される。
+- プレースホルダー追加: `いまどうしてる？\n#nostrはじめました` を薄い灰色 (`var(--text-tertiary)` / `nuruColors.textTertiary` / `theme.textTertiary`) で表示し、ユーザーが何を書けばよいかの例示にする。
+  - Web (`components/SignUpModal.js`): `<textarea>` の `placeholder` 属性 + `placeholder:text-[var(--text-tertiary)] placeholder:opacity-70`。
+  - Android (`SignUpModal.kt`): `OutlinedTextField` の `placeholder = { Text(TUTORIAL_PLACEHOLDER, color = nuruColors.textTertiary) }`。
+  - iOS (`LoginView.swift`): `TextEditor` が placeholder API を持たないため、`ZStack(alignment: .topLeading)` で `content.isEmpty` 時だけ `Text(kTutorialPlaceholder)` を `theme.textTertiary` で重ね描画。`allowsHitTesting(false)` で下層 `TextEditor` にタップを通す。
+- ブランド統一: チュートリアル吹き出しアイコンの色を pink (`#E91E63` / `Color.pink`) からぬるぬるブランドカラーの **LineGreen** に変更。
+  - Web: `bg-pink-500/10` + `text-pink-500` → `rgba(6,199,85,0.1)` + `var(--line-green)`。
+  - Android: `Color(0xFFE91E63)` → `LineGreen`。
+  - iOS: `Color.pink` / `.pink` → `NuruColors.lineGreen`。
+- 投稿ボタンの `enabled` 条件を緩和: 本文が空でも `#nostrはじめました` 単独投稿が可能になるよう、すべてのプラットフォームで「投稿中でなく、かつ 140 文字以下」のみを有効条件とした (空文字拒否を削除)。Android/iOS の `publishTutorialPost` も `trimmed.isEmpty()` の場合は `#nostrはじめました` を本文として送信する分岐を追加。
+- 修正ファイル: `components/SignUpModal.js`, `android/app/src/main/kotlin/io/nurunuru/app/ui/components/SignUpModal.kt`, `android/app/src/main/kotlin/io/nurunuru/app/viewmodel/AuthViewModel.kt`, `ios/NuruNuru/Views/Screens/LoginView.swift`, `ios/NuruNuru/ViewModels/AuthViewModel.swift`, `docs/wiki/features/onboarding.md`。NIP サポート / design-token / 依存に変更なし。
+
+## [2026-05-23] polish | Onboarding tutorial step (UX revision 2: visible hashtag + user-respect deletion)
+
+- 「#nostrはじめました が見えないまま自動付与されるのは不信感を生む」「ユーザーが消したら消えたまま投稿したい」というユーザー要望に基づき、3 プラットフォームの仕様を以下の通り改訂:
+  - **pre-fill 復活**: 既定本文を空ではなく `\n#nostrはじめました` に変更。エディタを開いた瞬間からハッシュタグが常時可視化される。1 行目を空にしてカーソルを先頭に置けば「本文 → 改行 → ハッシュタグ」の配置が自然に成立する。
+  - **自動補完ロジック完全撤廃**: `publishTutorialPost` (Web/Android/iOS) から「本文末尾に `\n#nostrはじめました` を 3 分岐で付与する」処理を削除。ユーザーがハッシュタグ行を消したら、消した状態のまま送信される。
+  - **t タグ抽出も意図尊重**: 本文中の `#xxx` のみを `["t", value]` として送信。ユーザーが `#nostrはじめました` を消していれば `t` タグも付かない (本文と `t` タグの内容が常に一致する規約)。
+  - **空本文ガード追加**: 投稿ボタン enabled 条件を「投稿中でない && 140 文字以下 && trim 後 0 文字でない」に強化。pre-fill された `#nostrはじめました` を残せば自動的に enable のため、UX としては自然。Web は throw、Android/iOS は `return false` で空送信を防ぐ。
+- 修正ファイル (コード 5 + ドキュメント 2):
+  - `components/SignUpModal.js`: `TUTORIAL_DEFAULT_CONTENT` 復活 + `handlePostTutorial` 内の末尾自動補完 3 分岐削除 + 空本文 throw 追加 + ボタン disabled 条件に `trim().length === 0` 追加。
+  - `android/.../ui/components/SignUpModal.kt`: `TUTORIAL_DEFAULT_CONTENT = "\n#nostrはじめました"` + KDoc 新仕様化 + 投稿ボタン `enabled = !isPosting && content.trim().isNotEmpty()`。
+  - `android/.../viewmodel/AuthViewModel.kt`: `publishTutorialPost` の末尾自動補完 `when` ブロック削除 + 空本文ガード + KDoc 新仕様化。
+  - `ios/.../Views/Screens/LoginView.swift`: `kTutorialDefaultContent = "\n#nostrはじめました"` + docstring 新仕様化 + `canPost` に空本文判定追加。
+  - `ios/.../ViewModels/AuthViewModel.swift`: `publishTutorialPost` の末尾自動補完分岐削除 + 空本文 guard + docstring 新仕様化。
+  - `docs/wiki/features/onboarding.md`: 「Tutorial step contract」セクションを pre-fill + no-auto-completion 規約に書き換え + Android/iOS の投稿ボタン条件を更新 + Open questions に「先頭改行 1 文字分の 140 文字制限への影響」を追記。
+- finalize: Android `publishTutorialPost` の t タグ抽出を `distinct → lowercase` から `lowercase → distinct` に修正。Web (`toLowerCase()` 後に `seen` 重複排除) / iOS (`lowercased()` 後に `seen.insert`) と同じ「lowercase-first → distinct」順に揃え、`#Foo` と `#foo` を本文に混在させた時の `t` タグ重複を 3 プラットフォーム同一挙動 (1 個に正規化) で扱うようにした。下流 `tags = foundTags.map { listOf("t", it) }` も二重 lowercase を解消。シナリオ検証 6 ケース (pre-fill そのまま / 本文追記 + pre-fill 残し / ハッシュタグだけ削除 + 本文あり / 全部削除 / 140 文字超 / `#Foo` と `#foo` 混在) すべて 3 プラットフォーム同一結果で通過。
+- NIP サポート / design-token / 依存に変更なし。AGENTS.md 不変。

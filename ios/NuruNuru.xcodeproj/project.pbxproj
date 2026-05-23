@@ -153,7 +153,7 @@
 		210FABCD51D6764B06FE9600 /* ElevenLabsSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ElevenLabsSettingsView.swift; sourceTree = "<group>"; };
 		22C81898CCAB5026394F6CCE /* EmojiSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmojiSettingsView.swift; sourceTree = "<group>"; };
 		258F294215084C36B837E1BC /* NuruTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NuruTheme.swift; sourceTree = "<group>"; };
-		27EF9AB133C5BFB1E50D443C /* NuruNuru.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = NuruNuru.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		27EF9AB133C5BFB1E50D443C /* NuruNuru.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NuruNuru.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2B58808CC989E2639C2EC065 /* CreateGroupSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateGroupSheet.swift; sourceTree = "<group>"; };
 		2E21638AD92895A91FE23DCA /* NuruNuruTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = NuruNuruTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2FD0E63F60538AB4F99A8263 /* ReactionEmojiPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReactionEmojiPicker.swift; sourceTree = "<group>"; };
@@ -745,6 +745,8 @@
 				DEVELOPMENT_TEAM = 66G7S3P755;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = NuruNuru/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "ぬるぬる";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -889,6 +891,8 @@
 				DEVELOPMENT_TEAM = 66G7S3P755;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = NuruNuru/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "ぬるぬる";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
