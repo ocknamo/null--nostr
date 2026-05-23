@@ -390,3 +390,8 @@ LLM Wiki の時系列ログです。追記専用として扱います。
 - `./gradlew assembleDebug` 成功。
 - 接続済み Android 実機 `9DNBNF45Y9AQFEY9` に debug APK を `adb install -r` でインストール成功。
 - 注意: production / Play Store 配布では Play App Signing の SHA-256 fingerprint を assetlinks に追加する必要がある。Proton Pass / 1Password / Bitwarden 等の外部 Passkey provider は、その provider が WebAuthn PRF/hmac-secret extension に対応している場合のみ Nosskey direct method で動作する。
+
+## [2026-05-24] fix | Disable assetlinks cache during Android Passkey testing
+
+- `https://www.nullnull.app/.well-known/assetlinks.json` が Vercel/CDN 上で古い placeholder fingerprint を返し続けるため、Android 実機テスト中は cache を無効化。
+- `app/.well-known/assetlinks.json/route.js` と `next.config.js` の Cache-Control を `no-cache, no-store, must-revalidate` に変更。
