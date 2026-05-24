@@ -103,6 +103,14 @@ fun MainScreen(
             ).also { it.connect() }
         }
     }
+    DisposableEffect(nostrClient) {
+        onDispose {
+            // Logout removes MainScreen from composition. Close relay sockets immediately
+            // so old account subscriptions/caches do not survive until process restart.
+            try { nostrClient.disconnect() } catch (_: Exception) { }
+        }
+    }
+
     val nostrCache = remember { app.nostrCache }
     val repository = remember { NostrRepository(nostrClient, app.prefs, nostrCache, recommendationEngine) }
 

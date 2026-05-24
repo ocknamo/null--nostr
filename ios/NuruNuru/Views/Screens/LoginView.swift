@@ -1,3 +1,4 @@
+import CoreLocation
 import PhotosUI
 import SwiftUI
 
@@ -1138,6 +1139,7 @@ private struct SignUpRelayStep: View {
     @State private var regionName = "東京"
     @State private var isLoading = false
     @State private var showRegionPicker = false
+    @StateObject private var locationHelper = SignUpLocationHelper()
 
     init(onRelaysSelected: @escaping ([Nip65Relay]) -> Void) {
         self.onRelaysSelected = onRelaysSelected
@@ -1279,13 +1281,77 @@ private struct SignUpRelayStep: View {
     }
 
     private func requestGPSRelays() {
-        // iOS CoreLocation — simplified: request once
         isLoading = true
-        // For now, default to Tokyo if location unavailable
-        regionName = "東京 (GPS推定)"
-        let config = RelayDiscovery.generateRelayListByLocation(userLat: 35.6762, userLon: 139.6503)
-        recommendedRelays = config.combined
-        isLoading = false
+        locationHelper.requestLocation { result in
+            isLoading = false
+            switch result {
+            case .success(let location):
+                let lat = location.coordinate.latitude
+                let lon = location.coordinate.longitude
+                let config = RelayDiscovery.generateRelayListByLocation(userLat: lat, userLon: lon)
+                regionName = "現在地"
+                recommendedRelays = config.combined
+            case .failure:
+                // Keep a graceful fallback so sign-up is never blocked.
+                regionName = "東京 (位置情報なし)"
+                let config = RelayDiscovery.generateRelayListByLocation(userLat: 35.6762, userLon: 139.6503)
+                recommendedRelays = config.combined
+            }
+        }
+    }
+}
+
+private final class SignUpLocationHelper: NSObject, ObservableObject, CLLocationManagerDelegate {
+    private lazy var manager: CLLocationManager = {
+        let manager = CLLocationManager()
+        manager.delegate = self
+        manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+        return manager
+    }()
+
+    private var completion: ((Result<CLLocation, Error>) -> Void)?
+    private var didRespond = false
+
+    func requestLocation(completion: @escaping (Result<CLLocation, Error>) -> Void) {
+        self.completion = completion
+        self.didRespond = false
+        DispatchQueue.main.async {
+            switch self.manager.authorizationStatus {
+            case .notDetermined:
+                self.manager.requestWhenInUseAuthorization()
+            case .authorizedWhenInUse, .authorizedAlways:
+                self.manager.requestLocation()
+            default:
+                self.finish(.failure(NSError(domain: "location", code: -1)))
+            }
+        }
+    }
+
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        switch manager.authorizationStatus {
+        case .authorizedWhenInUse, .authorizedAlways:
+            manager.requestLocation()
+        case .denied, .restricted:
+            finish(.failure(NSError(domain: "location", code: -2)))
+        default:
+            break
+        }
+    }
+
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard let location = locations.last else { return }
+        finish(.success(location))
+    }
+
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        finish(.failure(error))
+    }
+
+    private func finish(_ result: Result<CLLocation, Error>) {
+        guard !didRespond else { return }
+        didRespond = true
+        completion?(result)
+        completion = nil
     }
 }
 

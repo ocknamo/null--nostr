@@ -292,6 +292,15 @@ actor NostrRepository {
         return compact
     }
 
+    /// Clear in-memory and persisted per-session caches before logout.
+    func clearSessionCachesForLogout() {
+        cache.clearAll()
+        bookmarkEventIdCache.removeAll()
+        bookmarkEventIdFetchTasks.values.forEach { $0.cancel() }
+        bookmarkEventIdFetchTasks.removeAll()
+        quotedPostCache.removeAll()
+    }
+
     /// Disconnect all relays and clean up.
     func disconnect() async {
         isConnected = false

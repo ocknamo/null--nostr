@@ -22,6 +22,7 @@ struct SettingsView: View {
     let repository:    NostrRepository
     let prefs:         AppPreferences
     var connectionVM:  ConnectionViewModel? = nil
+    var onLogout:      (() -> Void)? = nil
     var onExternalAppFullscreenChanged: ((Bool) -> Void)? = nil
 
     @Environment(\.nuruTheme) private var theme
@@ -190,7 +191,7 @@ struct SettingsView: View {
             profile = profiles.first
         }
         .alert("ログアウト", isPresented: $showLogout) {
-            Button("ログアウト", role: .destructive) { authViewModel.logout() }
+            Button("ログアウト", role: .destructive) { onLogout?() ?? authViewModel.logout() }
             Button("キャンセル", role: .cancel) {}
         } message: {
             Text("ログアウトします。秘密鍵はこのデバイスから削除されます。")

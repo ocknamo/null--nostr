@@ -55,6 +55,14 @@ struct MainTabView: View {
         _connectionVM   = State(initialValue: ConnectionViewModel(repository: repo))
     }
 
+    private func performLogout() {
+        Task {
+            await repository.clearSessionCachesForLogout()
+            await repository.disconnect()
+            await MainActor.run { authViewModel.logout() }
+        }
+    }
+
     var body: some View {
         ZStack {
             // CONNECTION STATUS BANNER (shown when disconnected/offline)
@@ -126,6 +134,7 @@ struct MainTabView: View {
                     repository:   repository,
                     prefs:        authViewModel.prefs,
                     connectionVM: connectionVM,
+                    onLogout: performLogout,
                     onExternalAppFullscreenChanged: { hidden in
                         hideBottomNavForExternalMiniApp = hidden
                     }
@@ -193,7 +202,7 @@ struct MainTabView: View {
         .sheet(isPresented: $showAppSettings) {
             AppSettingsView(
                 onDismiss: { showAppSettings = false },
-                onLogout: { authViewModel.logout() }
+                onLogout: performLogout
             )
         }
         // UserProfileSheet — mirrors Android UserProfileModal with DM button

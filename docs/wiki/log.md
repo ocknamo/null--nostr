@@ -428,3 +428,17 @@ LLM Wiki の時系列ログです。追記専用として扱います。
   - `SettingsScreen.SecuritySettingsSection` を async export に変更し、「取得中…」表示を追加。
 - Amber ログイン後クラッシュの原因になり得る `prefs.loginMethod == null` を修正。`loginWithAmber()` で `prefs.loginMethod = "amber"` を保存し、`buildSigner()` が `ExternalSigner` を選べるようにした。
 - 検証: `cd android && ./gradlew assembleDebug` 成功。実機はこの時点で adb 接続が切れていたため再インストールは未実施。
+
+## [2026-05-24] fix | logout cache cleanup and iOS relay-location permission
+
+- iOS/Android 共通: ログアウト後、アプリを完全終了しないと一部キャッシュ/接続が残る問題を修正。
+- iOS:
+  - `NostrRepository.clearSessionCachesForLogout()` を追加し、NostrCache、quote/bookmark cache、in-flight tasks を明示的に破棄。
+  - `MainTabView.performLogout()` を追加し、ログアウト前に repository cache clear + relay disconnect を実行してから `AuthViewModel.logout()` に遷移。
+  - `SettingsView` のログアウト操作も `MainTabView` から渡された cleanup-aware logout closure を使うよう変更。
+- Android:
+  - `MainScreen` に `DisposableEffect(nostrClient)` を追加し、MainScreen が composition から外れる logout 時に relay socket を即時 disconnect。
+  - `AuthViewModel.logout()` 既存の NostrCache/Rust DB clear と合わせて、再起動なしでも旧セッションが残りにくくした。
+- iOS 新規登録リレー設定:
+  - `SignUpRelayStep` の `requestGPSRelays()` が東京 fallback 固定で、CoreLocation permission request を実行していなかった問題を修正。
+  - `SignUpLocationHelper` を追加し、「GPSで自動検出」選択時に `requestWhenInUseAuthorization()` → `requestLocation()` を行う。失敗/拒否時は東京 fallback に戻す。
