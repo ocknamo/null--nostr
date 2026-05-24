@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-05-25
+
+### Changed
+- Android release versionCode を 24 に更新し、GitHub / Zapstore / Google Play 配信用 artifact を再生成。
+- iOS App Store Connect 向け build number を 7 に更新し、IPA を再生成。
+- Android 15+ の 16 KB memory page-size 端末向けに native library packaging / Rust linker 設定を明示。
+
 ### Security (Android / iOS / Rust core) — Issue #181
 
 - Marmot / MDK の MLS DB (`*_mls.sqlite3`) を **SQLCipher 4 で暗号化** するよう変更しました。これまで端末ディスク上に **平文で書かれていた MLS の署名鍵 / 暗号鍵 / epoch key pair / KeyPackage 秘密素材** がディスク窃取で抜けるリスクを塞ぐ修正です。
