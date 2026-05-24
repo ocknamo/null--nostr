@@ -20,6 +20,15 @@ android {
     namespace = "io.nurunuru.app"
     compileSdk = 35
 
+    // Android 15+ devices may use a 16 KB memory page size. Keep native
+    // libraries uncompressed and page-aligned, and pair this with the Rust
+    // linker flags in rust-engine/.cargo/config.toml.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
+        }
+    }
+
     signingConfigs {
         create("release") {
             // Only wire the release keystore when local.properties actually

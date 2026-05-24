@@ -28,6 +28,14 @@ android {
     namespace = "io.nurunuru"
     compileSdk = 34
 
+    // Match app packaging for Android 15+ 16 KB page-size devices.
+    // The Rust .so is linked with -Wl,-z,max-page-size=16384.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

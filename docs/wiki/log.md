@@ -519,3 +519,15 @@ LLM Wiki の時系列ログです。追記専用として扱います。
 - Added Android/iOS post-menu `投稿を共有` actions that share canonical `https://www.nullnull.app/e/<event-id>` URLs from timeline/home/search result rows.
 - Added Web `/e/<event-id>` post preview route with Open Graph / Twitter Card metadata and dynamic thumbnail image for blog/SNS unfurl previews.
 - Added Android App Links and iOS Universal Links for `/e/*`; logged-in native apps open shared post links into the post detail screen.
+
+## [2026-05-25] fix | Long-form article Nostr references render as cards
+
+- Web, Android, and iOS long-form article readers now detect `nostr:` references inside Markdown content instead of leaving them as plain links.
+- Article bodies resolve note/nevent/naddr references into embedded cards and profile references into inline profile mentions/cards where repository context is available.
+- Updated post-rendering wiki notes for long-form embedded Nostr behavior.
+
+## [2026-05-25] platform | Android 16 KB page-size release support
+
+- Added explicit Android JNI packaging and Rust linker notes for Android 15+ 16 KB memory page-size compatibility.
+- Sanitized sync prompt path examples to avoid embedding a local personal username.
+- Source references: android/app/build.gradle.kts, rust-engine/nurunuru-ffi/android/build.gradle.kts, rust-engine/.cargo/config.toml, docs/sync/prompts/.

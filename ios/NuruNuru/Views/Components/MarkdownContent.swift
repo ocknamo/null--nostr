@@ -189,6 +189,8 @@ private func buildAttributed(_ text: String, linkColor: Color) -> AttributedStri
 struct MarkdownContent: View {
 
     let content: String
+    var repository: NostrRepository? = nil
+    var onProfileTap: (String) -> Void = { _ in }
 
     @Environment(\.nuruTheme) private var theme
 
@@ -224,11 +226,7 @@ struct MarkdownContent: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
         case .paragraph(let text):
-            Text(buildAttributed(text, linkColor: NuruColors.lineGreen))
-                .font(NuruFont.bodyMedium())
-                .foregroundStyle(theme.textPrimary)
-                .lineSpacing(6)
-                .fixedSize(horizontal: false, vertical: true)
+            inlineMarkdownWithNostr(text)
 
         case .code(let code):
             ScrollView(.horizontal, showsIndicators: false) {
@@ -259,11 +257,7 @@ struct MarkdownContent: View {
                     .font(.system(size: 15))
                     .foregroundStyle(theme.textSecondary)
                     .frame(minWidth: 20, alignment: .leading)
-                Text(buildAttributed(text, linkColor: NuruColors.lineGreen))
-                    .font(NuruFont.bodyMedium())
-                    .foregroundStyle(theme.textPrimary)
-                    .lineSpacing(4)
-                    .fixedSize(horizontal: false, vertical: true)
+                inlineMarkdownWithNostr(text)
             }
 
         case .rule:
@@ -273,6 +267,61 @@ struct MarkdownContent: View {
                 Spacer().frame(height: 4)
             }
         }
+    }
+
+    @ViewBuilder
+    private func inlineMarkdownWithNostr(_ text: String) -> some View {
+        let parts = splitNostrReferences(text)
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(parts.enumerated()), id: \.offset) { _, part in
+                switch part {
+                case .text(let value):
+                    if !value.isEmpty {
+                        Text(buildAttributed(value, linkColor: NuruColors.lineGreen))
+                            .font(NuruFont.bodyMedium())
+                            .foregroundStyle(theme.textPrimary)
+                            .lineSpacing(6)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                case .nostr(let raw):
+                    if let repo = repository {
+                        EmbeddedNostrCard(link: raw.hasPrefix("nostr:") ? raw : "nostr:\(raw)", repository: repo, onProfileTap: onProfileTap)
+                    } else {
+                        Text(raw)
+                            .font(NuruFont.bodyMedium())
+                            .foregroundStyle(NuruColors.lineGreen)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+    }
+
+    private enum InlineNostrPart {
+        case text(String)
+        case nostr(String)
+    }
+
+    private func splitNostrReferences(_ text: String) -> [InlineNostrPart] {
+        let pattern = #"(?:nostr:)?(?:note1|nevent1|naddr1|npub1|nprofile1)[a-z0-9]+"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [.text(text)] }
+        let ns = text as NSString
+        let matches = regex.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        guard !matches.isEmpty else { return [.text(text)] }
+
+        var result: [InlineNostrPart] = []
+        var cursor = 0
+        for match in matches {
+            if match.range.location > cursor {
+                result.append(.text(ns.substring(with: NSRange(location: cursor, length: match.range.location - cursor))))
+            }
+            result.append(.nostr(ns.substring(with: match.range)))
+            cursor = match.range.location + match.range.length
+        }
+        if cursor < ns.length {
+            result.append(.text(ns.substring(from: cursor)))
+        }
+        return result
     }
 
     private func headingStyle(_ level: Int) -> (CGFloat, Font.Weight) {

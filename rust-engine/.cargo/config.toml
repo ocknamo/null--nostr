@@ -1,6 +1,9 @@
 [target.aarch64-linux-android]
 linker = "aarch64-linux-android35-clang"
 ar = "llvm-ar"
+# Android 15+ can run with 16 KB memory pages. Force native Android
+# Rust libraries to use 16 KB max page size so LOAD segments are compatible
+# with both 4 KB and 16 KB page-size devices.
 rustflags = [
   "-C", "link-arg=-Wl,-z,max-page-size=16384"
 ]
@@ -13,6 +16,7 @@ RANLIB_aarch64_linux_android = "llvm-ranlib"
 [target.x86_64-linux-android]
 linker = "x86_64-linux-android35-clang"
 ar = "llvm-ar"
+# Same 16 KB page-size compatibility for emulator/native test builds.
 rustflags = [
   "-C", "link-arg=-Wl,-z,max-page-size=16384"
 ]

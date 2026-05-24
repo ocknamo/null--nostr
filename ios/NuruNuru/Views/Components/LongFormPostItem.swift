@@ -133,7 +133,8 @@ struct LongFormPostItem: View {
                 title:       title,
                 image:       image,
                 onDismiss:   { showReader = false },
-                onProfileTap: onProfileTap
+                onProfileTap: onProfileTap,
+                repository:   repository
             )
         }
         .sheet(isPresented: $showBirdwatch) {
@@ -236,6 +237,7 @@ struct ArticleReaderView: View {
     let image:        String?
     let onDismiss:    () -> Void
     let onProfileTap: (String) -> Void
+    var repository:   NostrRepository? = nil
 
     @Environment(\.nuruTheme) private var theme
 
@@ -301,7 +303,7 @@ struct ArticleReaderView: View {
                         Spacer().frame(height: 20)
 
                         // Markdown content
-                        MarkdownContent(content: post.event.content)
+                        MarkdownContent(content: post.event.content, repository: repository, onProfileTap: onProfileTap)
 
                         Spacer().frame(height: 40)
                     }

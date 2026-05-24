@@ -67,11 +67,12 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     private val _referralInvitePreview = MutableStateFlow<ReferralInvitePreview?>(null)
     val referralInvitePreview: StateFlow<ReferralInvitePreview?> = _referralInvitePreview.asStateFlow()
 
-    private val _profileNavigationEvents = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    private val _profileNavigationEvents = MutableSharedFlow<String>(replay = 1, extraBufferCapacity = 1)
     val profileNavigationEvents = _profileNavigationEvents.asSharedFlow()
 
-    private val _eventNavigationEvents = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    private val _eventNavigationEvents = MutableSharedFlow<String>(replay = 1, extraBufferCapacity = 1)
     val eventNavigationEvents = _eventNavigationEvents.asSharedFlow()
+    @Volatile private var pendingEventDeepLinkId: String? = null
 
     init {
         migrateAndCheckLogin()
@@ -90,6 +91,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
 
             prefs.pendingReferralPubkeyHex?.let { setPendingReferralFollow(it) }
             checkStoredLogin()
+            emitPendingEventDeepLinkIfLoggedIn()
         }
     }
 
@@ -139,6 +141,14 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             }
         } else {
             _authState.value = AuthState.LoggedOut
+        }
+    }
+
+    private fun emitPendingEventDeepLinkIfLoggedIn() {
+        val eventId = pendingEventDeepLinkId ?: return
+        if (_authState.value is AuthState.LoggedIn) {
+            pendingEventDeepLinkId = null
+            _eventNavigationEvents.tryEmit(eventId)
         }
     }
 
@@ -497,7 +507,13 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             ?: uri.getQueryParameter("event")
             ?: uri.lastPathSegment?.takeIf { it.length == 64 }
         val eventId = raw?.takeIf { it.matches(Regex("^[0-9a-fA-F]{64}$")) }?.lowercase() ?: return
-        if (_authState.value is AuthState.LoggedIn) _eventNavigationEvents.tryEmit(eventId)
+        if (_authState.value is AuthState.LoggedIn) {
+            _eventNavigationEvents.tryEmit(eventId)
+        } else {
+            // Cold-start race: the Activity receives the deep link while AuthViewModel
+            // is still Checking. Keep it and replay once stored login is restored.
+            pendingEventDeepLinkId = eventId
+        }
     }
 
     private fun normalizeReferralPubkey(rawPubkey: String?): String? {

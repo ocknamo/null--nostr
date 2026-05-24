@@ -1161,6 +1161,14 @@ struct EmbeddedNostrCard: View {
                     profilePubkey = parsed.hex
                     profileData = await repo.fetchProfile(pubkey: parsed.hex)
                 }
+            } else if bech32.hasPrefix("naddr1"), let aTag = NostrBech32.decodeNaddrToA(bech32) {
+                if let event = await repo.fetchAddressableEvent(aTag: aTag) {
+                    let scored = ScoredPost(event: event)
+                    if let profile = await repo.fetchProfile(pubkey: event.pubkey) {
+                        scored.profile = profile
+                    }
+                    note = scored
+                }
             }
             isLoading = false
         }

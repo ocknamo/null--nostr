@@ -274,6 +274,7 @@ fun LongFormPostItem(
             post = post,
             title = title,
             image = image,
+            repository = repository,
             onDismiss = { showReader = false },
             onProfileClick = onProfileClick
         )
@@ -339,6 +340,7 @@ fun ArticleReaderModal(
     post: ScoredPost,
     title: String?,
     image: String?,
+    repository: io.nurunuru.app.data.NostrRepository,
     onDismiss: () -> Unit,
     onProfileClick: (String) -> Unit
 ) {
@@ -463,7 +465,9 @@ fun ArticleReaderModal(
                     // Markdown content
                     MarkdownContent(
                         content = post.event.content,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        repository = repository,
+                        onProfileClick = onProfileClick
                     )
 
                     Spacer(Modifier.height(40.dp))

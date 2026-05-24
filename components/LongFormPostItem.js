@@ -5,7 +5,12 @@ import { createPortal } from 'react-dom'
 import { marked } from 'marked'
 import {
   shortenPubkey,
-  formatTimestamp
+  formatTimestamp,
+  parseNostrLink,
+  fetchEvents,
+  parseProfile,
+  encodeNpub,
+  RELAYS
 } from '@/lib/nostr'
 import { getImageUrl } from '@/lib/imageUtils'
 import ReportModal from './ReportModal'
@@ -69,6 +74,135 @@ function renderMarkdown(content) {
   } catch (e) {
     return content
   }
+}
+
+function EmbeddedArticleNote({ parsed }) {
+  const [note, setNote] = useState(null)
+  const [profile, setProfile] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let mounted = true
+    const load = async () => {
+      try {
+        let events = []
+        if (parsed.type === 'naddr') {
+          events = await fetchEvents(
+            { kinds: [parsed.kind], authors: [parsed.pubkey], '#d': [parsed.identifier], limit: 1 },
+            parsed.relays?.length ? parsed.relays : RELAYS
+          )
+        } else {
+          events = await fetchEvents(
+            { ids: [parsed.id], limit: 1 },
+            parsed.relays?.length ? parsed.relays : RELAYS
+          )
+        }
+        if (!mounted) return
+        if (events.length > 0) {
+          setNote(events[0])
+          const profileEvents = await fetchEvents({ kinds: [0], authors: [events[0].pubkey], limit: 1 }, RELAYS)
+          if (mounted && profileEvents.length > 0) setProfile(parseProfile(profileEvents[0]))
+        }
+      } finally {
+        if (mounted) setLoading(false)
+      }
+    }
+    load()
+    return () => { mounted = false }
+  }, [parsed])
+
+  if (loading) {
+    return <div className="border border-[var(--border-color)] rounded-xl p-3 my-3 bg-[var(--bg-secondary)] text-sm text-[var(--text-tertiary)]">読み込み中…</div>
+  }
+  if (!note) {
+    return <div className="border border-[var(--border-color)] rounded-xl p-3 my-3 bg-[var(--bg-secondary)] text-sm text-[var(--text-tertiary)]">📝 参照を読み込めませんでした</div>
+  }
+  return (
+    <div className="border border-[var(--line-green)]/20 rounded-xl p-3 my-3 bg-[var(--bg-secondary)]">
+      <div className="flex items-center gap-2 mb-2">
+        <div className="w-6 h-6 rounded-full overflow-hidden bg-[var(--bg-tertiary)] flex-shrink-0">
+          {profile?.picture ? <img src={getImageUrl(profile.picture)} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" /> : null}
+        </div>
+        <span className="text-sm font-semibold text-[var(--text-primary)] truncate">{profile?.name || shortenPubkey(note.pubkey, 8)}</span>
+        <span className="text-xs text-[var(--text-tertiary)]">· {formatTimestamp(note.created_at)}</span>
+      </div>
+      <p className="text-sm text-[var(--text-secondary)] whitespace-pre-wrap break-words line-clamp-4">
+        {note.content.slice(0, 300)}{note.content.length > 300 ? '…' : ''}
+      </p>
+    </div>
+  )
+}
+
+function EmbeddedArticleProfile({ parsed }) {
+  const [profile, setProfile] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const pubkey = parsed.pubkey
+
+  useEffect(() => {
+    let mounted = true
+    const load = async () => {
+      try {
+        const events = await fetchEvents({ kinds: [0], authors: [pubkey], limit: 1 }, parsed.relays?.length ? parsed.relays : RELAYS)
+        if (mounted && events.length > 0) setProfile(parseProfile(events[0]))
+      } finally {
+        if (mounted) setLoading(false)
+      }
+    }
+    load()
+    return () => { mounted = false }
+  }, [pubkey, parsed.relays])
+
+  const npub = pubkey ? encodeNpub(pubkey) : ''
+  return (
+    <span className="inline-flex items-center gap-1 text-[var(--line-green)] font-medium" title={npub}>
+      @{loading ? '...' : (profile?.name || shortenPubkey(pubkey, 8))}
+    </span>
+  )
+}
+
+function MarkdownWithNostr({ content }) {
+  const nostrRegex = /(nostr:)?(?:note1|nevent1|naddr1|npub1|nprofile1)[a-z0-9]+/gi
+  const nodes = []
+  let lastIndex = 0
+  let match
+
+  while ((match = nostrRegex.exec(content || '')) !== null) {
+    const raw = match[0]
+    const before = content.slice(lastIndex, match.index)
+    if (before) {
+      nodes.push(
+        <div
+          key={`md-${lastIndex}`}
+          className="long-form-content text-[var(--text-primary)] leading-relaxed"
+          dangerouslySetInnerHTML={{ __html: renderMarkdown(before) }}
+        />
+      )
+    }
+
+    const bech32 = raw.toLowerCase().startsWith('nostr:') ? raw.slice(6) : raw
+    const parsed = parseNostrLink(bech32)
+    if (parsed?.type === 'note' || parsed?.type === 'nevent' || parsed?.type === 'naddr') {
+      nodes.push(<EmbeddedArticleNote key={`nostr-${match.index}`} parsed={parsed} />)
+    } else if (parsed?.type === 'npub' || parsed?.type === 'nprofile') {
+      nodes.push(<EmbeddedArticleProfile key={`nostr-${match.index}`} parsed={parsed} />)
+    } else {
+      nodes.push(<span key={`nostr-${match.index}`} className="text-[var(--line-green)] break-all">{raw}</span>)
+    }
+    lastIndex = match.index + raw.length
+  }
+
+  const rest = (content || '').slice(lastIndex)
+  if (rest || nodes.length === 0) {
+    nodes.push(
+      <div
+        key={`md-${lastIndex}`}
+        className="long-form-content text-[var(--text-primary)] leading-relaxed"
+        dangerouslySetInnerHTML={{ __html: renderMarkdown(rest || content) }}
+      />
+    )
+  }
+
+  return <>{nodes}</>
 }
 
 // Full-screen article reader modal
@@ -161,10 +295,7 @@ function ArticleReaderModal({ post, profile, title, image, publishedAt, hashtags
           </div>
 
           {/* Markdown content */}
-          <div
-            className="long-form-content text-[var(--text-primary)] leading-relaxed"
-            dangerouslySetInnerHTML={{ __html: renderMarkdown(post.content) }}
-          />
+          <MarkdownWithNostr content={post.content} />
 
           {/* Hashtags */}
           {hashtags.length > 0 && (

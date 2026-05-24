@@ -7,7 +7,7 @@
 
 ## 前提 (必読)
 
-- リポジトリルート: `/Users/miharashouhei/null--nostr`
+- リポジトリルート: `/path/to/null--nostr`
 - 親ブランチ `sync/native-to-web-20260516` がチェックアウトされていること
 - AGENTS.md の制約を厳守: 投稿140文字 / Keychain / actor / LineSeedJP / Compose の crash パターン
 - 同期は **逐語コピーではない** ─ Web のイディオム (React + Tailwind + nostr-tools) で再現する

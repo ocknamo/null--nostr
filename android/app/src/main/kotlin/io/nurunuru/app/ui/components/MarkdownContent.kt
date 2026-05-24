@@ -215,10 +215,47 @@ private fun buildInline(text: String, linkColor: Color): AnnotatedString = build
 @Composable
 fun MarkdownContent(
     content: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    repository: io.nurunuru.app.data.NostrRepository? = null,
+    onProfileClick: (String) -> Unit = {},
+    onNoteClick: ((String) -> Unit)? = null
 ) {
     val nuruColors = LocalNuruColors.current
     val uriHandler = LocalUriHandler.current
+
+    @Composable
+    fun MarkdownInlineWithNostr(text: String) {
+        val nostrRegex = Regex("(?:nostr:)?(?:note1|nevent1|naddr1|npub1|nprofile1)[a-z0-9]+", RegexOption.IGNORE_CASE)
+        var lastIdx = 0
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            nostrRegex.findAll(text).forEach { match ->
+                if (match.range.first > lastIdx) {
+                    val annotated = buildInline(text.substring(lastIdx, match.range.first), nuruColors.lineGreen)
+                    if (annotated.text.isNotBlank()) ClickableText(
+                        text = annotated,
+                        style = MaterialTheme.typography.bodyMedium.copy(color = nuruColors.textPrimary, lineHeight = 24.sp),
+                        onClick = { offset -> annotated.getStringAnnotations("URL", offset, offset).firstOrNull()?.let { uriHandler.openUri(it.item) } }
+                    )
+                }
+                val raw = match.value
+                val link = if (raw.startsWith("nostr:", ignoreCase = true)) raw else "nostr:$raw"
+                if (repository != null) {
+                    EmbeddedNostrContent(link = link, repository = repository, onProfileClick = onProfileClick, onNoteClick = onNoteClick)
+                } else {
+                    Text(text = raw, color = nuruColors.lineGreen, style = MaterialTheme.typography.bodyMedium)
+                }
+                lastIdx = match.range.last + 1
+            }
+            if (lastIdx < text.length) {
+                val annotated = buildInline(text.substring(lastIdx), nuruColors.lineGreen)
+                if (annotated.text.isNotBlank()) ClickableText(
+                    text = annotated,
+                    style = MaterialTheme.typography.bodyMedium.copy(color = nuruColors.textPrimary, lineHeight = 24.sp),
+                    onClick = { offset -> annotated.getStringAnnotations("URL", offset, offset).firstOrNull()?.let { uriHandler.openUri(it.item) } }
+                )
+            }
+        }
+    }
 
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         var prevWasBlank = false
@@ -252,18 +289,7 @@ fun MarkdownContent(
                     }
                 }
                 is MdBlock.Paragraph -> {
-                    val annotated = buildInline(block.text, nuruColors.lineGreen)
-                    ClickableText(
-                        text = annotated,
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            color = nuruColors.textPrimary,
-                            lineHeight = 24.sp
-                        ),
-                        onClick = { offset ->
-                            annotated.getStringAnnotations("URL", offset, offset)
-                                .firstOrNull()?.let { uriHandler.openUri(it.item) }
-                        }
-                    )
+                    MarkdownInlineWithNostr(block.text)
                 }
                 is MdBlock.Code -> {
                     Box(
@@ -311,18 +337,9 @@ fun MarkdownContent(
                             fontSize = 15.sp,
                             modifier = Modifier.widthIn(min = 20.dp)
                         )
-                        val annotated = buildInline(block.text, nuruColors.lineGreen)
-                        ClickableText(
-                            text = annotated,
-                            style = MaterialTheme.typography.bodyMedium.copy(
-                                color = nuruColors.textPrimary,
-                                lineHeight = 22.sp
-                            ),
-                            onClick = { offset ->
-                                annotated.getStringAnnotations("URL", offset, offset)
-                                    .firstOrNull()?.let { uriHandler.openUri(it.item) }
-                            }
-                        )
+                        Box(modifier = Modifier.weight(1f)) {
+                            MarkdownInlineWithNostr(block.text)
+                        }
                     }
                 }
                 is MdBlock.Rule -> {

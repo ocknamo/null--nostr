@@ -1,10 +1,7 @@
 import { ImageResponse } from 'next/og'
-import { getEventPreview } from './preview-data'
+import { getEventPreview } from '../preview-data'
 
 export const runtime = 'nodejs'
-export const alt = 'ぬるぬるの投稿'
-export const size = { width: 1200, height: 630 }
-export const contentType = 'image/png'
 
 function shortId(value) {
   if (!value) return ''
@@ -12,13 +9,14 @@ function shortId(value) {
   return raw.length > 24 ? `${raw.slice(0, 12)}…${raw.slice(-10)}` : raw
 }
 
-export default async function Image({ params }) {
+export async function GET(_request, { params }) {
   const resolvedParams = await params
   const eventId = String(resolvedParams?.eventId || '')
   const preview = await getEventPreview(eventId)
   const author = preview?.authorName || 'ぬるぬる'
   const content = preview?.content || 'ぬるぬるで投稿を見てね。'
   const id = shortId(eventId)
+
   return new ImageResponse(
     (
       <div style={{ width: '100%', height: '100%', display: 'flex', background: '#050505', color: 'white', padding: 64, fontFamily: 'sans-serif' }}>
@@ -40,6 +38,6 @@ export default async function Image({ params }) {
         </div>
       </div>
     ),
-    size,
+    { width: 1200, height: 630 },
   )
 }

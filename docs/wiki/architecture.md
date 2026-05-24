@@ -28,6 +28,13 @@ null--nostr は、Web / Android / iOS の UI 層と、Nostr 処理・暗号・�
 - **Relay limits:** Web は global 4 / per-relay 2 concurrent connection を守る。
 - **IO discipline:** Android の Rust FFI / file IO / uploads は `Dispatchers.IO`。
 
+
+### Android native 16 KB page-size compatibility
+
+Android release builds that include native libraries are configured for Android 15+ devices that use a 16 KB memory page size. The app and Rust FFI library modules keep JNI libraries uncompressed/page-aligned with packaging.jniLibs.useLegacyPackaging = false, and Rust Android targets are linked with -Wl,-z,max-page-size=16384.
+
+Source references: android/app/build.gradle.kts, rust-engine/nurunuru-ffi/android/build.gradle.kts, rust-engine/.cargo/config.toml.
+
 ## Source references
 
 - `AGENTS.md`

@@ -12,6 +12,8 @@ export default function EventInviteClient({ eventId }) {
   const [event, setEvent] = useState(null)
   const [profile, setProfile] = useState(null)
   const appUrl = `nurunuru://event?id=${encodeURIComponent(eventId)}`
+  const webUrl = typeof window !== 'undefined' ? window.location.href : `https://www.nullnull.app/e/${eventId}`
+  const androidIntent = `intent://event?id=${encodeURIComponent(eventId)}#Intent;scheme=nurunuru;package=io.nurunuru.app;S.browser_fallback_url=${encodeURIComponent(webUrl)};end`
   const content = useMemo(() => cleanContent(event?.content || ''), [event])
   const name = profile?.displayName || profile?.name || (event?.pubkey ? shortenPubkey(event.pubkey) : 'ぬるぬる')
 
@@ -28,6 +30,11 @@ export default function EventInviteClient({ eventId }) {
       })
     })
   }, [eventId])
+
+  const openApp = () => {
+    const ua = navigator.userAgent || ''
+    window.location.href = /Android/i.test(ua) ? androidIntent : appUrl
+  }
 
   return (
     <main className="min-h-screen bg-[#0b0b0b] text-white flex items-center justify-center px-6">
@@ -51,7 +58,7 @@ export default function EventInviteClient({ eventId }) {
         <p className="whitespace-pre-wrap text-[17px] leading-7 text-gray-100 mb-6">
           {event ? (content || 'メディア投稿') : '投稿を読み込み中...'}
         </p>
-        <a href={appUrl} className="block text-center w-full rounded-2xl bg-[#06C755] py-4 font-bold">アプリで開く</a>
+        <button onClick={openApp} className="block text-center w-full rounded-2xl bg-[#06C755] py-4 font-bold">アプリで開く</button>
       </article>
     </main>
   )
