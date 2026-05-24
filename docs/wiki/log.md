@@ -442,3 +442,17 @@ LLM Wiki の時系列ログです。追記専用として扱います。
 - iOS 新規登録リレー設定:
   - `SignUpRelayStep` の `requestGPSRelays()` が東京 fallback 固定で、CoreLocation permission request を実行していなかった問題を修正。
   - `SignUpLocationHelper` を追加し、「GPSで自動検出」選択時に `requestWhenInUseAuthorization()` → `requestLocation()` を行う。失敗/拒否時は東京 fallback に戻す。
+
+## [2026-05-24] fix | Android logout resets in-process UI state
+
+- Android でログアウト後、完全にアプリを再起動しないと旧タイムライン / 旧プロフィール / 旧接続状態が残る問題を修正。
+- `MainScreen.performLogout()` を追加し、`AuthViewModel.logout()` の前に以下を即時実行:
+  - `timelineVM.clearSearch()` / `homeVM.clearSearch()` / `talkVM.clearStateAfterCacheClear()`
+  - `repository.clearAllCache()`
+  - `nostrClient.disconnect()`
+  - `app.nostrCache.clearAll()`
+  - `app.clearPrewarmedClient()`
+- `TimelineViewModel` / `HomeViewModel` / `TalkViewModel` / `ConnectionViewModel` の Compose `viewModel()` に `pubkeyHex + loginMethod` key を付与し、アカウント切替時に旧 ViewModel instance を再利用しないようにした。
+- MiniApp `SettingsScreen` のログアウトも `MainScreen` から渡された cleanup-aware logout closure を使うよう変更。
+- `NuruNuruApp.clearPrewarmedClient()` を追加し、Amber/external signer 用 prewarmed client を logout 時に明示 disconnect + null reset。
+- 検証: `cd android && ./gradlew assembleDebug` 成功。接続済み Android 実機 `9DNBNF45Y9AQFEY9` に install + launch 済み、起動直後 crash なし。

@@ -125,7 +125,8 @@ fun SettingsScreen(
     pubkeyHex: String,
     pictureUrl: String?,
     onExternalAppOpenChanged: (Boolean) -> Unit = {},
-    onMlsCacheCleared: () -> Unit = {}
+    onMlsCacheCleared: () -> Unit = {},
+    onLogout: (() -> Unit)? = null
 ) {
     val nuruColors = LocalNuruColors.current
     var showLogoutDialog by remember { mutableStateOf(false) }
@@ -547,7 +548,10 @@ fun SettingsScreen(
                 TextButton(
                     onClick = {
                         showLogoutDialog = false
-                        authViewModel.logout()
+                        onLogout?.invoke() ?: run {
+                            repository.clearAllCache()
+                            authViewModel.logout()
+                        }
                     },
                     colors = ButtonDefaults.textButtonColors(
                         contentColor = MaterialTheme.colorScheme.error

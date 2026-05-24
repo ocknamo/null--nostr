@@ -21,6 +21,11 @@ class NuruNuruApp : Application() {
     var prewarmedNostrClient: NostrClient? = null
         private set
 
+    fun clearPrewarmedClient() {
+        try { prewarmedNostrClient?.disconnect() } catch (_: Exception) { }
+        prewarmedNostrClient = null
+    }
+
     /** Pre-created cache and engine — avoids SharedPreferences disk I/O on first Compose frame. */
     lateinit var nostrCache: NostrCache
         private set

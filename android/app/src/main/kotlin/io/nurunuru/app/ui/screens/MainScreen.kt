@@ -117,20 +117,39 @@ fun MainScreen(
     // ViewModels
     val timelineVM: TimelineViewModel = viewModel(
         TimelineViewModel::class.java,
+        key = "timeline-$pubkeyHex-${app.prefs.loginMethod ?: "unknown"}",
         factory = TimelineViewModel.Factory(repository, pubkeyHex)
     )
     val talkVM: TalkViewModel = viewModel(
         TalkViewModel::class.java,
+        key = "talk-$pubkeyHex-${app.prefs.loginMethod ?: "unknown"}",
         factory = TalkViewModel.Factory(repository, nostrClient, pubkeyHex)
     )
     val homeVM: HomeViewModel = viewModel(
         HomeViewModel::class.java,
+        key = "home-$pubkeyHex-${app.prefs.loginMethod ?: "unknown"}",
         factory = HomeViewModel.Factory(repository, pubkeyHex)
     )
     val connectionVM: ConnectionViewModel = viewModel(
         ConnectionViewModel::class.java,
+        key = "connection-$pubkeyHex-${app.prefs.loginMethod ?: "unknown"}",
         factory = ConnectionViewModel.Factory(context.applicationContext, activeRelays)
     )
+
+    fun performLogout() {
+        // Reset in-process UI/session state before AuthState switches to LoggedOut.
+        // Without this, Compose ViewModels can show old timeline/profile/connection
+        // state until the whole Android process is restarted.
+        try { timelineVM.clearSearch() } catch (_: Exception) { }
+        try { homeVM.clearSearch() } catch (_: Exception) { }
+        try { talkVM.clearStateAfterCacheClear() } catch (_: Exception) { }
+        try { repository.clearAllCache() } catch (_: Exception) { }
+        try { nostrClient.disconnect() } catch (_: Exception) { }
+        try { app.nostrCache.clearAll() } catch (_: Exception) { }
+        try { app.clearPrewarmedClient() } catch (_: Exception) { }
+        showAppSettings = false
+        authViewModel.logout()
+    }
 
     // My profile for post modal avatar
     val homeState by homeVM.uiState.collectAsState()
@@ -288,10 +307,7 @@ fun MainScreen(
             if (showAppSettings) {
                 AppSettingsDialog(
                     onDismiss = { showAppSettings = false },
-                    onLogout = {
-                        showAppSettings = false
-                        authViewModel.logout()
-                    }
+                    onLogout = { performLogout() }
                 )
             }
 
@@ -314,7 +330,8 @@ fun MainScreen(
                     pubkeyHex = pubkeyHex,
                     pictureUrl = myProfile?.picture,
                     onExternalAppOpenChanged = { isExternalAppOpen = it },
-                    onMlsCacheCleared = { talkVM.clearStateAfterCacheClear() }
+                    onMlsCacheCleared = { talkVM.clearStateAfterCacheClear() },
+                    onLogout = { performLogout() }
                 )
             }
 
