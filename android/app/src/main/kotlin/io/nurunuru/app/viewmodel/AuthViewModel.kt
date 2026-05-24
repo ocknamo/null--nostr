@@ -3,6 +3,7 @@ package io.nurunuru.app.viewmodel
 import android.app.Activity
 import android.app.Application
 import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.nurunuru.app.data.NostrClient
@@ -12,14 +13,17 @@ import io.nurunuru.app.data.NosskeyManager
 import io.nurunuru.app.data.NosskeyManager.NosskeyError
 import io.nurunuru.app.data.SecureKeyManager
 import io.nurunuru.app.data.models.UserProfile
+import io.nurunuru.app.data.models.NostrKind
 import io.nurunuru.app.data.prefs.AppPreferences
 import io.nurunuru.app.data.signers.NosskeySigner
 import io.nurunuru.app.data.*
 import javax.crypto.Cipher
 import java.io.File
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 sealed class AuthState {
@@ -43,15 +47,31 @@ data class GeneratedAccount(
     val npub: String
 )
 
+data class ReferralInvitePreview(
+    val pubkeyHex: String,
+    val profile: UserProfile? = null,
+    val isLoading: Boolean = false
+)
+
 class AuthViewModel(application: Application) : AndroidViewModel(application) {
 
     val prefs = AppPreferences(application)
     val keyManager = SecureKeyManager(application)
     val nosskeyManager = NosskeyManager()
     private var activeNosskeySigner: NosskeySigner? = null
+    @Volatile private var pendingReferralFollowPubkey: String? = null
 
     private val _authState = MutableStateFlow<AuthState>(AuthState.Checking)
     val authState: StateFlow<AuthState> = _authState.asStateFlow()
+
+    private val _referralInvitePreview = MutableStateFlow<ReferralInvitePreview?>(null)
+    val referralInvitePreview: StateFlow<ReferralInvitePreview?> = _referralInvitePreview.asStateFlow()
+
+    private val _profileNavigationEvents = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val profileNavigationEvents = _profileNavigationEvents.asSharedFlow()
+
+    private val _eventNavigationEvents = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val eventNavigationEvents = _eventNavigationEvents.asSharedFlow()
 
     init {
         migrateAndCheckLogin()
@@ -68,6 +88,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 keyManager.migrateFromLegacy(prefs)
             }
 
+            prefs.pendingReferralPubkeyHex?.let { setPendingReferralFollow(it) }
             checkStoredLogin()
         }
     }
@@ -181,6 +202,51 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             )
         } catch (e: Exception) {
             null
+        }
+    }
+
+
+    fun saveInitialOnboardingDraft(
+        name: String,
+        about: String,
+        picture: String = "",
+        banner: String = "",
+        nip05: String = "",
+        lud16: String = "",
+        website: String = "",
+        birthday: String = "",
+        relays: List<Triple<String, Boolean, Boolean>>? = null
+    ) {
+        val relayList = relays ?: listOf(
+            Triple("wss://yabu.me", true, true),
+            Triple("wss://relay-jp.nostr.wirednet.jp", true, true),
+            Triple("wss://r.kojira.io", true, true)
+        )
+        prefs.nip65Relays = relayList.map { (url, read, write) ->
+            io.nurunuru.app.data.models.Nip65Relay(url, read, write)
+        }
+        prefs.mainRelay = relayList.firstOrNull { it.second && it.third }?.first
+            ?: relayList.firstOrNull()?.first
+            ?: "wss://yabu.me"
+        val pubkey = prefs.publicKeyHex ?: keyManager.getStoredPublicKeyHex()
+        if (!pubkey.isNullOrBlank()) {
+            val draft = UserProfile(
+                pubkey = pubkey,
+                name = name,
+                displayName = name,
+                about = about,
+                picture = picture,
+                banner = banner,
+                nip05 = nip05,
+                lud16 = lud16,
+                website = website,
+                birthday = birthday
+            )
+            try {
+                io.nurunuru.app.data.cache.NostrCache(getApplication()).setCachedProfile(pubkey, draft, true)
+            } catch (e: Exception) {
+                android.util.Log.w("AuthViewModel", "saveInitialOnboardingDraft cache failed: ${e.message}")
+            }
         }
     }
 
@@ -371,6 +437,74 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setPendingReferralFollow(rawPubkey: String?) {
+        val hex = normalizeReferralPubkey(rawPubkey)
+        pendingReferralFollowPubkey = hex
+        prefs.pendingReferralPubkeyHex = hex
+        if (hex != null) loadReferralInvitePreview(hex)
+        else _referralInvitePreview.value = null
+    }
+
+    fun dismissReferralInvite() {
+        pendingReferralFollowPubkey = null
+        prefs.pendingReferralPubkeyHex = null
+        _referralInvitePreview.value = null
+    }
+
+    private fun loadReferralInvitePreview(pubkeyHex: String) {
+        _referralInvitePreview.value = ReferralInvitePreview(pubkeyHex, isLoading = true)
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val relays = prefs.relays.toList().ifEmpty { io.nurunuru.app.data.models.DEFAULT_RELAYS }
+                val signer = object : io.nurunuru.app.data.AppSigner {
+                    override fun getPublicKeyHex(): String = pubkeyHex
+                    override suspend fun signEvent(eventJson: String, requireManualApproval: Boolean): String? = null
+                    override suspend fun nip04Encrypt(receiverPubkeyHex: String, content: String): String? = null
+                    override suspend fun nip04Decrypt(senderPubkeyHex: String, content: String): String? = null
+                    override suspend fun nip44Encrypt(receiverPubkeyHex: String, content: String): String? = null
+                    override suspend fun nip44Decrypt(senderPubkeyHex: String, content: String): String? = null
+                }
+                val client = NostrClient(getApplication(), relays, signer)
+                val repo = NostrRepository(client, prefs, io.nurunuru.app.data.cache.NostrCache(getApplication()), RecommendationEngine(getApplication()))
+                client.connect()
+                delay(1_200)
+                val profile = repo.fetchProfiles(listOf(pubkeyHex))[pubkeyHex]
+                client.disconnect()
+                _referralInvitePreview.value = ReferralInvitePreview(pubkeyHex, profile = profile, isLoading = false)
+            } catch (e: Exception) {
+                android.util.Log.w("AuthViewModel", "Referral preview failed: ${e.message}")
+                _referralInvitePreview.value = ReferralInvitePreview(pubkeyHex, isLoading = false)
+            }
+        }
+    }
+
+    fun handleProfileReferralDeepLink(uri: Uri) {
+        val raw = uri.getQueryParameter("npub")
+            ?: uri.getQueryParameter("pubkey")
+            ?: uri.getQueryParameter("ref")
+            ?: uri.lastPathSegment?.takeIf { it.startsWith("npub1") || it.length == 64 }
+        val hex = normalizeReferralPubkey(raw) ?: return
+        val current = _authState.value
+        if (current is AuthState.LoggedIn) {
+            if (hex != current.pubkeyHex) _profileNavigationEvents.tryEmit(hex)
+        } else {
+            setPendingReferralFollow(hex)
+        }
+    }
+
+    fun handleEventDeepLink(uri: Uri) {
+        val raw = uri.getQueryParameter("id")
+            ?: uri.getQueryParameter("event")
+            ?: uri.lastPathSegment?.takeIf { it.length == 64 }
+        val eventId = raw?.takeIf { it.matches(Regex("^[0-9a-fA-F]{64}$")) }?.lowercase() ?: return
+        if (_authState.value is AuthState.LoggedIn) _eventNavigationEvents.tryEmit(eventId)
+    }
+
+    private fun normalizeReferralPubkey(rawPubkey: String?): String? {
+        val normalized = rawPubkey?.takeIf { it.isNotBlank() }?.let { NostrKeyUtils.parsePublicKey(it) ?: it }
+        return normalized?.takeIf { it.matches(Regex("^[0-9a-fA-F]{64}$")) }?.lowercase()
+    }
+
     fun completeRegistration(pubKeyHex: String, activity: Activity? = null) {
         // 秘密鍵は既に SecureKeyManager（nsec）または Passkey（nosskey）に保存済み。
         // 「はじめる」タップ時はログイン状態を先に反映し、LoginScreen/新規登録画面へ
@@ -400,7 +534,81 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     io.nurunuru.app.data.InternalSigner(keyManager)
                 }
+            val referral = pendingReferralFollowPubkey
+            if (!referral.isNullOrBlank() && referral != pubKeyHex) {
+                // Apply the invite follow before relay-sync. A brand-new account has no
+                // remote kind:10002 yet; syncing first may no-op or rewrite relay prefs
+                // while the follow publish is preparing. We also seed the local cache
+                // synchronously inside followPendingReferral so MainScreen can show the
+                // follow immediately even if relay ACKs are slow.
+                followPendingReferral(pubKeyHex, referral, signer)
+                pendingReferralFollowPubkey = null
+                prefs.pendingReferralPubkeyHex = null
+                _referralInvitePreview.value = null
+            }
             syncRelayListOnLogin(pubKeyHex, signer)
+        }
+    }
+
+    private suspend fun followPendingReferral(myPubkeyHex: String, targetPubkeyHex: String, signer: io.nurunuru.app.data.AppSigner) {
+        val appContext = getApplication<Application>()
+        val cache = io.nurunuru.app.data.cache.NostrCache(appContext)
+        val optimistic = cache.getCachedFollowList(myPubkeyHex).orEmpty()
+            .plus(targetPubkeyHex)
+            .distinct()
+        // Make the local graph correct immediately. MainScreen uses the same cache
+        // file, so this survives relay latency and app restarts during the first run.
+        cache.setCachedFollowList(myPubkeyHex, optimistic)
+
+        try {
+            val relays = (prefs.nip65Relays.map { it.url } + prefs.relays.toList() +
+                listOf("wss://yabu.me", "wss://relay-jp.nostr.wirednet.jp", "wss://r.kojira.io"))
+                .distinct()
+            val client = NostrClient(appContext, relays, signer)
+            val repo = NostrRepository(client, prefs, cache, RecommendationEngine(appContext))
+            client.connect()
+            delay(1_000)
+            val success = repo.publishContactList(myPubkeyHex, optimistic)
+            if (!success) {
+                android.util.Log.w("AuthViewModel", "Referral follow publish failed; kept local cache target=${targetPubkeyHex.take(8)}")
+            }
+            delay(500)
+            client.disconnect()
+            android.util.Log.d("AuthViewModel", "Referral follow applied local=true publish=$success target=${targetPubkeyHex.take(8)} total=${optimistic.size}")
+        } catch (e: Exception) {
+            android.util.Log.w("AuthViewModel", "Referral follow failed after local cache seed: ${e.message}")
+        }
+    }
+
+    private suspend fun NostrRepository.publishContactList(myPubkeyHex: String, follows: List<String>): Boolean {
+        return try {
+            val tags = follows.distinct().map { listOf("p", it) }
+            val ok = publishNewEventForOnboarding(NostrKind.CONTACT_LIST, "", tags) != null
+            if (ok) {
+                io.nurunuru.app.data.cache.NostrCache(getApplication()).setCachedFollowList(myPubkeyHex, follows.distinct())
+            }
+            ok
+        } catch (e: Exception) {
+            android.util.Log.w("AuthViewModel", "publishContactList failed: ${e.message}")
+            false
+        }
+    }
+
+    private suspend fun NostrRepository.publishNewEventForOnboarding(
+        kind: Int,
+        content: String,
+        tags: List<List<String>>
+    ): String? {
+        return try {
+            val rustClient = client.getRustClient() ?: return null
+            val unsigned = withContext(Dispatchers.IO) {
+                rustClient.createUnsignedEvent(kind.toUInt(), content, tags, myPubkeyHex)
+            }
+            val signedJson = client.getSigner().signEvent(unsigned) ?: return null
+            withContext(Dispatchers.IO) { rustClient.publishRawEvent(signedJson) }
+        } catch (e: Exception) {
+            android.util.Log.w("AuthViewModel", "publishNewEventForOnboarding failed: ${e.message}")
+            null
         }
     }
 

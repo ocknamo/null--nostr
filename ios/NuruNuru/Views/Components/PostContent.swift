@@ -135,6 +135,10 @@ struct PostHeader: View {
     @State private var showCopyToast = false
     @State private var nip05Verified: Bool? = nil
 
+    private var shareURL: URL {
+        URL(string: "https://www.nullnull.app/e/\(post.event.id)")!
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 4) {
@@ -176,8 +180,16 @@ struct PostHeader: View {
                     .foregroundStyle(theme.textTertiary)
 
                 // ⋮ menu — mirrors Android DropdownMenu order:
-                // テキストをコピー → この投稿に興味がない → Birdwatch → 通報 → ミュート → 削除
+                // 投稿を共有 → テキストをコピー → この投稿に興味がない → Birdwatch → 通報 → ミュート → 削除
                 Menu {
+                ShareLink(
+                    item: shareURL,
+                    subject: Text("ぬるぬるの投稿"),
+                    message: Text("ぬるぬるで投稿を見てね")
+                ) {
+                    Label("投稿を共有", systemImage: "square.and.arrow.up")
+                }
+
                 // テキストをコピー (mirrors Android "テキストをコピー")
                 Button {
                     UIPasteboard.general.string = post.event.content

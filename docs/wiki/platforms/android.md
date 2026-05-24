@@ -24,6 +24,10 @@ android/app/src/main/kotlin/io/nurunuru/app/
 - `BasicTextField` に `Modifier.weight(1f)` を scrollable `Column` 内で使わない。
 - `ImageViewerDialog` では `Modifier.transformable` を使わず、manual pointer-count branching を使う。
 - app-wide font は `LineSeedJP`。
+- Google Play の 16 KB memory page size 要件に合わせ、Android native library は 16 KB aligned で扱う。
+  - Gradle/packaging 側は AGP `8.6.1`。
+  - Rust FFI (`libuniffi_nurunuru.so`) は `rust-engine/.cargo/config.toml` の Android target `rustflags` で `-Wl,-z,max-page-size=16384` を渡して再ビルドする。
+  - AAB 生成前に `llvm-readelf -l <lib>.so` の `LOAD ... Align` が `0x4000` 以上であることを確認する。
 
 - NIP-55 / Amber external signer via `ExternalSigner.kt`。
 - Talk は Marmot MLS 中心。NIP-17 models は legacy/deprecated。
@@ -35,6 +39,7 @@ android/app/src/main/kotlin/io/nurunuru/app/
 - `android/app/src/main/kotlin/io/nurunuru/app/ui/components/PostModal.kt`
 - `android/app/src/main/kotlin/io/nurunuru/app/ui/components/ImageViewerDialog.kt`
 - `android/app/src/main/kotlin/io/nurunuru/app/ui/screens/MainScreen.kt`
+- `rust-engine/.cargo/config.toml`
 
 ## Related pages
 

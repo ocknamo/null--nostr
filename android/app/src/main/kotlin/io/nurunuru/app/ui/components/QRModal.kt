@@ -166,10 +166,11 @@ fun QRModal(
                             Button(
                                 onClick = {
                                     val sendIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                                        putExtra(android.content.Intent.EXTRA_TEXT, "nostr:$npub")
+                                        putExtra(android.content.Intent.EXTRA_TEXT, "https://www.nullnull.app/p/$npub")
+                                        putExtra(android.content.Intent.EXTRA_TITLE, "ぬるぬるでプロフィールを見てね")
                                         type = "text/plain"
                                     }
-                                    context.startActivity(android.content.Intent.createChooser(sendIntent, "共有"))
+                                    context.startActivity(android.content.Intent.createChooser(sendIntent, "プロフィールを共有"))
                                 },
                                 colors = ButtonDefaults.buttonColors(containerColor = LineGreen, contentColor = Color.White),
                                 shape = RoundedCornerShape(24.dp),

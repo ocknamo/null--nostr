@@ -94,6 +94,7 @@ struct LoginView: View {
         VStack(spacing: NuruSpacing.space6) {
             Spacer()
             logoSection
+            invitePreviewSection
             buttonSection
             Spacer()
             footerSection
@@ -115,6 +116,48 @@ struct LoginView: View {
             Text("ぬるぬる")
                 .font(NuruFont.displayLarge())
                 .foregroundStyle(theme.textPrimary)
+        }
+    }
+
+    // MARK: - Invite Preview
+
+    @ViewBuilder
+    private var invitePreviewSection: some View {
+        if let invite = viewModel.referralInvitePreview {
+            HStack(spacing: NuruSpacing.space3) {
+                AsyncImage(url: URL(string: invite.profile?.picture ?? "")) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    Image(systemName: "person.fill")
+                        .foregroundStyle(theme.textTertiary)
+                }
+                .frame(width: 48, height: 48)
+                .clipShape(Circle())
+                .background(theme.bgTertiary.clipShape(Circle()))
+
+                VStack(alignment: .leading, spacing: NuruSpacing.space1) {
+                    Text("招待されています")
+                        .font(NuruFont.labelSmall())
+                        .foregroundStyle(NuruColors.lineGreen)
+                    Text(invite.profile?.displayedName ?? NostrKeyUtils.shortenPubkey(invite.pubkeyHex))
+                        .font(NuruFont.bodyMedium())
+                        .foregroundStyle(theme.textPrimary)
+                        .lineLimit(1)
+                    Text(invite.isLoading ? "プロフィールを読み込み中..." : "はじめるとこのユーザーをフォローします")
+                        .font(NuruFont.bodySmall())
+                        .foregroundStyle(theme.textSecondary)
+                        .lineLimit(2)
+                }
+                Spacer()
+                Button { viewModel.dismissReferralInvite() } label: {
+                    Image(systemName: "xmark")
+                        .foregroundStyle(theme.textTertiary)
+                }
+            }
+            .padding(NuruSpacing.space4)
+            .frame(maxWidth: .infinity)
+            .background(theme.bgSecondary)
+            .clipShape(RoundedRectangle(cornerRadius: NuruSpacing.radiusXl))
         }
     }
 
@@ -1660,6 +1703,10 @@ private struct SignUpSuccessStep: View {
 
     @Environment(\.nuruTheme) private var theme
 
+    private var shareURL: URL {
+        URL(string: "https://www.nullnull.app/p/\(npub)")!
+    }
+
     var body: some View {
         VStack(spacing: NuruSpacing.space5) {
             SignUpIconBox(
@@ -1672,20 +1719,33 @@ private struct SignUpSuccessStep: View {
                 Text("準備完了！")
                     .font(NuruFont.titleLarge())
                     .foregroundStyle(theme.textPrimary)
-                Text("アカウントが作成されました。ぬるぬるへようこそ！")
+                Text("プロフィールを友だちに共有できます。リンクから始めた人は、あなたをフォローした状態でスタートします。")
                     .font(NuruFont.bodySmall())
                     .foregroundStyle(theme.textSecondary)
                     .multilineTextAlignment(.center)
             }
 
-            VStack(alignment: .leading, spacing: NuruSpacing.space1) {
-                Text("あなたの公開鍵 (npub)")
+            VStack(alignment: .leading, spacing: NuruSpacing.space3) {
+                Text("プロフィールを共有")
                     .font(NuruFont.labelSmall())
                     .foregroundStyle(theme.textTertiary)
-                Text(npub)
-                    .font(.system(.caption, design: .monospaced))
+                Text("Twitter/X や LINE に送ると、相手はあなたをフォローした状態でぬるぬるを始められます。")
+                    .font(NuruFont.bodySmall())
                     .foregroundStyle(theme.textPrimary)
-                    .lineLimit(2)
+                ShareLink(
+                    item: shareURL,
+                    subject: Text("ぬるぬるでプロフィールを見てね"),
+                    message: Text("リンクから始めると、このユーザーをフォローした状態でスタートできます。")
+                ) {
+                    HStack {
+                        Image(systemName: "square.and.arrow.up")
+                        Text("プロフィールを共有")
+                            .font(NuruFont.buttonMedium())
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 48)
+                }
+                .buttonStyle(NuruSecondaryButtonStyle(theme: theme))
             }
             .padding(NuruSpacing.space4)
             .frame(maxWidth: .infinity, alignment: .leading)

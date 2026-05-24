@@ -1,6 +1,16 @@
 export const dynamic = 'force-static'
 
 const body = {
+  applinks: {
+    apps: [],
+    details: [
+      {
+        appID: '66G7S3P755.io.nurunuru.app',
+        paths: ['/p/*', '/e/*'],
+        components: [{ '/': '/p/*' }, { '/': '/e/*' }],
+      },
+    ],
+  },
   webcredentials: {
     apps: ['66G7S3P755.io.nurunuru.app'],
   },

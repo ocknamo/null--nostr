@@ -109,7 +109,7 @@ dependencies {
 
     // Official rust-nostr SDK
     implementation(libs.rust.nostr.sdk)
-    implementation("net.java.dev.jna:jna:5.15.0@aar")
+    implementation("net.java.dev.jna:jna:5.17.0@aar")
 
     // Media playback (Kind 34236)
     implementation(libs.media3.exoplayer)

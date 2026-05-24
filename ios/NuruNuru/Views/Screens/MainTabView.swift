@@ -17,6 +17,7 @@ struct MainTabView: View {
     @State private var hasNewNotifications: Bool      = false
     @State private var notificationPollTask: Task<Void, Never>? = nil
     @State private var viewingProfile:     ProfileID? = nil
+    @State private var deepLinkedEventId:   EventID? = nil
     @State private var zapTarget:          ScoredPost? = nil
     @State private var hideBottomNavForExternalMiniApp: Bool = false
     @State private var didLoadTalkGroups: Bool = false
@@ -206,6 +207,13 @@ struct MainTabView: View {
             )
         }
         // UserProfileSheet — mirrors Android UserProfileModal with DM button
+        .sheet(item: $deepLinkedEventId) { eid in
+            PostDetailView(
+                eventId: eid.id,
+                repository: repository,
+                myPubkeyHex: pubkeyHex
+            )
+        }
         .sheet(item: $viewingProfile) { pid in
             UserProfileSheet(
                 pubkey:      pid.id,
@@ -226,6 +234,16 @@ struct MainTabView: View {
         }
         .onChange(of: showNotifications) { _, showing in
             if !showing { markNotificationsSeen() }
+        }
+        .onChange(of: authViewModel.openedProfilePubkey) { _, pk in
+            guard let pk, pk != pubkeyHex else { return }
+            viewingProfile = ProfileID(pk)
+            authViewModel.consumeOpenedProfilePubkey()
+        }
+        .onChange(of: authViewModel.openedEventId) { _, eventId in
+            guard let eventId else { return }
+            deepLinkedEventId = EventID(eventId)
+            authViewModel.consumeOpenedEventId()
         }
         .onChange(of: scenePhase) { _, phase in
             // Keep timeline foreground path clean. MLS retry draining is triggered
@@ -350,6 +368,12 @@ struct MainTabView: View {
 
 /// Identifiable wrapper for String, used with .sheet(item:) for profile navigation.
 struct ProfileID: Identifiable {
+    let id: String
+    init(_ id: String) { self.id = id }
+}
+
+/// Identifiable wrapper for event ID, used with .sheet(item:) for post deep links.
+struct EventID: Identifiable {
     let id: String
     init(_ id: String) { self.id = id }
 }

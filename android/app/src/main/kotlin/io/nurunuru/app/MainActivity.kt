@@ -151,6 +151,14 @@ class MainActivity : ComponentActivity() {
                     android.util.Log.d("MainActivity", "Found nsec in deep link, logging in...")
                     authViewModel?.login(nsec)
                 }
+            } else if ((uri.scheme == "io.nurunuru.app" && uri.host == "profile") ||
+                ((uri.scheme == "https" || uri.scheme == "http") && uri.host == "www.nullnull.app" && uri.pathSegments.firstOrNull() == "p")
+            ) {
+                authViewModel?.handleProfileReferralDeepLink(uri)
+            } else if ((uri.scheme == "nurunuru" && uri.host == "event") ||
+                ((uri.scheme == "https" || uri.scheme == "http") && uri.host == "www.nullnull.app" && uri.pathSegments.firstOrNull() == "e")
+            ) {
+                authViewModel?.handleEventDeepLink(uri)
             }
         }
     }

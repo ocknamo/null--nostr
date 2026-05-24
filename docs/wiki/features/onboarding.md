@@ -178,3 +178,55 @@ Password Manager で同期されるリカバリ手段であり、nsec を別途�
 - Android: 同様に SharedPreferences から削除。Google Password Manager 側に
   Passkey は残る。
 - 3 プラットフォーム共通で `prefs.loginMethod` を null にクリア。
+
+### Profile sharing and referral follow
+
+The final success page no longer asks users to copy their public key. Android and iOS now show a profile-share action instead. The native share sheet shares only the canonical HTTPS invite URL (`https://www.nullnull.app/p/<npub>`) so Twitter/X, LINE, Messages, and other apps can render a modern link card using Open Graph metadata. Custom-scheme links remain accepted by native deep-link handlers but are not included in the shared text.
+
+When a recipient opens a supported profile/referral deep link before registration, `AuthViewModel` stores the referred pubkey as a pending follow. After the new account taps **はじめる**, registration transitions to the main app immediately and a background task publishes a kind:3 contact list that includes the shared profile.
+
+Source references:
+- `android/app/src/main/kotlin/io/nurunuru/app/ui/components/SignUpModal.kt`
+- `android/app/src/main/kotlin/io/nurunuru/app/viewmodel/AuthViewModel.kt`
+- `android/app/src/main/kotlin/io/nurunuru/app/MainActivity.kt`
+- `android/app/src/main/AndroidManifest.xml`
+- `ios/NuruNuru/Views/Screens/LoginView.swift`
+- `ios/NuruNuru/ViewModels/AuthViewModel.swift`
+
+Install-cross retention and preview additions:
+- Web landing page `app/p/[npub]/page.js` renders the invited profile, stores the referral in browser `localStorage`, offers app-open/install actions, and exposes Open Graph / Twitter Card metadata plus a generated thumbnail image for rich share previews.
+- Android persists the pending referral in `AppPreferences.pendingReferralPubkeyHex`, restores it after process restart, and shows an invite preview card on `LoginScreen` using the profile fetched from relays.
+- iOS persists the pending referral in `AppPreferences.pendingReferralPubkeyHex`, restores it after app restart, and shows the same invite preview card on `LoginView`.
+- Associated link config now includes `/p/*`: Android App Links via `AndroidManifest.xml` + `assetlinks.json`; iOS Universal Links via `NuruNuru.entitlements` + `apple-app-site-association`.
+
+Source references (install-cross / preview):
+- `app/p/[npub]/page.js`
+- `app/.well-known/apple-app-site-association/route.js`
+- `public/.well-known/apple-app-site-association`
+- `app/.well-known/assetlinks.json/route.js`
+- `android/app/src/main/kotlin/io/nurunuru/app/data/prefs/AppPreferences.kt`
+- `android/app/src/main/kotlin/io/nurunuru/app/ui/screens/LoginScreen.kt`
+- `ios/NuruNuru/Data/AppPreferences.swift`
+- `ios/NuruNuru/NuruNuru.entitlements`
+- `ios/NuruNuru/Views/Screens/LoginView.swift`
+
+Open Questions:
+- True deferred deep linking where a store installs the app and automatically passes the original referral into the first launch still depends on App Store / Play Store campaign/deferred-link infrastructure. Current native support preserves referral across app restarts and across install when the user returns to or reopens the same `/p/<npub>` invite link after install.
+
+### Android profile setup continuation
+
+Android treats the initial kind:0 profile publish during onboarding as best-effort. If relay publish fails or times out, the setup button still advances to the tutorial step so a new user is not trapped before entering the app. The profile can be republished later via profile editing.
+
+Source references:
+- `android/app/src/main/kotlin/io/nurunuru/app/ui/components/SignUpModal.kt`
+
+### Post rich sharing
+
+Android and iOS post overflow menus include **投稿を共有**. The shared URL is the canonical HTTPS event URL (`https://www.nullnull.app/e/<event-id>`), so LINE, X, Messages, and blog platforms can render URL cards instead of raw text. The Web route `app/e/[eventId]/page.js` provides Open Graph/Twitter metadata and `app/e/[eventId]/opengraph-image.js` provides the thumbnail.
+
+Source references:
+- `android/app/src/main/kotlin/io/nurunuru/app/ui/components/PostContent.kt`
+- `ios/NuruNuru/Views/Components/PostContent.swift`
+- `app/e/[eventId]/page.js`
+- `app/e/[eventId]/EventInviteClient.js`
+- `app/e/[eventId]/opengraph-image.js`

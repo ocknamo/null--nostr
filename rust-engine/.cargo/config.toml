@@ -1,6 +1,9 @@
 [target.aarch64-linux-android]
 linker = "aarch64-linux-android35-clang"
 ar = "llvm-ar"
+rustflags = [
+  "-C", "link-arg=-Wl,-z,max-page-size=16384"
+]
 
 [env]
 CC_aarch64_linux_android = "aarch64-linux-android35-clang"
@@ -10,6 +13,9 @@ RANLIB_aarch64_linux_android = "llvm-ranlib"
 [target.x86_64-linux-android]
 linker = "x86_64-linux-android35-clang"
 ar = "llvm-ar"
+rustflags = [
+  "-C", "link-arg=-Wl,-z,max-page-size=16384"
+]
 
 # iOS: align Rust link target version with current Apple SDK objects.
 # Prevents linker issues like missing ___chkstk_darwin caused by 10.0 link target.

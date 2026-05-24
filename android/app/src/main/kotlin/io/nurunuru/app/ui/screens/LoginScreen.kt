@@ -34,16 +34,20 @@ import androidx.compose.ui.unit.sp
 import io.nurunuru.app.R
 import io.nurunuru.app.data.ExternalSigner
 import io.nurunuru.app.ui.components.SignUpModal
+import io.nurunuru.app.ui.components.UserAvatar
 import io.nurunuru.app.ui.theme.LineGreen
 import io.nurunuru.app.ui.theme.LocalNuruColors
 import io.nurunuru.app.viewmodel.AuthState
 import io.nurunuru.app.viewmodel.AuthViewModel
+import io.nurunuru.app.viewmodel.ReferralInvitePreview
+import io.nurunuru.app.data.NostrKeyUtils
 
 @Composable
 fun LoginScreen(
     viewModel: AuthViewModel
 ) {
     val authState by viewModel.authState.collectAsState()
+    val referralInvite by viewModel.referralInvitePreview.collectAsState()
     val nuruColors = LocalNuruColors.current
 
     var nsecInput by remember { mutableStateOf("") }
@@ -171,6 +175,10 @@ fun LoginScreen(
                     fontWeight = FontWeight.Bold,
                     color = nuruColors.textPrimary
                 )
+            }
+
+            referralInvite?.let {
+                ReferralInviteCard(invite = it, onDismiss = { viewModel.dismissReferralInvite() })
             }
 
             // Options
@@ -641,6 +649,52 @@ private fun TermsNoticeCard(
                     fontSize = 12.sp,
                     lineHeight = 16.sp
                 )
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun ReferralInviteCard(
+    invite: ReferralInvitePreview,
+    onDismiss: () -> Unit
+) {
+    val nuruColors = LocalNuruColors.current
+    val profile = invite.profile
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = nuruColors.bgSecondary,
+        shape = RoundedCornerShape(20.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            UserAvatar(
+                pictureUrl = profile?.picture,
+                displayName = profile?.displayedName ?: "",
+                size = 48.dp
+            )
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("招待されています", color = LineGreen, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    profile?.displayedName ?: NostrKeyUtils.shortenPubkey(invite.pubkeyHex, 8),
+                    color = nuruColors.textPrimary,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+                Text(
+                    if (invite.isLoading) "プロフィールを読み込み中..." else "はじめるとこのユーザーをフォローします",
+                    color = nuruColors.textSecondary,
+                    fontSize = 12.sp,
+                    maxLines = 2
+                )
+            }
+            IconButton(onClick = onDismiss) {
+                Icon(Icons.Default.Close, contentDescription = "招待を閉じる", tint = nuruColors.textTertiary)
             }
         }
     }

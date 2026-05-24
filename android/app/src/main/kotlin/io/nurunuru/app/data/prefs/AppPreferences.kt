@@ -171,6 +171,14 @@ class AppPreferences(context: Context) {
             else plainPrefs.edit().putString(KEY_LOGIN_METHOD, value).apply()
         }
 
+    /** Pending profile-invite referral. Non-secret, stored so app restarts during onboarding keep the invite. */
+    var pendingReferralPubkeyHex: String?
+        get() = plainPrefs.getString(KEY_PENDING_REFERRAL_PUBKEY_HEX, null)
+        set(value) {
+            if (value.isNullOrBlank()) plainPrefs.edit().remove(KEY_PENDING_REFERRAL_PUBKEY_HEX).apply()
+            else plainPrefs.edit().putString(KEY_PENDING_REFERRAL_PUBKEY_HEX, value.lowercase()).apply()
+        }
+
     var recentSearches: List<String>
         get() {
             val jsonStr = plainPrefs.getString(KEY_RECENT_SEARCHES, "[]") ?: "[]"
@@ -424,6 +432,7 @@ class AppPreferences(context: Context) {
         private const val KEY_MLS_KEY_PACKAGE_RELAYS = "mls_key_package_relays"
         private const val KEY_MLS_INBOX_RELAYS = "mls_inbox_relays"
         private const val KEY_LOGIN_METHOD = "login_method"
+        private const val KEY_PENDING_REFERRAL_PUBKEY_HEX = "pending_referral_pubkey_hex"
     }
 }
 

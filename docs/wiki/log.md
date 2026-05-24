@@ -456,3 +456,66 @@ LLM Wiki の時系列ログです。追記専用として扱います。
 - MiniApp `SettingsScreen` のログアウトも `MainScreen` から渡された cleanup-aware logout closure を使うよう変更。
 - `NuruNuruApp.clearPrewarmedClient()` を追加し、Amber/external signer 用 prewarmed client を logout 時に明示 disconnect + null reset。
 - 検証: `cd android && ./gradlew assembleDebug` 成功。接続済み Android 実機 `9DNBNF45Y9AQFEY9` に install + launch 済み、起動直後 crash なし。
+
+## [2026-05-24] fix | Android 16 KB native page-size release preparation
+
+- Google Play 製品版 AAB の警告「このアプリは 16 KB メモリのページサイズをサポートしていません」を調査。
+- Release merged native libs の `PT_LOAD Align` を確認し、`libimage_processing_util_jni.so` と Rust FFI `libuniffi_nurunuru.so` が `0x1000` だったことを確認。`libjnidispatch.so` と `libnostr_sdk_ffi.so` は `0x4000`。
+- 対応:
+  - Android Gradle Plugin を `8.6.1` に更新。
+  - CameraX を `1.4.2` に更新。
+  - JNA を `5.17.0` に統一。
+  - Rust Android target に `-Wl,-z,max-page-size=16384` を追加し、再ビルド後の `libuniffi_nurunuru.so` が 16 KB page size 対応になるようにした。
+- 注意: Rust FFI `.so` は prebuilt artifact なので、AAB 再生成前に Rust FFI の Android release build と `android/libs/arm64-v8a/libuniffi_nurunuru.so` へのコピーが必要。
+
+## [2026-05-24] feature | Native onboarding profile-share referral follow
+
+- Android/iOS onboarding success page changed from public-key copy to profile sharing for Twitter/X and LINE share sheets.
+- Shared profile links carry a referral pubkey; native deep-link handling stores it during logged-out onboarding.
+- After the new user taps **はじめる**, a background kind:3 contact-list update follows the shared profile so the user starts with that account in their graph.
+- Updated `docs/wiki/features/onboarding.md` with source references and install-link caveats.
+
+## [2026-05-24] feature | Install-cross referral retention and invite preview
+
+- Added `/p/<npub>` Web invite landing page with profile preview, app-open links, install links, and browser-side referral retention.
+- Added iOS Universal Links for `/p/*` (`applinks:www.nullnull.app`, `applinks:nullnull.app`) and expanded AASA output.
+- Added native pending referral persistence in Android/iOS preferences so onboarding survives app restarts before registration completion.
+- Added invite preview cards to Android `LoginScreen` and iOS `LoginView`; users can dismiss the referral before starting.
+- Validation: Android `./gradlew :app:compileDebugKotlin` and iOS simulator `xcodebuild ... build` succeeded.
+
+## [2026-05-24] fix | Modern rich-card profile sharing
+
+- Changed Android/iOS onboarding share payloads to share only the canonical HTTPS profile invite URL (`https://www.nullnull.app/p/<npub>`) instead of multiline text plus custom-scheme deep links.
+- Split the Web invite page into a server metadata wrapper and client UI so `/p/<npub>` exposes Open Graph and Twitter Card metadata.
+- Added `/p/<npub>/opengraph-image` dynamic thumbnail generation for LINE / X / Messages link-card previews.
+- Kept custom-scheme deep links as app-open actions on the landing page and native handlers, but removed them from shared text.
+
+## [2026-05-24] fix | Android onboarding profile setup does not block on relay publish
+
+- Android profile setup now wraps initial kind:0 publish in an 8-second timeout and treats failure as best-effort.
+- `セットアップを完了する` advances to the tutorial step even if selected relays are slow/offline, preventing users coming from profile referral links from getting stuck.
+- Updated onboarding wiki behavior notes.
+
+## [2026-05-24] fix | Android referral follow local graph seed
+
+- Android onboarding now applies referral follow before relay sync and seeds `NostrCache` follow-list immediately.
+- Referral contact-list publish is best-effort in the background, but the local graph is correct on first MainScreen render even if relay ACKs are slow.
+- This fixes the completed shared-link onboarding flow where the user reached the app but the inviter did not appear as followed.
+
+## [2026-05-24] feature | QR profile share uses referral cards and opens installed app profile
+
+- Android/iOS home QR share buttons now share the canonical `https://www.nullnull.app/p/<npub>` invite URL instead of `nostr:<npub>`, matching onboarding rich-card sharing.
+- Logged-in Android/iOS deep-link handling now opens the shared user's profile sheet instead of treating the link only as an onboarding referral.
+- Logged-out behavior remains referral onboarding: the same link stores pending follow and shows invite preview.
+
+## [2026-05-24] feature | Rich post sharing from overflow menus
+
+- Added **投稿を共有** to Android/iOS post overflow menus before text copy.
+- Native share sheets now share canonical HTTPS event URLs (`https://www.nullnull.app/e/<event-id>`) for modern link-card previews.
+- Added Web event landing page plus Open Graph/Twitter metadata and dynamic thumbnail generation for blog/SNS embed previews.
+
+## [2026-05-24] feature | Native post share links and event previews
+
+- Added Android/iOS post-menu `投稿を共有` actions that share canonical `https://www.nullnull.app/e/<event-id>` URLs from timeline/home/search result rows.
+- Added Web `/e/<event-id>` post preview route with Open Graph / Twitter Card metadata and dynamic thumbnail image for blog/SNS unfurl previews.
+- Added Android App Links and iOS Universal Links for `/e/*`; logged-in native apps open shared post links into the post detail screen.

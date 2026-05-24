@@ -127,9 +127,8 @@ struct QRSheet: View {
                     .foregroundStyle(theme.textSecondary)
 
                 Button {
-                    let text = "nostr:\(npub)"
-                    UIPasteboard.general.string = text
-                    let av = UIActivityViewController(activityItems: [text], applicationActivities: nil)
+                    let url = URL(string: "https://www.nullnull.app/p/\(npub)")!
+                    let av = UIActivityViewController(activityItems: [url], applicationActivities: nil)
                     if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
                        let root = scene.windows.first?.rootViewController {
                         root.present(av, animated: true)

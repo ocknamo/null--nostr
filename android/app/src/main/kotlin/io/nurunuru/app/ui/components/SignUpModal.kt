@@ -4,6 +4,7 @@ import androidx.compose.animation.*
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.widget.Toast
 import androidx.core.content.ContextCompat
@@ -216,8 +217,11 @@ fun SignUpModal(
                                             coroutineScope.launch {
                                                 val relayTriples: List<Triple<String, Boolean, Boolean>>? =
                                                     selectedRelays?.map { Triple(it.url, it.read, it.write) }
-                                                val publishedProfile = viewModel.publishInitialMetadata(
-                                                    signer = profileSigner,
+                                                // Do not block onboarding on relay publishing. Persist the selected
+                                                // relay/profile draft immediately, then publish kind:0 / kind:10002
+                                                // in the background. This avoids a stuck spinner when the selected
+                                                // relays are slow or when Rust FFI send_event waits for ACKs.
+                                                viewModel.saveInitialOnboardingDraft(
                                                     name = name,
                                                     about = about,
                                                     picture = picture,
@@ -228,13 +232,27 @@ fun SignUpModal(
                                                     birthday = birthday,
                                                     relays = relayTriples
                                                 )
-                                                if (!publishedProfile) {
-                                                    error = "プロフィール(kind0)のリレー送信に失敗しました。通信状況とリレー設定を確認してください。"
-                                                    isLoading = false
-                                                    return@launch
-                                                }
                                                 step = "tutorial"
                                                 isLoading = false
+                                                launch(kotlinx.coroutines.Dispatchers.IO) {
+                                                    val publishedProfile = kotlinx.coroutines.withTimeoutOrNull(12_000) {
+                                                        viewModel.publishInitialMetadata(
+                                                            signer = profileSigner,
+                                                            name = name,
+                                                            about = about,
+                                                            picture = picture,
+                                                            banner = banner,
+                                                            nip05 = nip05,
+                                                            lud16 = lud16,
+                                                            website = website,
+                                                            birthday = birthday,
+                                                            relays = relayTriples
+                                                        )
+                                                    } ?: false
+                                                    if (!publishedProfile) {
+                                                        android.util.Log.w("SignUpModal", "Initial profile background publish failed or timed out")
+                                                    }
+                                                }
                                             }
                                         },
                                         isLoading = isLoading
@@ -988,14 +1006,14 @@ fun TutorialStep(
 @Composable
 fun SuccessStep(npub: String, onComplete: () -> Unit) {
     val nuruColors = LocalNuruColors.current
-    val clipboardManager = LocalClipboardManager.current
-    var copied by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val shareText = remember(npub) { profileShareText(npub) }
 
     IconBox(icon = Icons.Default.CheckCircle, containerColor = LineGreen.copy(alpha = 0.1f), iconColor = LineGreen)
 
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("準備完了！", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = nuruColors.textPrimary)
-        Text("アカウントが作成されました。公開鍵をコピーしてから始めましょう。", fontSize = 14.sp, color = nuruColors.textSecondary, textAlign = TextAlign.Center)
+        Text("プロフィールを友だちに共有できます。リンクから始めた人は、あなたをフォローした状態でスタートします。", fontSize = 14.sp, color = nuruColors.textSecondary, textAlign = TextAlign.Center)
     }
 
     Card(
@@ -1004,34 +1022,28 @@ fun SuccessStep(npub: String, onComplete: () -> Unit) {
         shape = RoundedCornerShape(16.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("あなたの公開鍵 (npub)", fontSize = 10.sp, color = nuruColors.textTertiary)
+            Text("プロフィールを共有", fontSize = 10.sp, color = nuruColors.textTertiary)
             Text(
-                text = npub,
-                fontSize = 12.sp,
-                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                color = nuruColors.textPrimary,
-                maxLines = 3,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color.Black.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
-                    .padding(8.dp)
+                text = "Twitter/X や LINE に送ると、相手はあなたをフォローした状態でぬるぬるを始められます。",
+                fontSize = 13.sp,
+                color = nuruColors.textPrimary
             )
             OutlinedButton(
                 onClick = {
-                    clipboardManager.setText(AnnotatedString(npub))
-                    copied = true
+                    val intent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, shareText)
+                        putExtra(Intent.EXTRA_TITLE, "ぬるぬるでプロフィールを見てね")
+                    }
+                    context.startActivity(Intent.createChooser(intent, "プロフィールを共有"))
                 },
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = LineGreen)
             ) {
-                Icon(
-                    imageVector = if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
+                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(if (copied) "コピーしました" else "公開鍵をコピー", fontWeight = FontWeight.Bold)
+                Text("プロフィールを共有", fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -1045,6 +1057,8 @@ fun SuccessStep(npub: String, onComplete: () -> Unit) {
         Text("はじめる", fontWeight = FontWeight.Bold)
     }
 }
+
+private fun profileShareText(npub: String): String = "https://www.nullnull.app/p/$npub"
 
 @Composable
 private fun IconBox(icon: ImageVector, containerColor: Color, iconColor: Color) {

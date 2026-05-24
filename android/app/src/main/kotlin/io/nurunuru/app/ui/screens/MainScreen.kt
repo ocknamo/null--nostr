@@ -32,6 +32,7 @@ import io.nurunuru.app.data.SecureKeyManager
 import io.nurunuru.app.data.prefs.AppPreferences
 import io.nurunuru.app.data.models.ScoredPost
 import io.nurunuru.app.ui.components.ConnectionStatusBanner
+import io.nurunuru.app.ui.components.UserProfileModal
 import io.nurunuru.app.ui.theme.LineGreen
 import io.nurunuru.app.ui.theme.LocalNuruColors
 import io.nurunuru.app.viewmodel.*
@@ -69,6 +70,7 @@ fun MainScreen(
     var showAppSettings by remember { mutableStateOf(false) }
     var selectedNoteEventId by remember { mutableStateOf<String?>(null) }
     var selectedNoteInitialPost by remember { mutableStateOf<ScoredPost?>(null) }
+    var deepLinkedProfilePubkey by remember { mutableStateOf<String?>(null) }
 
     // Create shared NostrClient and Repository
     // NostrCache と RecommendationEngine は NuruNuruApp.onCreate() で事前生成済み。
@@ -113,6 +115,20 @@ fun MainScreen(
 
     val nostrCache = remember { app.nostrCache }
     val repository = remember { NostrRepository(nostrClient, app.prefs, nostrCache, recommendationEngine) }
+
+    LaunchedEffect(authViewModel, pubkeyHex) {
+        launch {
+            authViewModel.profileNavigationEvents.collect { pk ->
+                if (pk != pubkeyHex) deepLinkedProfilePubkey = pk
+            }
+        }
+        launch {
+            authViewModel.eventNavigationEvents.collect { eventId ->
+                selectedNoteEventId = eventId
+                selectedNoteInitialPost = null
+            }
+        }
+    }
 
     // ViewModels
     val timelineVM: TimelineViewModel = viewModel(
@@ -354,6 +370,25 @@ fun MainScreen(
                     }
                 )
             }
+        }
+
+        if (deepLinkedProfilePubkey != null) {
+            val linkedProfileViewModel: HomeViewModel = viewModel(
+                HomeViewModel::class.java,
+                key = "deeplink_profile_$deepLinkedProfilePubkey",
+                factory = HomeViewModel.Factory(repository, pubkeyHex)
+            )
+            UserProfileModal(
+                pubkey = deepLinkedProfilePubkey!!,
+                viewModel = linkedProfileViewModel,
+                repository = repository,
+                onDismiss = { deepLinkedProfilePubkey = null },
+                onStartDM = { pk ->
+                    deepLinkedProfilePubkey = null
+                    activeTab = BottomTab.TALK
+                    talkVM.createDmConversation(pk)
+                }
+            )
         }
     }
 }

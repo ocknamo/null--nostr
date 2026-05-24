@@ -1,6 +1,12 @@
 import Foundation
 import Observation
 
+struct ReferralInvitePreview {
+    let pubkeyHex: String
+    var profile: UserProfile?
+    var isLoading: Bool
+}
+
 /// Authentication state and login logic.
 /// Mirrors Android AuthViewModel / AuthState.
 /// Uses @Observable (iOS 17 Observation framework — no Combine/ObservableObject).
@@ -26,6 +32,9 @@ final class AuthViewModel {
     }
 
     private(set) var state: State = .checking
+    private(set) var referralInvitePreview: ReferralInvitePreview?
+    private(set) var openedProfilePubkey: String?
+    private(set) var openedEventId: String?
 
     // MARK: - Dependencies
 
@@ -39,6 +48,7 @@ final class AuthViewModel {
     /// In-memory signer for the active nosskey session (if any). Re-created on
     /// each login so the PRF cache lifetime is per-session.
     private var nosskeySigner: NosskeySigner?
+    private var pendingReferralFollowPubkey: String?
 
     // MARK: - Init
 
@@ -53,6 +63,7 @@ final class AuthViewModel {
         // when no instance is injected. We're called from the app start-up path
         // which is already main-thread.
         self.nosskeyManager = nosskeyManager ?? MainActor.assumeIsolated { NosskeyManager() }
+        if let pending = self.prefs.pendingReferralPubkeyHex { setPendingReferralFollow(pending) }
         checkStoredLogin()
     }
 
@@ -169,7 +180,78 @@ final class AuthViewModel {
         if prefs.loginMethod != "nosskey" {
             prefs.loginMethod = "nsec"
         }
+        let referral = pendingReferralFollowPubkey
         state = .loggedIn(pubkeyHex: pubkeyHex)
+        if let referral, referral != pubkeyHex {
+            pendingReferralFollowPubkey = nil
+            prefs.pendingReferralPubkeyHex = nil
+            referralInvitePreview = nil
+            Task { await followPendingReferral(myPubkeyHex: pubkeyHex, targetPubkeyHex: referral) }
+        }
+    }
+
+    private func setPendingReferralFollow(_ raw: String?) {
+        let hex = normalizedReferralPubkey(raw)
+        pendingReferralFollowPubkey = hex
+        prefs.pendingReferralPubkeyHex = hex
+        if let hex { loadReferralInvitePreview(pubkeyHex: hex) }
+        else { referralInvitePreview = nil }
+    }
+
+    private func normalizedReferralPubkey(_ raw: String?) -> String? {
+        guard let raw, !raw.isEmpty else { return nil }
+        if let bytes = NostrKeyUtils.parsePublicKey(raw) {
+            return NostrKeyUtils.bytesToHex(bytes)
+        }
+        if let parsed = NostrBech32.decode(raw), parsed.type == .npub || parsed.type == .nprofile {
+            return parsed.hex
+        }
+        if raw.count == 64 {
+            return raw.lowercased()
+        }
+        return nil
+    }
+
+    func dismissReferralInvite() {
+        pendingReferralFollowPubkey = nil
+        prefs.pendingReferralPubkeyHex = nil
+        referralInvitePreview = nil
+    }
+
+    private func loadReferralInvitePreview(pubkeyHex: String) {
+        referralInvitePreview = ReferralInvitePreview(pubkeyHex: pubkeyHex, profile: nil, isLoading: true)
+        Task {
+            let tempPrefs = AppPreferences()
+            tempPrefs.publicKeyHex = pubkeyHex
+            tempPrefs.selectedRelays = prefs.selectedRelays.isEmpty ? defaultRelays : prefs.selectedRelays
+            tempPrefs.mainRelay = tempPrefs.selectedRelays.first ?? "wss://yabu.me"
+            let repo = NostrRepository(keyManager: keyManager, prefs: tempPrefs)
+            await repo.client.connect(relayUrls: tempPrefs.selectedRelays)
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            let profile = await repo.fetchProfile(pubkey: pubkeyHex)
+            await repo.client.disconnect()
+            await MainActor.run {
+                self.referralInvitePreview = ReferralInvitePreview(pubkeyHex: pubkeyHex, profile: profile, isLoading: false)
+            }
+        }
+    }
+
+    private func followPendingReferral(myPubkeyHex: String, targetPubkeyHex: String) async {
+        do {
+            let tempPrefs = AppPreferences()
+            tempPrefs.publicKeyHex = myPubkeyHex
+            tempPrefs.selectedRelays = prefs.selectedRelays.isEmpty ? defaultRelays : prefs.selectedRelays
+            tempPrefs.mainRelay = tempPrefs.selectedRelays.first ?? "wss://yabu.me"
+            let repo = NostrRepository(keyManager: keyManager, prefs: tempPrefs, signer: await currentSessionSigner())
+            await repo.client.connect(relayUrls: tempPrefs.selectedRelays)
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            try await repo.followUser(targetPubkeyHex: targetPubkeyHex)
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            await repo.client.disconnect()
+            AppLogger.log("Auth", "Referral follow applied: \(String(targetPubkeyHex.prefix(8)))")
+        } catch {
+            AppLogger.log("Auth", "Referral follow failed: \(error)")
+        }
     }
 
     // MARK: - Sign Up via Passkey (nosskey "PRF Direct Method")
@@ -308,19 +390,40 @@ final class AuthViewModel {
 
     // MARK: - Deep Link Login
 
-    /// Handle `nurunuru://login?nsec=<nsec1...>` deep link.
+    /// Handle `nurunuru://login?nsec=<nsec1...>` and profile referral links.
     func handleDeepLink(url: URL) {
-        guard url.scheme == "nurunuru" else { return }
-        switch url.host {
-        case "login":
-            guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-                  let nsec = components.queryItems?.first(where: { $0.name == "nsec" })?.value else {
-                return
-            }
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        if url.scheme == "nurunuru", url.host == "login" {
+            guard let nsec = components?.queryItems?.first(where: { $0.name == "nsec" })?.value else { return }
             login(nsecOrHex: nsec)
-        default:
-            break
+        } else if (url.scheme == "nurunuru" && url.host == "profile") ||
+                    ((url.scheme == "https" || url.scheme == "http") && url.host == "www.nullnull.app" && url.pathComponents.dropFirst().first == "p") {
+            let raw = components?.queryItems?.first(where: { ["npub", "pubkey", "ref"].contains($0.name) })?.value
+                ?? url.pathComponents.last
+            if let hex = normalizedReferralPubkey(raw) {
+                if case .loggedIn(let myPubkey) = state {
+                    if hex != myPubkey { openedProfilePubkey = hex }
+                } else {
+                    setPendingReferralFollow(hex)
+                }
+            }
+        } else if (url.scheme == "nurunuru" && url.host == "event") ||
+                    ((url.scheme == "https" || url.scheme == "http") && url.host == "www.nullnull.app" && url.pathComponents.dropFirst().first == "e") {
+            let raw = components?.queryItems?.first(where: { ["id", "event"].contains($0.name) })?.value
+                ?? url.pathComponents.last
+            if let raw, raw.range(of: "^[0-9a-fA-F]{64}$", options: .regularExpression) != nil,
+               case .loggedIn = state {
+                openedEventId = raw.lowercased()
+            }
         }
+    }
+
+    func consumeOpenedProfilePubkey() {
+        openedProfilePubkey = nil
+    }
+
+    func consumeOpenedEventId() {
+        openedEventId = nil
     }
 
     // MARK: - Logout

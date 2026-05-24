@@ -79,6 +79,34 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="io.nurunuru.app" android:host="login" />
             </intent-filter>
+
+            <intent-filter android:label="NuruNuru Profile">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="io.nurunuru.app" android:host="profile" />
+            </intent-filter>
+
+            <intent-filter android:autoVerify="true" android:label="NuruNuru Profile Web">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="www.nullnull.app" android:pathPrefix="/p" />
+            </intent-filter>
+
+            <intent-filter android:label="NuruNuru Event">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="nurunuru" android:host="event" />
+            </intent-filter>
+
+            <intent-filter android:autoVerify="true" android:label="NuruNuru Event Web">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="www.nullnull.app" android:pathPrefix="/e" />
+            </intent-filter>
         </activity>
 
     </application>

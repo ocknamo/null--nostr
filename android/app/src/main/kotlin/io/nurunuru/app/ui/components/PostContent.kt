@@ -1,5 +1,6 @@
 package io.nurunuru.app.ui.components
 
+import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -34,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import io.nurunuru.app.data.*
 import io.nurunuru.app.data.models.NostrKind
 import io.nurunuru.app.data.models.ScoredPost
@@ -134,6 +136,8 @@ fun PostHeader(
     val nuruColors = LocalNuruColors.current
     val profile = post.profile
     var showMenu by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val shareUrl = remember(post.event.id) { "https://www.nullnull.app/e/${post.event.id}" }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -194,6 +198,19 @@ fun PostHeader(
                     modifier = Modifier.background(nuruColors.bgSecondary)
                 ) {
                     val clipboardManager = LocalClipboardManager.current
+                    DropdownMenuItem(
+                        text = { Text("投稿を共有", color = nuruColors.textPrimary) },
+                        onClick = {
+                            showMenu = false
+                            val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, shareUrl)
+                                putExtra(Intent.EXTRA_TITLE, "ぬるぬるの投稿")
+                            }
+                            context.startActivity(Intent.createChooser(sendIntent, "投稿を共有"))
+                        },
+                        leadingIcon = { Icon(Icons.Default.Share, null, tint = nuruColors.textSecondary, modifier = Modifier.size(18.dp)) }
+                    )
                     DropdownMenuItem(
                         text = { Text("テキストをコピー", color = nuruColors.textPrimary) },
                         onClick = {

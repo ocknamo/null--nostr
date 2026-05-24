@@ -68,6 +68,7 @@ final class AppPreferences {
         static let mlsInboxRelays = "nurunuru_mls_inbox_relays"
         static let hasAcceptedTerms = "nurunuru_has_accepted_terms"
         static let loginMethod    = "nurunuru_login_method"
+        static let pendingReferralPubkeyHex = "nurunuru_pending_referral_pubkey_hex"
     }
 
     /// Active authentication backend for the current session.
@@ -84,6 +85,14 @@ final class AppPreferences {
     var hasAcceptedTerms: Bool {
         get { defaults.bool(forKey: Keys.hasAcceptedTerms) }
         set { defaults.set(newValue, forKey: Keys.hasAcceptedTerms) }
+    }
+
+    var pendingReferralPubkeyHex: String? {
+        get { defaults.string(forKey: Keys.pendingReferralPubkeyHex) }
+        set {
+            if let value = newValue, !value.isEmpty { defaults.set(value.lowercased(), forKey: Keys.pendingReferralPubkeyHex) }
+            else { defaults.removeObject(forKey: Keys.pendingReferralPubkeyHex) }
+        }
     }
 
     var publicKeyHex: String? {

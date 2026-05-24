@@ -6,6 +6,8 @@
     <array>
         <string>webcredentials:www.nullnull.app</string>
         <string>webcredentials:nullnull.app</string>
+        <string>applinks:www.nullnull.app</string>
+        <string>applinks:nullnull.app</string>
     </array>
 </dict>
 </plist>
