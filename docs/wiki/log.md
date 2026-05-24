@@ -412,3 +412,19 @@ LLM Wiki の時系列ログです。追記専用として扱います。
 - 検証:
   - `cd android && ./gradlew assembleDebug` 成功。
   - 接続実機 `9DNBNF45Y9AQFEY9` に `adb install -r android/app/build/outputs/apk/debug/app-debug.apk` 成功。
+
+## [2026-05-24] fix | Android Nosskey cache/export/login and Amber crash
+
+- Android 実機テストで「はじめる」後クラッシュする問題を logcat crash buffer で確認。
+  原因は passkey 登録後の MainScreen が `InternalSigner` / `SecureKeyManager` 前提の signer を使っていたこと (`Key not unlocked in SecureKeyManager`)。前段の `MainScreen` 修正に加え、今回 `AuthViewModel` の session signer cache を導入して nosskey signer を再利用するよう調整。
+- Passkey 認証が 2 回以上出る問題を軽減。
+  - `NosskeyManager.createPasskeyWithSecret()` を追加し、登録時または fallback assertion で得た PRF secret を `keyInfo` と一緒に返すように変更。
+  - registration request の PRF extension に `eval.first = "nostr-pwk"` を入れ、provider が対応する場合は登録時の PRF output を再利用。
+  - `NosskeySigner.primeCache(secret)` を追加し、登録 / ログイン直後の signer cache に同じ secret を投入。
+  - `SignUpModal` の profile / tutorial signer 生成を `viewModel.buildSigner(activity)` 経由にし、cache 済み signer を使うよう変更。
+- ログアウト後の passkey login を維持するため、`logout()` で `NosskeyKeyInfo` を削除しないよう変更。
+- ミニアプリ > セキュリティ設定の nsec export を nosskey 対応。
+  - `AuthViewModel.getNsecForCurrentAccount(activity)` を追加。nosskey 時は CredentialManager/PRF 認証で secret を導出し、nsec encode 後に zeroize。
+  - `SettingsScreen.SecuritySettingsSection` を async export に変更し、「取得中…」表示を追加。
+- Amber ログイン後クラッシュの原因になり得る `prefs.loginMethod == null` を修正。`loginWithAmber()` で `prefs.loginMethod = "amber"` を保存し、`buildSigner()` が `ExternalSigner` を選べるようにした。
+- 検証: `cd android && ./gradlew assembleDebug` 成功。実機はこの時点で adb 接続が切れていたため再インストールは未実施。

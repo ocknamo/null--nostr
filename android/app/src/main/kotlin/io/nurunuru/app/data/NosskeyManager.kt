@@ -60,6 +60,12 @@ class NosskeyManager {
         val username: String? = null
     )
 
+    data class NosskeyCreationResult(
+        val keyInfo: NosskeyKeyInfo,
+        /** Caller must zeroize after use. */
+        val secretKey: ByteArray
+    )
+
     sealed class NosskeyError(message: String) : Exception(message) {
         object Unsupported : NosskeyError("Passkeys not supported on this device")
         object PrfUnsupported : NosskeyError("PRF extension not supported")
@@ -81,12 +87,12 @@ class NosskeyManager {
      *
      * The intermediate 32-byte secret is zeroized before return.
      */
-    suspend fun createPasskey(
+    suspend fun createPasskeyWithSecret(
         activity: Activity,
         username: String,
         displayName: String,
         rpId: String = RP_ID
-    ): NosskeyKeyInfo {
+    ): NosskeyCreationResult {
         if (!isPlatformSupported(activity)) throw NosskeyError.Unsupported
 
         val challenge = randomBytes(32)
@@ -118,15 +124,24 @@ class NosskeyManager {
                 put("residentKey", "required")
             })
             put("extensions", buildJsonObject {
-                put("prf", buildJsonObject {})
+                put("prf", buildJsonObject {
+                    // Ask for PRF evaluation during registration when the provider
+                    // supports it. Some Android providers ignore this and only return
+                    // `enabled`; in that case we fallback to one assertion below.
+                    put("eval", buildJsonObject {
+                        put("first", b64url(hexToBytes(STANDARD_SALT_HEX)!!))
+                    })
+                })
             })
         }.toString()
 
+        val registrationResponseJson: String
         val credentialId: String = try {
             val cm = CredentialManager.create(activity)
             val request = CreatePublicKeyCredentialRequest(requestJson = createJson)
             val response = cm.createCredential(activity, request) as CreatePublicKeyCredentialResponse
-            extractCredentialId(response.registrationResponseJson)
+            registrationResponseJson = response.registrationResponseJson
+            extractCredentialId(registrationResponseJson)
                 ?: throw NosskeyError.RegistrationFailed("credential id missing")
         } catch (e: CreateCredentialCancellationException) {
             throw NosskeyError.UserCancelled
@@ -149,19 +164,36 @@ class NosskeyManager {
             salt = STANDARD_SALT_HEX,
             username = username
         )
-        val secret = deriveSecretKey(activity, seed, rpId)
+        val secret = extractPrfFirstOrNull(registrationResponseJson)
+            ?: deriveSecretKey(activity, seed, rpId)
         try {
             val privHex = secret.toHexLower()
             val pubHex = NostrKeyUtils.derivePublicKey(privHex)
                 ?: throw NosskeyError.RegistrationFailed("public key derivation failed")
-            return NosskeyKeyInfo(
+            val keyInfo = NosskeyKeyInfo(
                 credentialId = credentialId,
                 pubkey = pubHex,
                 salt = STANDARD_SALT_HEX,
                 username = username
             )
-        } finally {
+            return NosskeyCreationResult(keyInfo = keyInfo, secretKey = secret)
+        } catch (e: Exception) {
             secret.fill(0)
+            throw e
+        }
+    }
+
+    suspend fun createPasskey(
+        activity: Activity,
+        username: String,
+        displayName: String,
+        rpId: String = RP_ID
+    ): NosskeyKeyInfo {
+        val result = createPasskeyWithSecret(activity, username, displayName, rpId)
+        try {
+            return result.keyInfo
+        } finally {
+            result.secretKey.fill(0)
         }
     }
 
@@ -305,6 +337,19 @@ class NosskeyManager {
             root["id"]?.jsonPrimitive?.content
         } catch (e: Exception) {
             Log.w(TAG, "extractCredentialId failed: ${e.message}")
+            null
+        }
+    }
+
+    private fun extractPrfFirstOrNull(responseJson: String): ByteArray? {
+        return try {
+            extractPrfFirst(responseJson)
+        } catch (_: NosskeyError.PrfMissing) {
+            null
+        } catch (_: NosskeyError.PrfUnsupported) {
+            null
+        } catch (e: Exception) {
+            Log.w(TAG, "registration PRF result unavailable: ${e.message}")
             null
         }
     }

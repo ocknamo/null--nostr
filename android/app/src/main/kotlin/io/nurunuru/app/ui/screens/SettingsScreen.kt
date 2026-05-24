@@ -1,6 +1,7 @@
 package io.nurunuru.app.ui.screens
 
 import android.Manifest
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -568,7 +569,10 @@ private fun SecuritySettingsSection(authViewModel: AuthViewModel, prefs: AppPref
     val context = LocalContext.current
     var isExpanded by remember { mutableStateOf(false) }
     var showNsec by remember { mutableStateOf(false) }
+    var exportedNsec by remember { mutableStateOf<String?>(null) }
+    var isExportingNsec by remember { mutableStateOf(false) }
     var autoSignEnabled by remember { mutableStateOf(prefs.autoSignEnabled) }
+    val coroutineScope = rememberCoroutineScope()
 
     Surface(
         color = nuruColors.bgSecondary,
@@ -624,7 +628,20 @@ private fun SecuritySettingsSection(authViewModel: AuthViewModel, prefs: AppPref
 
                     // Show Nsec Button
                     Button(
-                        onClick = { showNsec = !showNsec },
+                        onClick = {
+                            if (showNsec) {
+                                showNsec = false
+                                exportedNsec = null
+                            } else {
+                                showNsec = true
+                                isExportingNsec = true
+                                coroutineScope.launch {
+                                    val nsec = authViewModel.getNsecForCurrentAccount(context as? Activity)
+                                    exportedNsec = nsec
+                                    isExportingNsec = false
+                                }
+                            }
+                        },
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(containerColor = nuruColors.bgTertiary, contentColor = MaterialTheme.colorScheme.onSurface),
                         shape = RoundedCornerShape(12.dp)
@@ -633,7 +650,7 @@ private fun SecuritySettingsSection(authViewModel: AuthViewModel, prefs: AppPref
                     }
 
                     if (showNsec) {
-                        val nsec = remember(pubkeyHex) { authViewModel.getNsecTemporary() ?: "取得できません" }
+                        val nsec = if (isExportingNsec) "取得中…" else (exportedNsec ?: "取得できません")
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Surface(
                                 color = Color.Red.copy(alpha = 0.1f),

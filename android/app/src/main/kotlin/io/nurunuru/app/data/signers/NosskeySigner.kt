@@ -89,6 +89,18 @@ class NosskeySigner(
     }
 
     /**
+     * Prime signer cache with a freshly derived PRF secret. The input is copied;
+     * caller remains responsible for zeroizing its own ByteArray.
+     */
+    fun primeCache(secret: ByteArray) {
+        zeroizeSecret()
+        cachedSecret = secret.copyOf()
+        cachedAt = System.currentTimeMillis()
+        _keys = null
+        _signer = null
+    }
+
+    /**
      * Drop cached secret and rust-nostr Keys/Signer.
      */
     override fun close() {

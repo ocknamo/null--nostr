@@ -48,6 +48,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     val prefs = AppPreferences(application)
     val keyManager = SecureKeyManager(application)
     val nosskeyManager = NosskeyManager()
+    private var activeNosskeySigner: NosskeySigner? = null
 
     private val _authState = MutableStateFlow<AuthState>(AuthState.Checking)
     val authState: StateFlow<AuthState> = _authState.asStateFlow()
@@ -376,7 +377,11 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         // 一瞬戻ることなく MainScreen(ホーム) へ直接切り替える。
         prefs.publicKeyHex = pubKeyHex
         prefs.isExternalSigner = false
-        _authState.value = AuthState.LoggedIn(pubKeyHex, isExternal = false, hasInternalKey = true)
+        _authState.value = AuthState.LoggedIn(
+            pubKeyHex,
+            isExternal = false,
+            hasInternalKey = prefs.loginMethod != "nosskey"
+        )
 
         // リレー同期は遷移後にバックグラウンドで継続する。
         viewModelScope.launch(Dispatchers.IO) {
@@ -405,6 +410,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             val pubkeyHex = io.nurunuru.app.data.NostrKeyUtils.parsePublicKey(pubkey) ?: pubkey
             prefs.publicKeyHex = pubkeyHex
             prefs.isExternalSigner = true
+            prefs.loginMethod = "amber"
             io.nurunuru.app.data.ExternalSigner.setCurrentUser(pubkeyHex)
             syncRelayListOnLogin(pubkeyHex, io.nurunuru.app.data.ExternalSigner)
             _authState.value = AuthState.LoggedIn(pubkeyHex, isExternal = true)
@@ -476,14 +482,15 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         username: String
     ): GeneratedAccount? = withContext(Dispatchers.IO) {
         try {
-            val keyInfo = nosskeyManager.createPasskey(
+            val creation = nosskeyManager.createPasskeyWithSecret(
                 activity = activity,
                 username = username,
                 displayName = username
             )
-            // Derive the secret one more time to validate the flow end-to-end
-            // and to cross-check the pubkey returned by createPasskey().
-            val secret = nosskeyManager.deriveSecretKey(activity, keyInfo)
+            val keyInfo = creation.keyInfo
+            // Reuse the PRF secret returned from registration/fallback assertion.
+            // Do not derive it again here; that caused an extra Passkey prompt.
+            val secret = creation.secretKey
             try {
                 val privHex = secret.joinToString("") { "%02x".format(it) }
                 val pubHex = NostrKeyUtils.derivePublicKey(privHex)
@@ -496,6 +503,15 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 prefs.loginMethod = "nosskey"
                 prefs.publicKeyHex = pubHex
                 prefs.isExternalSigner = false
+
+                // Seed a session signer with the same PRF secret so profile,
+                // relay-list, tutorial post, and MainScreen startup do not prompt
+                // again immediately after registration.
+                activeNosskeySigner?.close()
+                activeNosskeySigner = NosskeySigner(activity, nosskeyManager, finalKeyInfo).also {
+                    it.primeCache(secret)
+                }
+
                 GeneratedAccount(pubkeyHex = pubHex, nsec = nsec, npub = npub)
             } finally {
                 secret.fill(0)
@@ -523,16 +539,24 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                         )
                         return@launch
                     }
-                // Verify by running a real PRF assertion (biometric prompt).
+                // Verify by running a real PRF assertion (biometric prompt), then
+                // reuse the same secret for the session signer cache.
                 val secret = nosskeyManager.deriveSecretKey(activity, keyInfo)
-                secret.fill(0)
+                try {
+                    activeNosskeySigner?.close()
+                    activeNosskeySigner = NosskeySigner(activity, nosskeyManager, keyInfo).also {
+                        it.primeCache(secret)
+                    }
+                } finally {
+                    secret.fill(0)
+                }
                 prefs.publicKeyHex = keyInfo.pubkey
                 prefs.loginMethod = "nosskey"
                 prefs.isExternalSigner = false
                 _authState.value = AuthState.LoggedIn(
                     keyInfo.pubkey,
                     isExternal = false,
-                    hasInternalKey = true
+                    hasInternalKey = false
                 )
             } catch (e: NosskeyError.UserCancelled) {
                 // explicit user cancel — leave state alone
@@ -552,11 +576,13 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     fun buildSigner(activity: Activity? = null): io.nurunuru.app.data.AppSigner {
         return when (prefs.loginMethod) {
             "nosskey" -> {
-                val keyInfo = nosskeyManager.loadStoredKeyInfo(getApplication())
-                    ?: throw IllegalStateException("nosskey info missing")
-                val act = activity
-                    ?: throw IllegalStateException("Activity required for NosskeySigner")
-                NosskeySigner(act, nosskeyManager, keyInfo)
+                activeNosskeySigner ?: run {
+                    val keyInfo = nosskeyManager.loadStoredKeyInfo(getApplication())
+                        ?: throw IllegalStateException("nosskey info missing")
+                    val act = activity
+                        ?: throw IllegalStateException("Activity required for NosskeySigner")
+                    NosskeySigner(act, nosskeyManager, keyInfo).also { activeNosskeySigner = it }
+                }
             }
             "amber", "external" -> io.nurunuru.app.data.ExternalSigner
             else -> io.nurunuru.app.data.InternalSigner(keyManager)
@@ -588,6 +614,24 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         return keyManager.getKeyHexTemporary()?.let { NostrKeyUtils.encodeNsec(it) }
     }
 
+    suspend fun getNsecForCurrentAccount(activity: Activity? = null): String? = withContext(Dispatchers.IO) {
+        if (prefs.loginMethod == "nosskey") {
+            val keyInfo = nosskeyManager.loadStoredKeyInfo(getApplication()) ?: return@withContext null
+            val act = activity ?: return@withContext null
+            val secret = nosskeyManager.deriveSecretKey(act, keyInfo)
+            try {
+                NostrKeyUtils.encodeNsec(secret.joinToString("") { "%02x".format(it) })
+            } catch (e: Exception) {
+                android.util.Log.e("AuthViewModel", "getNsecForCurrentAccount(nosskey) failed", e)
+                null
+            } finally {
+                secret.fill(0)
+            }
+        } else {
+            getNsecTemporary()
+        }
+    }
+
     fun logout() {
         val app = getApplication<Application>()
 
@@ -608,7 +652,10 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         } catch (_: Exception) { }
 
         keyManager.deleteAll()
-        try { nosskeyManager.clearStoredKeyInfo(app) } catch (_: Exception) { }
+        // Do NOT clear NosskeyKeyInfo here. It is non-secret metadata
+        // (credentialId/pubkey/salt) required for passkey login after logout.
+        activeNosskeySigner?.close()
+        activeNosskeySigner = null
 
         // Privacy/account isolation: Talk uses Rust MLS SQLite as its source of truth.
         // If it survives logout, a different account can still see old local groups/messages

@@ -201,11 +201,7 @@ fun SignUpModal(
                                             val keyInfo = viewModel.nosskeyManager
                                                 .loadStoredKeyInfo(signUpActivity)
                                             if (keyInfo != null) {
-                                                io.nurunuru.app.data.signers.NosskeySigner(
-                                                    signUpActivity,
-                                                    viewModel.nosskeyManager,
-                                                    keyInfo
-                                                )
+                                                viewModel.buildSigner(signUpActivity)
                                             } else {
                                                 io.nurunuru.app.data.InternalSigner(viewModel.keyManager)
                                             }
@@ -251,11 +247,7 @@ fun SignUpModal(
                                             val keyInfo = viewModel.nosskeyManager
                                                 .loadStoredKeyInfo(signUpActivity)
                                             if (keyInfo != null) {
-                                                io.nurunuru.app.data.signers.NosskeySigner(
-                                                    signUpActivity,
-                                                    viewModel.nosskeyManager,
-                                                    keyInfo
-                                                )
+                                                viewModel.buildSigner(signUpActivity)
                                             } else {
                                                 io.nurunuru.app.data.InternalSigner(viewModel.keyManager)
                                             }
