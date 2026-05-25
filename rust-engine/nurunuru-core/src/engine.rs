@@ -562,9 +562,18 @@ impl NuruNuruEngine {
         let tl_filters = filters::timeline_filters(authors, since, None, limit, limit / 2);
 
         let mut all_events = Vec::new();
+        let mut failures = 0usize;
         for f in tl_filters {
-            let events = self.client.fetch_events(f, Duration::from_secs(15)).await?;
-            all_events.extend(events);
+            match self.client.fetch_events(f, Duration::from_secs(15)).await {
+                Ok(events) => all_events.extend(events),
+                Err(err) => {
+                    failures += 1;
+                    tracing::warn!("timeline filter fetch failed: {err}");
+                }
+            }
+        }
+        if all_events.is_empty() && failures > 0 {
+            tracing::warn!("timeline fetch returned no events after {failures} failed filter(s)");
         }
 
         // Sort by created_at descending

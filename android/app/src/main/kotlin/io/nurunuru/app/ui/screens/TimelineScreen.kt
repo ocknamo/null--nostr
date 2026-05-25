@@ -244,6 +244,28 @@ private fun TimelineContent(
         feedType == FeedType.GLOBAL -> uiState.isGlobalLoading
         else -> uiState.isFollowingLoading
     }
+    val isLoadingMore = when {
+        isRelaySelected -> uiState.isGlobalLoadingMore
+        feedType == FeedType.GLOBAL -> uiState.isGlobalLoadingMore
+        else -> uiState.isFollowingLoadingMore
+    }
+    val hasMore = when {
+        isRelaySelected -> uiState.hasMoreRelay
+        feedType == FeedType.GLOBAL -> uiState.hasMoreGlobal
+        else -> uiState.hasMoreFollowing
+    }
+    val shouldLoadMore by remember(displayPosts.size, isLoadingMore, hasMore, isRelaySelected) {
+        derivedStateOf {
+            if (displayPosts.isEmpty() || isLoadingMore || !hasMore) false
+            else {
+                val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                lastVisible >= displayPosts.size - 20
+            }
+        }
+    }
+    LaunchedEffect(shouldLoadMore, feedType, displayPosts.size) {
+        if (shouldLoadMore) viewModel.loadMore(feedType)
+    }
     val error = if (!isRelaySelected && feedType == FeedType.GLOBAL) uiState.globalError
                 else if (!isRelaySelected) uiState.followingError
                 else null
@@ -318,6 +340,18 @@ private fun TimelineContent(
                                 onReplyMultiTap = { onNoteClick?.invoke(post.event.id, post) ?: onReplyLongPress(post.event.id) },
                                 myPubkey = myPubkey
                             )
+                        }
+                    }
+                    if (isLoadingMore) {
+                        item(key = "loading-more-${feedType.name}") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 20.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(color = LineGreen, strokeWidth = 2.dp)
+                            }
                         }
                     }
                 }

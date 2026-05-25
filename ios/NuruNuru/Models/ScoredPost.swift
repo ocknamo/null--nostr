@@ -61,6 +61,7 @@ final class ScoredPost: Identifiable {
         copy.birdwatchNotes = birdwatchNotes
         copy.quotedPost   = quotedPost
         copy.repostedBy   = repostedBy
+        copy.repostTime   = repostTime
         return copy
     }
 }

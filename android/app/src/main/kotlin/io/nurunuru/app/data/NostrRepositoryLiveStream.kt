@@ -104,29 +104,32 @@ fun NostrRepository.stopLiveStream(subId: String) {
  * リプライ除外・ミュートフィルタ適用。他のリレーへのフォールバックなし。
  */
 suspend fun NostrRepository.fetchRelayTimeline(relayUrl: String, limit: Int = 50): List<ScoredPost> =
-    withContext(Dispatchers.IO) {
-        try {
-            val myPubkey = prefs.publicKeyHex ?: ""
-            val events = fetchFromSingleRelayWs(relayUrl, limit, timeoutMs = 8_000)
-            android.util.Log.d("NostrRepository", "fetchRelayTimeline($relayUrl): ${events.size} events")
+    fetchRelayTimelinePage(relayUrl = relayUrl, until = null, limit = limit)
 
-            val rootPosts = events.filter { it.getTagValues("e").isEmpty() }
-            val enriched = enrichPostsLight(rootPosts)
-
-            val muteData = getCachedMuteList(myPubkey)
-            val filtered = if (muteData != null &&
-                (muteData.pubkeys.isNotEmpty() || muteData.eventIds.isNotEmpty())) {
-                val mutedPks = muteData.pubkeys.toSet()
-                val mutedIds = muteData.eventIds.toSet()
-                enriched.filter { it.event.pubkey !in mutedPks && it.event.id !in mutedIds }
-            } else enriched
-
-            filtered.sortedByDescending { it.event.createdAt }
-        } catch (e: Exception) {
-            android.util.Log.e("NostrRepository", "fetchRelayTimeline failed: ${e.message}", e)
-            emptyList()
-        }
+/** Fetch older posts from a selected relay before [until]. */
+suspend fun NostrRepository.fetchRelayTimelinePage(
+    relayUrl: String,
+    until: Long?,
+    limit: Int = 50
+): List<ScoredPost> = withContext(Dispatchers.IO) {
+    try {
+        val now = System.currentTimeMillis() / 1000
+        val since = (until ?: now) - 6L * 60L * 60L
+        val events = fetchFromSingleRelayWs(relayUrl, limit, since, until, timeoutMs = 3_500)
+        android.util.Log.d("NostrRepository", "fetchRelayTimelinePage(" + relayUrl + " until=" + until + "): " + events.size + " events")
+        if (events.isEmpty()) return@withContext emptyList()
+        cache.setCachedEvents(events)
+        val muteData = getCachedMuteList(myPubkeyHex)
+        val mutedPks = muteData?.pubkeys?.toSet() ?: emptySet()
+        val mutedIds = muteData?.eventIds?.toSet() ?: emptySet()
+        postsFromRawTimelineEvents(events)
+            .filter { it.event.pubkey !in mutedPks && it.event.id !in mutedIds }
+            .take(limit)
+    } catch (e: Exception) {
+        android.util.Log.e("NostrRepository", "fetchRelayTimelinePage failed: " + e.message, e)
+        emptyList()
     }
+}
 
 /**
  * OkHttp WebSocket で指定リレー1つにのみ接続し kind 1 を取得する。
@@ -134,12 +137,19 @@ suspend fun NostrRepository.fetchRelayTimeline(relayUrl: String, limit: Int = 50
 private suspend fun NostrRepository.fetchFromSingleRelayWs(
     relayUrl: String,
     limit: Int,
+    since: Long? = null,
+    until: Long? = null,
     timeoutMs: Long = 8_000
 ): List<NostrEvent> = withContext(Dispatchers.IO) {
     val events = mutableListOf<NostrEvent>()
     val done = CompletableDeferred<Unit>()
     val subId = "relay-tl-${System.currentTimeMillis()}"
-    val filterJson = """{"kinds":[1],"limit":$limit}"""
+    val filterParts = mutableListOf<String>()
+    filterParts += "\"kinds\":[1,6,22,30023]"
+    filterParts += "\"limit\":$limit"
+    since?.let { filterParts += "\"since\":$it" }
+    until?.let { filterParts += "\"until\":$it" }
+    val filterJson = "{" + filterParts.joinToString(",") + "}"
     val reqMsg = """["REQ","$subId",$filterJson]"""
     val closeMsg = """["CLOSE","$subId"]"""
 

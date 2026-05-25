@@ -43,7 +43,15 @@ data class TimelineUiState(
     val selectedRelayUrl: String? = null,
     val relayPosts: List<ScoredPost> = emptyList(),
     val pendingRelayPosts: List<ScoredPost> = emptyList(),
-    val isRelayFeedLoading: Boolean = false
+    val isRelayFeedLoading: Boolean = false,
+    val isGlobalLoadingMore: Boolean = false,
+    val isFollowingLoadingMore: Boolean = false,
+    val hasMoreGlobal: Boolean = true,
+    val hasMoreFollowing: Boolean = true,
+    val hasMoreRelay: Boolean = true,
+    val globalPageCursor: Long? = null,
+    val followingPageCursor: Long? = null,
+    val relayPageCursor: Long? = null
 )
 
 class TimelineViewModel(
@@ -86,6 +94,24 @@ class TimelineViewModel(
     /** Deduplicates a post list by event ID, keeping the first occurrence. */
     private fun List<ScoredPost>.deduped() = distinctBy { it.event.id }
 
+    /** Deduplicate and keep newest-first order when merging fresh pages with stale cache. */
+    private fun List<ScoredPost>.timelineSortedDeduped() =
+        distinctBy { it.event.id }.sortedByDescending { it.event.createdAt }
+
+    private fun List<ScoredPost>.olderCursorOrNull(): Long? =
+        minOfOrNull { it.event.createdAt }?.minus(1)
+
+    /**
+     * Keep pagination contiguous when fresh posts are merged with a much older cache.
+     * If an incoming batch is entirely older than the current cursor, it is stale
+     * cache and must not move the cursor backwards over the missing gap.
+     */
+    private fun mergedCursorAfter(current: Long?, incoming: List<ScoredPost>): Long? {
+        val next = incoming.olderCursorOrNull() ?: return current
+        val newestIncoming = incoming.maxOfOrNull { it.event.createdAt } ?: return current
+        return if (current == null || newestIncoming >= current) next else current
+    }
+
     init {
         loadData()
         loadSavedRelays()
@@ -122,37 +148,8 @@ class TimelineViewModel(
                 ).forEach { it.join() }
             }
 
-            // Cache-first step 1: Try JSON cache (fully-enriched, instant decode)
-            // JSON decode and DB query are CPU/IO-bound — run off main thread.
-            var cacheShown = false
-            val cachedFollowing = withContext(Dispatchers.IO) { repository.getCachedTimeline() }
-            if (cachedFollowing != null) {
-                try {
-                    val posts = withContext(Dispatchers.Default) {
-                        kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-                            .decodeFromString<List<io.nurunuru.app.data.models.ScoredPost>>(cachedFollowing)
-                    }
-                    if (posts.isNotEmpty()) {
-                        val deduped = posts.deduped()
-                        seenEventIds.addAll(deduped.map { it.event.id })
-                        _uiState.update { it.copy(followingPosts = deduped, isFollowingLoading = false) }
-                        cacheShown = true
-                        android.util.Log.d("TimelineViewModel", "JSON cache: ${deduped.size} posts shown")
-                    }
-                } catch (_: Exception) { }
-            }
-
-            // Cache-first step 2: Fall back to nostrdb queryLocal if JSON cache unavailable
-            if (!cacheShown) {
-                val nostrdbPosts = withContext(Dispatchers.IO) {
-                    repository.fetchCachedFollowTimeline(pubkeyHex, 50)
-                }.deduped()
-                if (nostrdbPosts.isNotEmpty()) {
-                    seenEventIds.addAll(nostrdbPosts.map { it.event.id })
-                    _uiState.update { it.copy(followingPosts = nostrdbPosts, isFollowingLoading = false) }
-                    android.util.Log.d("TimelineViewModel", "nostrdb cache: ${nostrdbPosts.size} posts shown")
-                }
-            }
+            // Network-first timeline: do not render stale timeline event cache as normal UI.
+            // Profile/follow-list caches are still used, but event caches are fallback-only.
 
             // Fast following with cached follows, then refresh follow list in the background.
             if (initialFollows.isNotEmpty()) loadFollowingTimelineFast(initialFollows)
@@ -334,7 +331,7 @@ class TimelineViewModel(
                 .onSuccess { posts ->
                     if (posts.isNotEmpty()) {
                         seenEventIds.addAll(posts.map { it.event.id })
-                        _uiState.update { it.copy(globalPosts = posts, isGlobalLoading = false) }
+                        _uiState.update { it.copy(globalPosts = posts, isGlobalLoading = false, globalPageCursor = posts.olderCursorOrNull(), hasMoreGlobal = true) }
                         val snapshot = posts
                         launch(Dispatchers.IO) {
                             val enriched = repository.enrichTimelinePosts(snapshot).deduped()
@@ -353,7 +350,14 @@ class TimelineViewModel(
             .onSuccess { posts ->
                 if (posts.isNotEmpty() || _uiState.value.followingPosts.isEmpty()) {
                     seenEventIds.addAll(posts.map { it.event.id })
-                    _uiState.update { it.copy(followingPosts = posts, isFollowingLoading = false) }
+                    _uiState.update { st ->
+                        st.copy(
+                            followingPosts = (posts + st.followingPosts).timelineSortedDeduped(),
+                            isFollowingLoading = false,
+                            followingPageCursor = posts.olderCursorOrNull(),
+                            hasMoreFollowing = true
+                        )
+                    }
                     val snapshot = posts
                     viewModelScope.launch(Dispatchers.IO) {
                         val enriched = repository.enrichTimelinePosts(snapshot).deduped()
@@ -384,13 +388,16 @@ class TimelineViewModel(
                 seenEventIds.addAll(posts.map { it.event.id })
                 _uiState.update { state ->
                     state.copy(
-                        globalPosts = posts,
+                        // Keep the visible timeline on transient empty relay results.
+                        globalPosts = if (posts.isNotEmpty()) (posts + state.globalPosts).timelineSortedDeduped() else state.globalPosts,
                         isGlobalLoading = false,
                         isGlobalRefreshing = false,
-                        hasNewRecommendations = false
+                        hasNewRecommendations = if (posts.isNotEmpty()) false else state.hasNewRecommendations,
+                        globalPageCursor = mergedCursorAfter(state.globalPageCursor, posts),
+                        hasMoreGlobal = if (posts.isNotEmpty()) true else state.hasMoreGlobal
                     )
                 }
-                fetchBirdwatchForPosts(posts)
+                if (posts.isNotEmpty()) fetchBirdwatchForPosts(posts)
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
@@ -437,21 +444,30 @@ class TimelineViewModel(
                 seenEventIds.addAll(posts.map { it.event.id })
                 _uiState.update { state ->
                     state.copy(
-                        followingPosts = posts,
+                        // Relay timeouts / EOSE-without-events are common on Nostr.
+                        // Treat an empty result as "no fresh data" when we already
+                        // have posts, otherwise a transient refresh can blank the
+                        // user's primary kind-1 timeline.
+                        followingPosts = if (posts.isNotEmpty()) (posts + state.followingPosts).timelineSortedDeduped() else state.followingPosts,
                         isFollowingLoading = false,
                         isFollowingRefreshing = false,
-                        hasNewFollowing = false
+                        hasNewFollowing = if (posts.isNotEmpty()) false else state.hasNewFollowing,
+                        followingPageCursor = mergedCursorAfter(state.followingPageCursor, posts),
+                        hasMoreFollowing = if (posts.isNotEmpty()) true else state.hasMoreFollowing
                     )
                 }
-                // Persist to cache (encode and write on IO thread)
-                launch(Dispatchers.IO) {
-                    try {
-                        val json = kotlinx.serialization.json.Json { encodeDefaults = true }
-                        repository.setCachedTimeline(json.encodeToString(kotlinx.serialization.builtins.ListSerializer(io.nurunuru.app.data.models.ScoredPost.serializer()), posts))
-                    } catch (e: Exception) { /* ignore */ }
-                }
+                if (posts.isNotEmpty()) {
+                    // Persist to cache (encode and write on IO thread). Never write
+                    // an empty network response over a healthy cached timeline.
+                    launch(Dispatchers.IO) {
+                        try {
+                            val json = kotlinx.serialization.json.Json { encodeDefaults = true }
+                            repository.setCachedTimeline(json.encodeToString(kotlinx.serialization.builtins.ListSerializer(io.nurunuru.app.data.models.ScoredPost.serializer()), posts))
+                        } catch (e: Exception) { /* ignore */ }
+                    }
 
-                fetchBirdwatchForPosts(posts)
+                    fetchBirdwatchForPosts(posts)
+                }
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
@@ -467,12 +483,82 @@ class TimelineViewModel(
     fun refresh() {
         when (_uiState.value.feedType) {
             FeedType.GLOBAL -> {
-                _uiState.update { it.copy(pendingGlobalPosts = emptyList()) }
+                _uiState.update { it.copy(pendingGlobalPosts = emptyList(), hasMoreGlobal = true, globalPageCursor = null) }
                 loadGlobalTimeline(isRefresh = true)
             }
             FeedType.FOLLOWING -> {
-                _uiState.update { it.copy(pendingFollowingPosts = emptyList()) }
+                _uiState.update { it.copy(pendingFollowingPosts = emptyList(), hasMoreFollowing = true, followingPageCursor = null) }
                 loadFollowingTimeline(isRefresh = true)
+            }
+        }
+    }
+
+    /** Load older posts when the user scrolls near the end of the timeline. */
+    fun loadMore(feedType: FeedType = _uiState.value.feedType) {
+        val state = _uiState.value
+        if (state.selectedRelayUrl != null && feedType == FeedType.GLOBAL) {
+            val relayUrl = state.selectedRelayUrl
+            if (state.isGlobalLoadingMore || !state.hasMoreRelay || state.relayPosts.isEmpty()) return
+            viewModelScope.launch {
+                val until = state.relayPageCursor ?: ((state.relayPosts.minOfOrNull { it.event.createdAt } ?: return@launch) - 1)
+                _uiState.update { it.copy(isGlobalLoadingMore = true) }
+                runCatching { repository.fetchRelayTimelinePage(relayUrl, until, 50).deduped() }
+                    .onSuccess { older ->
+                        seenRelayEventIds.addAll(older.map { it.event.id })
+                        _uiState.update { st -> st.copy(
+                            relayPosts = (st.relayPosts + older).timelineSortedDeduped(),
+                            isGlobalLoadingMore = false,
+                            hasMoreRelay = older.isNotEmpty(),
+                            relayPageCursor = older.olderCursorOrNull() ?: st.relayPageCursor
+                        ) }
+                        if (older.isNotEmpty()) reEnrichMissingProfiles(older)
+                    }
+                    .onFailure { _uiState.update { it.copy(isGlobalLoadingMore = false) } }
+            }
+            return
+        }
+        when (feedType) {
+            FeedType.GLOBAL -> {
+                if (state.isGlobalLoadingMore || !state.hasMoreGlobal || state.globalPosts.isEmpty()) return
+                viewModelScope.launch {
+                    val until = state.globalPageCursor ?: ((state.globalPosts.minOfOrNull { it.event.createdAt } ?: return@launch) - 1)
+                    _uiState.update { it.copy(isGlobalLoadingMore = true) }
+                    runCatching { repository.fetchGlobalTimelinePage(until, 50).deduped() }
+                        .onSuccess { older ->
+                            seenEventIds.addAll(older.map { it.event.id })
+                            _uiState.update { st ->
+                                st.copy(
+                                    globalPosts = (st.globalPosts + older).timelineSortedDeduped(),
+                                    isGlobalLoadingMore = false,
+                                    hasMoreGlobal = older.isNotEmpty(),
+                                    globalPageCursor = older.olderCursorOrNull() ?: st.globalPageCursor
+                                )
+                            }
+                            if (older.isNotEmpty()) reEnrichMissingProfiles(older)
+                        }
+                        .onFailure { _uiState.update { it.copy(isGlobalLoadingMore = false) } }
+                }
+            }
+            FeedType.FOLLOWING -> {
+                if (state.isFollowingLoadingMore || !state.hasMoreFollowing || state.followingPosts.isEmpty()) return
+                viewModelScope.launch {
+                    val until = state.followingPageCursor ?: ((state.followingPosts.minOfOrNull { it.event.createdAt } ?: return@launch) - 1)
+                    _uiState.update { it.copy(isFollowingLoadingMore = true) }
+                    runCatching { repository.fetchFollowTimelinePage(pubkeyHex, until, 50).deduped() }
+                        .onSuccess { older ->
+                            seenEventIds.addAll(older.map { it.event.id })
+                            _uiState.update { st ->
+                                st.copy(
+                                    followingPosts = (st.followingPosts + older).timelineSortedDeduped(),
+                                    isFollowingLoadingMore = false,
+                                    hasMoreFollowing = older.isNotEmpty(),
+                                    followingPageCursor = older.olderCursorOrNull() ?: st.followingPageCursor
+                                )
+                            }
+                            if (older.isNotEmpty()) reEnrichMissingProfiles(older)
+                        }
+                        .onFailure { _uiState.update { it.copy(isFollowingLoadingMore = false) } }
+                }
             }
         }
     }
@@ -694,7 +780,7 @@ class TimelineViewModel(
         relayLiveJob = null
         seenRelayEventIds.clear()
         synchronized(liveRelayBuffer) { liveRelayBuffer.clear() }
-        _uiState.update { it.copy(selectedRelayUrl = url, pendingRelayPosts = emptyList()) }
+        _uiState.update { it.copy(selectedRelayUrl = url, pendingRelayPosts = emptyList(), hasMoreRelay = true, relayPageCursor = null) }
         if (url != null) {
             loadRelayFeed(url)
         } else {
@@ -719,7 +805,7 @@ class TimelineViewModel(
             } else {
                 // 初回取得イベントを既読としてマーク（ライブストリームとの重複防止）
                 seenRelayEventIds.addAll(posts.map { it.event.id })
-                _uiState.update { it.copy(relayPosts = posts, isRelayFeedLoading = false) }
+                _uiState.update { it.copy(relayPosts = posts, isRelayFeedLoading = false, relayPageCursor = posts.olderCursorOrNull(), hasMoreRelay = true) }
                 // 初回ロード成功後にライブストリーム開始
                 startRelayLiveStream(relayUrl)
             }

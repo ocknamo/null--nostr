@@ -312,9 +312,8 @@ class NostrCache(context: Context) {
     fun getCachedTimeline(): String? {
         timelineCache.get("events")?.let { return it }
         // TTL チェックをスキップして生データを読む。
-        // タイムラインキャッシュは「フレッシュなデータが届くまでの表示用」なので
-        // 期限切れでも古いポストを見せることに問題はなく、
-        // fetchFollowTimeline() が成功するたびに常に上書きされる。
+        // Timeline event cache is fallback-only (offline / hard relay failure),
+        // not a normal cache-first first paint. Network pages are the timeline source of truth.
         val raw = prefs.getString(prefix + "timeline_events", null) ?: return null
         return try {
             json.decodeFromString<CacheEntry>(raw).data

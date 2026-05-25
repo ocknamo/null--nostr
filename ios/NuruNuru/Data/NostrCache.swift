@@ -161,7 +161,8 @@ final class NostrCache {
 
     // MARK: - Timeline Cache
 
-    /// タイムラインキャッシュ取得（TTLスキップ — 古いポストを見せても問題なし）。
+    /// Timeline event cache is fallback-only (offline / hard relay failure), not normal cache-first first paint.
+    /// Profile/media/follow-list caches remain cache-first; event pages are network-first.
     func getCachedTimeline(key: String = "global") -> [NostrEvent]? {
         lock.lock(); defer { lock.unlock() }
         if let events = timelineLRU.get(key) { return events }

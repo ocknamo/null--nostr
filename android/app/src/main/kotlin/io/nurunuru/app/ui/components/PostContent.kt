@@ -175,7 +175,7 @@ fun PostHeader(
 
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = formatPostTimestamp(post.event.createdAt),
+                text = formatPostTimestamp(post.repostTime ?: post.event.createdAt),
                 style = MaterialTheme.typography.bodySmall,
                 color = nuruColors.textTertiary
             )

@@ -24,6 +24,12 @@ final class TimelineViewModel {
     var isFollowingLoading:  Bool = false
     var isRelayRefreshing:   Bool = false
     var isFollowingRefreshing: Bool = false
+    var isRelayLoadingMore:  Bool = false
+    var isFollowingLoadingMore: Bool = false
+    var hasMoreRelayPosts:   Bool = true
+    var hasMoreFollowingPosts: Bool = true
+    private var relayPageCursor: Int64? = nil
+    private var followingPageCursor: Int64? = nil
     var feedType:            FeedType = .following
     var followList:          [String]  = []
     var errorMessage:        String?   = nil
@@ -76,39 +82,14 @@ final class TimelineViewModel {
         // ── Step 0: キャッシュから即時表示（nonisolated — actor hop なし） ──
         // Android: loadData() で getCachedTimeline() を Dispatchers.IO で即時読み取り → UI 更新。
         // iOS: nonisolated メソッドで同期的にキャッシュ読み取り → isLoading 解除。
-        let cachedGlobal    = repository.getCachedGlobalTimeline()
-        let cachedFollowing = repository.getCachedFollowingTimeline()
-        let cachedFollows   = repository.getCachedFollowList(pubkey: pubkeyHex)
+        let cachedFollows = repository.getCachedFollowList(pubkey: pubkeyHex)
 
-        if !cachedGlobal.isEmpty {
-            relayPosts     = cachedGlobal.map { ScoredPost(event: $0) }
-            // キャッシュ済みプロフィールを即時適用（アバター・名前を即時表示 — Android 同様）
-            for post in relayPosts {
-                if let profile = repository.getCachedProfile(pubkey: post.event.pubkey) {
-                    post.profile = profile
-                }
-            }
-            AppLogger.log("Timeline", "Cache-first (sync): \(cachedGlobal.count) relay posts")
-        } else {
-            // キャッシュが空の場合のみローディングスケルトンを表示
-            isRelayLoading = true
-        }
+        // Network-first timeline: event cache is fallback-only and must not be
+        // mixed into the normal time axis. Profile/follow-list caches remain OK.
+        isRelayLoading = true
+        isFollowingLoading = true
         if let follows = cachedFollows, !follows.isEmpty {
             followList = follows
-            if !cachedFollowing.isEmpty {
-                followingPosts = cachedFollowing.map { ScoredPost(event: $0) }
-                // キャッシュ済みプロフィールを即時適用
-                for post in followingPosts {
-                    if let profile = repository.getCachedProfile(pubkey: post.event.pubkey) {
-                        post.profile = profile
-                    }
-                }
-                AppLogger.log("Timeline", "Cache-first (sync): \(cachedFollowing.count) following posts")
-            } else {
-                isFollowingLoading = true
-            }
-        } else {
-            isFollowingLoading = true
         }
 
     }
@@ -175,8 +156,10 @@ final class TimelineViewModel {
         } else {
             freshFollowing = await repository.fetchFollowingTimelineFast(authors: initialFollowList)
         }
-        if !freshFollowing.isEmpty || followingPosts.isEmpty {
-            followingPosts = freshFollowing
+        if !freshFollowing.isEmpty {
+            followingPosts = mergeTimeline(followingPosts, with: freshFollowing)
+            followingPageCursor = mergedCursor(current: followingPageCursor, incoming: freshFollowing)
+            hasMoreFollowingPosts = true
         }
         isFollowingLoading = false
         AppLogger.log("Timeline", "Following fast posts loaded: \(freshFollowing.count)")
@@ -184,8 +167,10 @@ final class TimelineViewModel {
 
         // ── Step 3: グローバルタイムライン fast 結果を反映 ──
         let freshGlobal = await globalTask
-        if !freshGlobal.isEmpty || relayPosts.isEmpty {
-            relayPosts = freshGlobal
+        if !freshGlobal.isEmpty {
+            relayPosts = mergeTimeline(relayPosts, with: freshGlobal)
+            relayPageCursor = mergedCursor(current: relayPageCursor, incoming: freshGlobal)
+            hasMoreRelayPosts = true
         }
         isRelayLoading = false
         AppLogger.log("Timeline", "Relay fast posts loaded: \(freshGlobal.count)")
@@ -202,7 +187,9 @@ final class TimelineViewModel {
             await restartFollowingLiveTimeline()
             let refreshed = await repository.fetchFollowingTimelineFast(authors: freshFollows)
             if !refreshed.isEmpty {
-                followingPosts = refreshed
+                followingPosts = mergeTimeline(followingPosts, with: refreshed)
+                followingPageCursor = mergedCursor(current: followingPageCursor, incoming: refreshed)
+                hasMoreFollowingPosts = true
                 isFollowingLoading = false
                 AppLogger.log("Timeline", "Following fast posts refreshed after follow-list update: \(refreshed.count)")
                 let snapshot = refreshed
@@ -238,6 +225,27 @@ final class TimelineViewModel {
     private func samePostIds(_ lhs: [ScoredPost], _ rhs: [ScoredPost]) -> Bool {
         guard lhs.count == rhs.count else { return false }
         return zip(lhs, rhs).allSatisfy { $0.event.id == $1.event.id }
+    }
+
+    private func olderCursor(for posts: [ScoredPost]) -> Int64? {
+        posts.map { $0.event.createdAt }.min().map { $0 - 1 }
+    }
+
+    /// Keep pagination contiguous when fresh posts are merged with much older cache.
+    /// An incoming batch entirely older than the current cursor is stale cache and
+    /// must not move the cursor backwards over the missing gap.
+    private func mergedCursor(current: Int64?, incoming: [ScoredPost]) -> Int64? {
+        guard let next = olderCursor(for: incoming),
+              let newest = incoming.map({ $0.event.createdAt }).max() else { return current }
+        if let current, newest < current { return current }
+        return next
+    }
+
+    private func mergeTimeline(_ existing: [ScoredPost], with incoming: [ScoredPost]) -> [ScoredPost] {
+        var seen = Set<String>()
+        return (incoming + existing)
+            .sorted { $0.event.createdAt > $1.event.createdAt }
+            .filter { seen.insert($0.event.id).inserted }
     }
 
     private func restartFollowingLiveTimeline() async {
@@ -319,6 +327,8 @@ final class TimelineViewModel {
 
     func refreshRelay() async {
         isRelayRefreshing = true
+        relayPageCursor = nil
+        hasMoreRelayPosts = true
         let fresh: [ScoredPost]
         if let url = selectedRelayUrl {
             fresh = await repository.fetchGlobalTimelineFromRelay(url)
@@ -327,8 +337,9 @@ final class TimelineViewModel {
         }
 
         // 新着なしで空レスポンスでも既存表示は維持（誤って空画面にしない）
-        if !fresh.isEmpty || relayPosts.isEmpty {
-            relayPosts = fresh
+        if !fresh.isEmpty {
+            relayPosts = mergeTimeline(relayPosts, with: fresh)
+            relayPageCursor = mergedCursor(current: relayPageCursor, incoming: fresh)
         }
 
         await enrichProfiles(for: .relay)
@@ -338,16 +349,57 @@ final class TimelineViewModel {
     func refreshFollowing() async {
         guard !followList.isEmpty else { isFollowingRefreshing = false; return }
         isFollowingRefreshing = true
+        followingPageCursor = nil
+        hasMoreFollowingPosts = true
         let fresh = await repository.fetchFollowingTimeline(authors: followList)
 
         // 新着なしで空レスポンスでも既存表示は維持（誤って空画面にしない）
-        if !fresh.isEmpty || followingPosts.isEmpty {
-            followingPosts = fresh
+        if !fresh.isEmpty {
+            followingPosts = mergeTimeline(followingPosts, with: fresh)
+            followingPageCursor = mergedCursor(current: followingPageCursor, incoming: fresh)
         }
 
         await enrichProfiles(for: .following)
         isFollowingRefreshing = false
         await restartFollowingLiveTimeline()
+    }
+
+    // MARK: - Infinite Scroll
+
+    func loadMoreRelayIfNeeded() async {
+        guard !isRelayLoadingMore, hasMoreRelayPosts else { return }
+        let until = relayPageCursor ?? relayPosts.map { $0.event.createdAt }.min().map { $0 - 1 }
+        guard let until else { return }
+        isRelayLoadingMore = true
+        let older: [ScoredPost]
+        if let selectedRelayUrl {
+            older = await repository.fetchGlobalTimelineFromRelayPage(selectedRelayUrl, before: until)
+        } else {
+            older = await repository.fetchGlobalTimelinePage(before: until)
+        }
+        if !older.isEmpty {
+            relayPosts = mergeTimeline(relayPosts, with: older)
+            relayPageCursor = olderCursor(for: older) ?? relayPageCursor
+        }
+        hasMoreRelayPosts = !older.isEmpty
+        isRelayLoadingMore = false
+        if !older.isEmpty { Task { await enrichProfiles(for: .relay) } }
+    }
+
+    func loadMoreFollowingIfNeeded() async {
+        guard !followList.isEmpty else { return }
+        guard !isFollowingLoadingMore, hasMoreFollowingPosts else { return }
+        let until = followingPageCursor ?? followingPosts.map { $0.event.createdAt }.min().map { $0 - 1 }
+        guard let until else { return }
+        isFollowingLoadingMore = true
+        let older = await repository.fetchFollowingTimelinePage(authors: followList, before: until)
+        if !older.isEmpty {
+            followingPosts = mergeTimeline(followingPosts, with: older)
+            followingPageCursor = olderCursor(for: older) ?? followingPageCursor
+        }
+        hasMoreFollowingPosts = !older.isEmpty
+        isFollowingLoadingMore = false
+        if !older.isEmpty { Task { await enrichProfiles(for: .following) } }
     }
 
     // MARK: - Feed Switch

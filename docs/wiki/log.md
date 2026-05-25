@@ -537,3 +537,45 @@ LLM Wiki の時系列ログです。追記専用として扱います。
 - Added `docs/wiki/strategy/themaday-2026-05-25.md` documenting the management alignment after reviewing Block's “From Hierarchy to Intelligence”, store CSVs, and Zapstore country insights.
 - Recorded the decision to treat `docs/wiki/` as a company world model, keep this week focused on first-post completion / share loop / store trust, and treat the Zapstore Australia 28,218 impressions / 0 downloads spike as an anomaly until validated.
 - Added a Strategy / Operations section to the wiki index.
+## [2026-05-25] fix | Timeline empty refresh guard
+
+- Android/iOS/Rust の kind-1 timeline 経路を調査し、relay timeout / EOSE-without-events / 一時的な follow list 空扱いで既存タイムラインが空表示に置き換わる問題を修正。
+- Android は `TimelineViewModel` で空 refresh 時に既存 posts を保持し、`NostrRepositoryTimeline.kt` で follow timeline の cached nostrdb fallback と 48h legacy window を追加。
+- iOS は timeline cache を non-empty network result のみで更新し、full following fetch の empty result 時に cached following events を返す。
+- Rust core は timeline filter fetch の片方が失敗しても取得済みイベントを返せるようにした。
+- Source references: `android/app/src/main/kotlin/io/nurunuru/app/viewmodel/TimelineViewModel.kt`, `android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepositoryTimeline.kt`, `ios/NuruNuru/Data/NostrRepository+Timeline.swift`, `rust-engine/nurunuru-core/src/engine.rs`.
+
+## [2026-05-25] feature | Timeline infinite scroll pagination
+
+- Added Android/iOS timeline load-more pagination so users can scroll back through older kind-1 timeline notes instead of being limited to the first 50 posts.
+- Android uses `NostrClient.Filter.until` in `NostrRepositoryTimeline.kt`, `TimelineViewModel.loadMore`, and a LazyColumn footer trigger near the end of the list.
+- iOS adds matching `NostrRepository+Timeline.swift` page fetch methods and `TimelineView` row `onAppear` triggers with loading-more state.
+## [2026-05-26] fix | Timeline pagination gap cursor
+
+- Fixed infinite-scroll pagination when a stale cached page, for example 10 hours old, is displayed under a fresh head page.
+- Android/iOS now keep an explicit page cursor from the fresh contiguous head and do not move it backwards when merging older cached posts, so load-more fills the missing gap first.
+- Load-more now prefetches earlier near the last 12 visible rows to reduce perceived wait.
+- Source references: android TimelineViewModel, Android TimelineScreen, iOS TimelineViewModel, iOS TimelineView.
+## [2026-05-26] change | Network-first timeline event cache policy
+
+- Changed timeline UX policy from stale cache-first event rendering to network-first event pages.
+- Android/iOS no longer render persisted timeline event cache as the normal first paint; profile/follow-list caches remain cache-first.
+- Stale timeline event cache is retained only as fallback/offline support and for event/detail lookup, preventing old cached pages from being silently mixed under fresh posts.
+- Source references: Android TimelineViewModel / NostrRepositoryTimeline / NostrCache, iOS TimelineViewModel / NostrRepository+Timeline / NostrCache.
+## [2026-05-26] fix | Fast bounded timeline pagination
+
+- Reduced startup and older-page latency by making Android/iOS timeline hot paths raw-first: cached profiles are applied immediately and engagement enrichment runs after render.
+- Bounded older-page REQ windows to 6 hours so loading around 22 minutes ago cannot jump straight to 1 day ago and relays do less work.
+- Triggered load-more earlier near the last 20 rows to hide WebSocket latency.
+- Source references: Android NostrRepositoryTimeline and TimelineViewModel; iOS NostrRepository+Timeline and TimelineViewModel.
+## [2026-05-26] fix | Active-author follow pagination
+
+- Optimized follow timeline pagination by discovering active authors in the current time window and fetching smaller author chunks instead of relying on one 500-author REQ.
+- Positioned recent reposts by repost time so a fresh repost of an old note does not create an apparent 31m-to-1d timeline gap.
+- Source references: Android NostrRepositoryTimeline/PostContent, iOS NostrRepository+Timeline.
+## [2026-05-26] fix | Selected relay repost-time continuity
+
+- Fixed selected relay timeline continuity by applying the shared repost unwrap/repost-time ordering path to relay-specific pages.
+- Repost timeline display now uses the repost event timestamp rather than the original event timestamp on Android/iOS, preventing 11m-to-1d jumps caused by fresh reposts of old notes.
+- Source references: Android NostrRepositoryTimeline / NostrRepositoryLiveStream and iOS NostrRepository+Timeline / ScoredPost.
+

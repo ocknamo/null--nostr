@@ -334,7 +334,10 @@ struct TimelineView: View {
             isRefreshing: viewModel.isRelayRefreshing,
             emptyText: "リレーに投稿がありません",
             emptyIcon: "doc.text",
-            onRefresh: { await viewModel.refreshRelay() }
+            onRefresh: { await viewModel.refreshRelay() },
+            isLoadingMore: viewModel.isRelayLoadingMore,
+            hasMore: viewModel.hasMoreRelayPosts,
+            onLoadMore: { await viewModel.loadMoreRelayIfNeeded() }
         )
     }
 
@@ -349,7 +352,10 @@ struct TimelineView: View {
                 ? "フォローしているユーザーがいません"
                 : "フォロータイムラインに投稿がありません",
             emptyIcon: "heart",
-            onRefresh: { await viewModel.refreshFollowing() }
+            onRefresh: { await viewModel.refreshFollowing() },
+            isLoadingMore: viewModel.isFollowingLoadingMore,
+            hasMore: viewModel.hasMoreFollowingPosts,
+            onLoadMore: { await viewModel.loadMoreFollowingIfNeeded() }
         )
     }
 
@@ -362,7 +368,10 @@ struct TimelineView: View {
         isRefreshing: Bool,
         emptyText: String,
         emptyIcon: String = "doc.text",
-        onRefresh: @escaping () async -> Void
+        onRefresh: @escaping () async -> Void,
+        isLoadingMore: Bool,
+        hasMore: Bool,
+        onLoadMore: @escaping () async -> Void
     ) -> some View {
         if isLoading && posts.isEmpty {
             ScrollView {
@@ -396,8 +405,22 @@ struct TimelineView: View {
                         // ヘッダー/新着Pill と競合して先頭セルが隠れることがある。
                         Color.clear.frame(height: 12).id("timeline-top")
 
-                        ForEach(posts, id: \.id) { post in
+                        ForEach(Array(posts.enumerated()), id: \.element.id) { index, post in
                             postCell(post)
+                                .onAppear {
+                                    guard hasMore, !isLoadingMore, index >= posts.count - 20 else { return }
+                                    Task { await onLoadMore() }
+                                }
+                        }
+
+                        if isLoadingMore {
+                            HStack {
+                                Spacer()
+                                ProgressView()
+                                    .tint(NuruColors.lineGreen)
+                                    .padding(.vertical, 20)
+                                Spacer()
+                            }
                         }
                     }
                 }

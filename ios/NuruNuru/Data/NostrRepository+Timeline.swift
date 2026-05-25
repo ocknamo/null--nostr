@@ -7,6 +7,11 @@ import Foundation
 
 extension NostrRepository {
 
+    private static let timelinePageWindowSeconds: TimeInterval = 60 * 60 * 6
+    private static let timelineRecentRepostGraceSeconds: Int64 = 3 * 24 * 60 * 60
+    private static let timelineFollowChunkSize: Int = 80
+    private static let timelineActiveAuthorSample: Int = 240
+
     // MARK: - Single-relay fetch
 
     /// 単一リレーからイベントを取得する（リレータブ / ターゲット指定フェッチ用）。
@@ -36,7 +41,7 @@ extension NostrRepository {
     // MARK: - Global timeline
 
     /// First-paint global timeline: raw posts + cached profiles only.
-    func fetchGlobalTimelineFast(limit: Int = 50, timeoutSeconds: Double = 2.5) async -> [ScoredPost] {
+    func fetchGlobalTimelineFast(limit: Int = 50, timeoutSeconds: Double = 2.0) async -> [ScoredPost] {
         let since  = Int64(Date().addingTimeInterval(-3600).timeIntervalSince1970)
         let kinds  = [NostrKind.textNote, NostrKind.longForm, NostrKind.repost]
         let filter = NostrFilter(kinds: kinds, since: since, limit: limit)
@@ -45,7 +50,9 @@ extension NostrRepository {
             .sorted { $0.createdAt > $1.createdAt }
         var posts = unwrapRepostEvents(rawEvents)
         posts = await filterMutedPosts(posts)
-        cache.setCachedTimeline(posts.map(\.event), key: "global")
+        if !posts.isEmpty {
+            cache.setCachedTimeline(posts.map(\.event), key: "global")
+        }
         applyCachedProfiles(to: &posts)
         return posts
     }
@@ -65,7 +72,9 @@ extension NostrRepository {
 
         var posts = unwrapRepostEvents(rawEvents)
         posts = await filterMutedPosts(posts)
-        cache.setCachedTimeline(posts.map(\.event), key: "global")
+        if !posts.isEmpty {
+            cache.setCachedTimeline(posts.map(\.event), key: "global")
+        }
 
         await enrichPosts(&posts)
         return posts
@@ -95,28 +104,117 @@ extension NostrRepository {
         return posts
     }
 
-    // MARK: - Following timeline
-
-    /// First-paint following timeline: raw posts + cached profiles only.
-    func fetchFollowingTimelineFast(authors: [String], limit: Int = 50, timeoutSeconds: Double = 2.5) async -> [ScoredPost] {
-        guard !authors.isEmpty else { return [] }
-        let since  = Int64(Date().addingTimeInterval(-86400 * 2).timeIntervalSince1970)
-        let kinds  = [NostrKind.textNote, NostrKind.longForm, NostrKind.repost]
-        let filter = NostrFilter(authors: authors, kinds: kinds, since: since, limit: limit)
-        let rawEvents = await fetchEvents(filters: [filter], timeoutSeconds: timeoutSeconds)
+    func fetchGlobalTimelineFromRelayPage(_ relayUrl: String, before until: Int64, limit: Int = 50) async -> [ScoredPost] {
+        let kinds = [NostrKind.textNote, NostrKind.longForm, NostrKind.repost]
+        let filter = NostrFilter(kinds: kinds, since: until - Int64(Self.timelinePageWindowSeconds), until: until, limit: limit)
+        let rawEvents = await fetchEventsFromRelay(relayUrl, filters: [filter], timeoutSeconds: 3.5)
             .filter { kinds.contains($0.kind) }
             .sorted { $0.createdAt > $1.createdAt }
         var posts = unwrapRepostEvents(rawEvents)
         posts = await filterMutedPosts(posts)
-        cache.setCachedTimeline(posts.map(\.event), key: "following")
         applyCachedProfiles(to: &posts)
-        return posts
+        return Array(posts.prefix(limit))
+    }
+
+    private func fetchTimelineChunkedByAuthors(
+        authors: [String],
+        since: Int64,
+        until: Int64? = nil,
+        limit: Int,
+        timeoutSeconds: Double
+    ) async -> [NostrEvent] {
+        let unique = Array(NSOrderedSet(array: authors).compactMap { $0 as? String })
+        guard !unique.isEmpty else { return [] }
+        let chunkCount = max(1, Int(ceil(Double(unique.count) / Double(Self.timelineFollowChunkSize))))
+        let perChunkLimit = max(20, limit / chunkCount + 12)
+        return await withTaskGroup(of: [NostrEvent].self) { group in
+            for chunkStart in stride(from: 0, to: unique.count, by: Self.timelineFollowChunkSize) {
+                let chunk = Array(unique[chunkStart..<min(chunkStart + Self.timelineFollowChunkSize, unique.count)])
+                group.addTask {
+                    let filter = NostrFilter(authors: chunk, kinds: [NostrKind.textNote, NostrKind.longForm, NostrKind.repost], since: since, until: until, limit: perChunkLimit)
+                    return await self.fetchEvents(filters: [filter], timeoutSeconds: timeoutSeconds)
+                }
+            }
+            var all: [NostrEvent] = []
+            for await events in group { all += events }
+            var seen = Set<String>()
+            return all
+                .filter { seen.insert($0.id).inserted }
+                .sorted { $0.createdAt > $1.createdAt }
+                .prefix(limit)
+                .map { $0 }
+        }
+    }
+
+    private func activeAuthors(from events: [NostrEvent], limit: Int) -> [String] {
+        var seen = Set<String>()
+        return events
+            .filter { $0.kind != NostrKind.repost }
+            .sorted { $0.createdAt > $1.createdAt }
+            .compactMap { event in seen.insert(event.pubkey).inserted ? event.pubkey : nil }
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    // MARK: - Following timeline
+
+    /// First-paint following timeline: raw posts + cached profiles only.
+    func fetchFollowingTimelineFast(authors: [String], limit: Int = 50, timeoutSeconds: Double = 2.0) async -> [ScoredPost] {
+        guard !authors.isEmpty else { return [] }
+        let since = Int64(Date().addingTimeInterval(-86400 * 2).timeIntervalSince1970)
+        let rawEvents = await fetchTimelineChunkedByAuthors(authors: authors, since: since, limit: limit, timeoutSeconds: timeoutSeconds)
+        var posts = unwrapRepostEvents(rawEvents)
+        posts = await filterMutedPosts(posts)
+        if !posts.isEmpty { cache.setCachedTimeline(posts.map(\.event), key: "following") }
+        applyCachedProfiles(to: &posts)
+        return Array(posts.prefix(limit))
     }
 
     func enrichTimelinePosts(_ posts: [ScoredPost]) async -> [ScoredPost] {
         var copy = posts
         await enrichPosts(&copy)
         return copy
+    }
+
+    /// Older global timeline page before the given timestamp. Used by infinite scroll.
+    func fetchGlobalTimelinePage(before until: Int64, limit: Int = 50) async -> [ScoredPost] {
+        let kinds  = [NostrKind.textNote, NostrKind.longForm, NostrKind.repost]
+        let filter = NostrFilter(kinds: kinds, since: until - Int64(Self.timelinePageWindowSeconds), until: until, limit: limit)
+        let rawEvents = await fetchEvents(filters: [filter], timeoutSeconds: 3.0)
+            .filter { kinds.contains($0.kind) }
+            .sorted { $0.createdAt > $1.createdAt }
+        var posts = unwrapRepostEvents(rawEvents)
+        posts = await filterMutedPosts(posts)
+        if !posts.isEmpty { cache.setCachedTimeline(posts.map(\.event), key: "global") }
+        applyCachedProfiles(to: &posts)
+        return posts
+    }
+
+    /// Older following timeline page before the given timestamp. Used by infinite scroll.
+    func fetchFollowingTimelinePage(authors: [String], before until: Int64, limit: Int = 50) async -> [ScoredPost] {
+        guard !authors.isEmpty else { return [] }
+        let since = until - Int64(Self.timelinePageWindowSeconds)
+        let discovery = await fetchTimelineChunkedByAuthors(
+            authors: Array(authors.prefix(500)),
+            since: since,
+            until: until,
+            limit: Self.timelineActiveAuthorSample,
+            timeoutSeconds: 1.8
+        )
+        let active = activeAuthors(from: discovery, limit: Self.timelineActiveAuthorSample)
+        let targetAuthors = active.isEmpty ? Array(authors.prefix(500)) : active
+        let rawEvents = await fetchTimelineChunkedByAuthors(
+            authors: targetAuthors,
+            since: since,
+            until: until,
+            limit: limit,
+            timeoutSeconds: 3.5
+        )
+        var posts = unwrapRepostEvents(rawEvents.isEmpty ? discovery : rawEvents)
+        posts = await filterMutedPosts(posts)
+        if !posts.isEmpty { cache.setCachedTimeline(posts.map(\.event), key: "following") }
+        applyCachedProfiles(to: &posts)
+        return Array(posts.prefix(limit))
     }
 
     /// フォロー中ユーザーのタイムライン（kind 1、直近48時間）を取得し、エンゲージメントカウントを付与して返す。
@@ -135,8 +233,10 @@ extension NostrRepository {
 
         var posts = unwrapRepostEvents(rawEvents)
         posts = await filterMutedPosts(posts)
-        // キャッシュに保存（Android: cache.setCachedTimeline("following") に対応）
-        cache.setCachedTimeline(posts.map(\.event), key: "following")
+        if !posts.isEmpty {
+            // Cache is fallback/offline support, not normal cache-first timeline UI.
+            cache.setCachedTimeline(posts.map(\.event), key: "following")
+        }
         await enrichPosts(&posts)
         return posts
     }
@@ -348,7 +448,16 @@ extension NostrRepository {
                    let inner = try? JSONDecoder().decode(NostrEvent.self, from: data),
                    inner.kind == NostrKind.textNote || inner.kind == NostrKind.longForm {
                     guard seenIds.insert(inner.id).inserted else { continue }
-                    let post = ScoredPost(event: inner)
+                    let displayInner = NostrEvent(
+                        id: inner.id,
+                        pubkey: inner.pubkey,
+                        createdAt: event.createdAt,
+                        kind: inner.kind,
+                        tags: inner.tags,
+                        content: inner.content,
+                        sig: inner.sig
+                    )
+                    let post = ScoredPost(event: displayInner)
                     // repostedBy はプロフィール取得後に設定される（pubkey のみ仮設定）
                     post.repostedBy = UserProfile(pubkey: event.pubkey)
                     post.repostTime = event.createdAt
