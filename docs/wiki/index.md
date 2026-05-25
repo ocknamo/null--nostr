@@ -25,6 +25,12 @@
 | [[culture/llm-onboarding]] | LLM コントリビュータのオンボーディングと出力規約。 |
 | [[culture/four-freedoms]] | 4軸自由ドクトリン (言論 / プライバシー / 経済 / 配布)。 |
 
+## Strategy / Operations
+
+| Page | Summary |
+|---|---|
+| [[strategy/themaday-2026-05-25]] | Block の “From Hierarchy to Intelligence” とストアデータを踏まえた ThemaDAY 経営会議・リーダー方向性すり合わせ。 |
+
 ## Platforms
 
 | Page | Summary |

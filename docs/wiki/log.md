@@ -531,3 +531,9 @@ LLM Wiki の時系列ログです。追記専用として扱います。
 - Added explicit Android JNI packaging and Rust linker notes for Android 15+ 16 KB memory page-size compatibility.
 - Sanitized sync prompt path examples to avoid embedding a local personal username.
 - Source references: android/app/build.gradle.kts, rust-engine/nurunuru-ffi/android/build.gradle.kts, rust-engine/.cargo/config.toml, docs/sync/prompts/.
+
+## [2026-05-25] strategy | ThemaDAY management alignment as learning organization
+
+- Added `docs/wiki/strategy/themaday-2026-05-25.md` documenting the management alignment after reviewing Block's “From Hierarchy to Intelligence”, store CSVs, and Zapstore country insights.
+- Recorded the decision to treat `docs/wiki/` as a company world model, keep this week focused on first-post completion / share loop / store trust, and treat the Zapstore Australia 28,218 impressions / 0 downloads spike as an anomaly until validated.
+- Added a Strategy / Operations section to the wiki index.
