@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-05-26
+
+### Changed
+- タイムライン event cache を network-first 方針に変更し、古いキャッシュが新着投稿の下に無言で混ざって時間軸が飛ぶ UX を廃止。プロフィール / follow-list / detail lookup 用 cache は維持。
+- Android / iOS のタイムライン pagination を bounded window (since = until - 6h) + raw-first 表示へ変更し、過去投稿読み込みの体感速度を改善。
+- Follow timeline の過去読み込みで active-author discovery と author chunk 分割取得を導入し、500 authors の巨大 REQ 依存を軽減。
+- Android では NIP-65 outbox relay hints を使い、active authors の write relay にも並列 fetch するよう改善。
+- 個別 relay timeline でも until pagination に対応し、すべてのリレーだけでなく選択中 relay 単体でも過去投稿へ遡れるように変更。
+
+### Fixed
+- relay timeout / EOSE-without-events / 一時的な follow list 空扱いで、表示中のタイムラインが突然空になる問題を修正。
+- 新着 50 件の下に 10 時間前などの stale cache が続き、間の投稿を遡れない問題を修正。Pagination cursor は fresh contiguous head を基準に保持。
+- 最近の repost が元投稿の古い timestamp で表示され、11m -> 1d のように時間軸が飛んで見える問題を all-relay / follow / selected relay timeline で修正。
+- Rust core の timeline fetch で filter の一部が失敗しても取得済み event を返せるようにし、partial failure に強くしました。
+
+### Release artifacts
+- Android APK: release-artifacts/nurunuru-1.5.2-arm64-v8a.apk
+- Google Play AAB: release-artifacts/nurunuru-1.5.2-google-play.aab
+- App Store Connect IPA: release-artifacts/ios/app-store-connect-1.5.2/NuruNuru.ipa
+
 ## [1.5.1] - 2026-05-25
 
 ### Changed

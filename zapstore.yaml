@@ -2,7 +2,8 @@
 # https://zapstore.dev/docs/publish
 
 name: ぬるぬる
-summary: シンプルで使いやすいNostrクライアント
+summary: 高速で信頼できるタイムラインを備えたNostrクライアント
+version: 1.5.2
 
 images:
   - https://blossom.primal.net/07c92011f73f301d3dfe0e642f8d6c09547b934e4b8cb51ab0781f4288e5e370.png
@@ -14,7 +15,9 @@ description: |
   「ぬるぬる」は、シンプルで使いやすいNostrクライアントです。
 
   📱 タイムライン
-  フォロー中の投稿を表示。画像・動画・カスタム絵文字・長文記事に対応。
+  Network-first の高速タイムライン。フォロー / リレー別表示、無限スクロール、
+  NIP-65 relay hints を活用した過去投稿読み込みに対応。
+  画像・動画・カスタム絵文字・長文記事・リポストを自然な時系列で表示します。
   ホームタブで自分の投稿といいね一覧を切り替え表示。
 
   ✍️ 投稿
