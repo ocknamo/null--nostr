@@ -79,7 +79,7 @@ suspend fun NostrRepository.fetchUserNotes(pubkeyHex: String, limit: Int = 30): 
     } else emptyList()
 
     val filter = NostrClient.Filter(
-        kinds = listOf(NostrKind.TEXT_NOTE, NostrKind.LONG_FORM, NostrKind.VIDEO_LOOP, NostrKind.REPOST),
+        kinds = listOf(NostrKind.TEXT_NOTE, NostrKind.LONG_FORM, NostrKind.REPOST),
         authors = listOf(pubkeyHex),
         limit = limit
     )

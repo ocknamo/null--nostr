@@ -14,6 +14,7 @@ import java.util.concurrent.TimeUnit
 
 // ─── Notifications ────────────────────────────────────────────────────────────
 
+private val NOTIFICATION_ALLOWED_TYPES = setOf("reaction", "emoji_reaction", "zap", "repost", "reply", "mention", "badge", "follow")
 
 fun NostrRepository.getCachedNotifications(pubkeyHex: String): NotificationResult? {
     val raw = cache.getCachedNotifications(pubkeyHex) ?: return null
@@ -28,7 +29,7 @@ suspend fun NostrRepository.fetchNotifications(pubkeyHex: String, limit: Int = 5
             try {
                 val result = json.decodeFromString<NotificationResult>(cached)
                 if (result.items.isNotEmpty()) {
-                    val dedupedItems = dedupeFollowNotifications(result.items)
+                    val dedupedItems = dedupeFollowNotifications(result.items.filter { it.type in NOTIFICATION_ALLOWED_TYPES })
                     val dedupedResult = if (dedupedItems.size != result.items.size) {
                         result.copy(items = dedupedItems)
                     } else result
@@ -330,7 +331,7 @@ suspend fun NostrRepository.fetchNotifications(pubkeyHex: String, limit: Int = 5
     val profiles = fetchProfiles(notifierPubkeys.toList())
 
     // Sort by time descending and remove duplicated follow notifications by follower pubkey.
-    val sorted = dedupeFollowNotifications(notificationItems)
+    val sorted = dedupeFollowNotifications(notificationItems.filter { it.type in NOTIFICATION_ALLOWED_TYPES })
 
     val result = NotificationResult(sorted, profiles, originalPosts)
 

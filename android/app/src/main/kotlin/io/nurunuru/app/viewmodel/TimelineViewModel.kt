@@ -77,6 +77,9 @@ class TimelineViewModel(
     private var relayLiveJob: Job? = null
     private val inFlightLikeEventIds = mutableSetOf<String>()
     private val inFlightRepostEventIds = mutableSetOf<String>()
+    private var globalEmptyPageStreak = 0
+    private var followingEmptyPageStreak = 0
+    private var relayEmptyPageStreak = 0
 
     private val seenRelayEventIds: MutableSet<String> =
         java.util.concurrent.ConcurrentHashMap.newKeySet()
@@ -483,10 +486,13 @@ class TimelineViewModel(
     fun refresh() {
         when (_uiState.value.feedType) {
             FeedType.GLOBAL -> {
+                globalEmptyPageStreak = 0
+                relayEmptyPageStreak = 0
                 _uiState.update { it.copy(pendingGlobalPosts = emptyList(), hasMoreGlobal = true, globalPageCursor = null) }
                 loadGlobalTimeline(isRefresh = true)
             }
             FeedType.FOLLOWING -> {
+                followingEmptyPageStreak = 0
                 _uiState.update { it.copy(pendingFollowingPosts = emptyList(), hasMoreFollowing = true, followingPageCursor = null) }
                 loadFollowingTimeline(isRefresh = true)
             }
@@ -505,10 +511,11 @@ class TimelineViewModel(
                 runCatching { repository.fetchRelayTimelinePage(relayUrl, until, 50).deduped() }
                     .onSuccess { older ->
                         seenRelayEventIds.addAll(older.map { it.event.id })
+                        if (older.isNotEmpty()) relayEmptyPageStreak = 0 else relayEmptyPageStreak += 1
                         _uiState.update { st -> st.copy(
                             relayPosts = (st.relayPosts + older).timelineSortedDeduped(),
                             isGlobalLoadingMore = false,
-                            hasMoreRelay = older.isNotEmpty(),
+                            hasMoreRelay = older.isNotEmpty() || relayEmptyPageStreak < 3,
                             relayPageCursor = older.olderCursorOrNull() ?: st.relayPageCursor
                         ) }
                         if (older.isNotEmpty()) reEnrichMissingProfiles(older)
@@ -526,11 +533,12 @@ class TimelineViewModel(
                     runCatching { repository.fetchGlobalTimelinePage(until, 50).deduped() }
                         .onSuccess { older ->
                             seenEventIds.addAll(older.map { it.event.id })
+                            if (older.isNotEmpty()) globalEmptyPageStreak = 0 else globalEmptyPageStreak += 1
                             _uiState.update { st ->
                                 st.copy(
                                     globalPosts = (st.globalPosts + older).timelineSortedDeduped(),
                                     isGlobalLoadingMore = false,
-                                    hasMoreGlobal = older.isNotEmpty(),
+                                    hasMoreGlobal = older.isNotEmpty() || globalEmptyPageStreak < 3,
                                     globalPageCursor = older.olderCursorOrNull() ?: st.globalPageCursor
                                 )
                             }
@@ -547,11 +555,12 @@ class TimelineViewModel(
                     runCatching { repository.fetchFollowTimelinePage(pubkeyHex, until, 50).deduped() }
                         .onSuccess { older ->
                             seenEventIds.addAll(older.map { it.event.id })
+                            if (older.isNotEmpty()) followingEmptyPageStreak = 0 else followingEmptyPageStreak += 1
                             _uiState.update { st ->
                                 st.copy(
                                     followingPosts = (st.followingPosts + older).timelineSortedDeduped(),
                                     isFollowingLoadingMore = false,
-                                    hasMoreFollowing = older.isNotEmpty(),
+                                    hasMoreFollowing = older.isNotEmpty() || followingEmptyPageStreak < 3,
                                     followingPageCursor = older.olderCursorOrNull() ?: st.followingPageCursor
                                 )
                             }

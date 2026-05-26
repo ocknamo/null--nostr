@@ -12,6 +12,8 @@ import Foundation
 
 extension NostrRepository {
 
+    private static let notificationAllowedTypes: Set<String> = ["reaction", "emoji_reaction", "zap", "repost", "reply", "mention", "badge", "follow"]
+
     // MARK: - fetchNotifications
 
     /// NIP-65 読み取りリレーのURL一覧を返す。
@@ -423,18 +425,19 @@ extension NostrRepository {
         // キャッシュからの復元（skipCache でない場合のみ）
         if !skipCache, let cached = cache.getCachedNotificationResult() {
             // キャッシュ済みアイテムのプロフィール・元投稿を再構築。元投稿もキャッシュから即時表示する。
-            let pubkeys = Array(Set(cached.items.map { $0.pubkey }))
+            let safeItems = cached.items.filter { Self.notificationAllowedTypes.contains($0.type) }
+            let pubkeys = Array(Set(safeItems.map { $0.pubkey }))
             async let profileList = fetchProfiles(pubkeys: pubkeys)
-            async let postMap = resolveOriginalPosts(for: cached.items, cachedOriginalPosts: cached.originalPosts ?? [])
+            async let postMap = resolveOriginalPosts(for: safeItems, cachedOriginalPosts: cached.originalPosts ?? [])
             let (profiles, originalPosts) = await (profileList, postMap)
             let profilesMap = Dictionary(profiles.map { ($0.pubkey, $0) }, uniquingKeysWith: { a, _ in a })
             if (cached.originalPosts ?? []).count != originalPosts.count {
-                cache.setCachedNotificationResult(cached.items, originalPosts: originalPosts)
+                cache.setCachedNotificationResult(safeItems, originalPosts: originalPosts)
             }
-            return NotificationResult(items: cached.items, profiles: profilesMap, originalPosts: originalPosts)
+            return NotificationResult(items: safeItems, profiles: profilesMap, originalPosts: originalPosts)
         }
 
-        let items = await fetchNotifications(pubkey: pubkey)
+        let items = await fetchNotifications(pubkey: pubkey).filter { Self.notificationAllowedTypes.contains($0.type) }
 
         // プロフィール取得
         let pubkeys = Array(Set(items.map { $0.pubkey }))

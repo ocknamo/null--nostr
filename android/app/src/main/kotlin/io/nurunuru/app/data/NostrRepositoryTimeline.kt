@@ -13,6 +13,8 @@ private const val TIMELINE_MORE_TIMEOUT_MS: Long = 3_500L
 private const val TIMELINE_FOLLOW_CHUNK_SIZE: Int = 80
 private const val TIMELINE_ACTIVE_AUTHOR_SAMPLE: Int = 240
 private const val TIMELINE_RECENT_REPOST_GRACE_SECS: Long = 3L * 24L * 60L * 60L
+private val TIMELINE_NOTE_KINDS = listOf(NostrKind.TEXT_NOTE, NostrKind.LONG_FORM)
+private val TIMELINE_FETCH_KINDS = listOf(NostrKind.TEXT_NOTE, NostrKind.LONG_FORM, NostrKind.REPOST)
 
 /** General fetchEvents method. */
 suspend fun NostrRepository.fetchEvents(filter: NostrClient.Filter, timeoutMs: Long = 5_000): List<NostrEvent> {
@@ -30,7 +32,7 @@ suspend fun NostrRepository.fetchEventsFromRelays(
 
 suspend fun NostrRepository.fetchGlobalTimelineFast(limit: Int = 50): List<ScoredPost> = withContext(Dispatchers.IO) {
     val filter = NostrClient.Filter(
-        kinds = listOf(NostrKind.TEXT_NOTE, NostrKind.VIDEO_LOOP, NostrKind.LONG_FORM, NostrKind.REPOST),
+        kinds = TIMELINE_FETCH_KINDS,
         since = getOneHourAgo(),
         limit = limit
     )
@@ -59,7 +61,13 @@ suspend fun NostrRepository.fetchFollowingTimelineFast(authors: List<String>, li
 }
 
 suspend fun NostrRepository.enrichTimelinePosts(posts: List<ScoredPost>): List<ScoredPost> = withContext(Dispatchers.IO) {
-    enrichPosts(posts.map { it.event })
+    val repostMeta = posts.associateBy { it.event.id }
+    enrichPosts(posts.map { it.event }).map { enriched ->
+        val original = repostMeta[enriched.event.id]
+        if (original?.repostedBy != null || original?.repostTime != null) {
+            enriched.copy(repostedBy = original.repostedBy, repostTime = original.repostTime)
+        } else enriched
+    }
 }
 
 fun NostrRepository.unwrapTimelineEvents(events: List<NostrEvent>): List<NostrEvent> {
@@ -67,7 +75,7 @@ fun NostrRepository.unwrapTimelineEvents(events: List<NostrEvent>): List<NostrEv
     for (event in events) {
         if (event.kind == NostrKind.REPOST) {
             val inner = runCatching { Json.decodeFromString<NostrEvent>(event.content) }.getOrNull()
-            if (inner != null && (inner.kind == NostrKind.TEXT_NOTE || inner.kind == NostrKind.VIDEO_LOOP || inner.kind == NostrKind.LONG_FORM)) {
+            if (inner != null && inner.kind in TIMELINE_NOTE_KINDS) {
                 out += inner.copy(createdAt = event.createdAt)
             }
         } else {
@@ -79,11 +87,31 @@ fun NostrRepository.unwrapTimelineEvents(events: List<NostrEvent>): List<NostrEv
 
 fun NostrRepository.postsFromRawTimelineEvents(events: List<NostrEvent>): List<ScoredPost> {
     val muted = getCachedMuteList(myPubkeyHex)?.pubkeys?.toSet() ?: emptySet()
-    return unwrapTimelineEvents(events)
-        .distinctBy { it.id }
-        .filter { it.pubkey !in muted && it.getTagValues("e").isEmpty() }
-        .sortedByDescending { it.createdAt }
-        .map { ev -> ScoredPost(event = ev, profile = getCachedProfile(ev.pubkey)) }
+    val posts = mutableListOf<ScoredPost>()
+    val seen = mutableSetOf<String>()
+    for (event in events.sortedByDescending { it.createdAt }) {
+        if (event.kind == NostrKind.REPOST) {
+            val inner = runCatching { Json.decodeFromString<NostrEvent>(event.content) }.getOrNull()
+                ?: continue
+            if (inner.kind !in TIMELINE_NOTE_KINDS) continue
+            if (inner.pubkey in muted || event.pubkey in muted) continue
+            if (inner.getTagValues("e").isNotEmpty()) continue
+            if (!seen.add(inner.id)) continue
+            val displayEvent = inner.copy(createdAt = event.createdAt)
+            posts += ScoredPost(
+                event = displayEvent,
+                profile = getCachedProfile(inner.pubkey),
+                repostedBy = getCachedProfile(event.pubkey) ?: UserProfile(pubkey = event.pubkey),
+                repostTime = event.createdAt
+            )
+        } else {
+            if (event.kind !in TIMELINE_NOTE_KINDS) continue
+            if (event.pubkey in muted || event.getTagValues("e").isNotEmpty()) continue
+            if (!seen.add(event.id)) continue
+            posts += ScoredPost(event = event, profile = getCachedProfile(event.pubkey))
+        }
+    }
+    return posts
 }
 
 private fun List<NostrEvent>.activeAuthors(limit: Int): List<String> =
@@ -111,7 +139,7 @@ private suspend fun NostrRepository.fetchTimelineChunkedByAuthors(
             runCatching {
                 client.fetchEvents(
                     NostrClient.Filter(
-                        kinds = listOf(NostrKind.TEXT_NOTE, NostrKind.VIDEO_LOOP, NostrKind.LONG_FORM, NostrKind.REPOST),
+                        kinds = TIMELINE_FETCH_KINDS,
                         authors = chunk,
                         since = since,
                         until = until,
@@ -148,7 +176,7 @@ private suspend fun NostrRepository.fetchTimelineWithRelayHints(
                         client.fetchEventsFrom(
                             listOf(relay),
                             NostrClient.Filter(
-                                kinds = listOf(NostrKind.TEXT_NOTE, NostrKind.VIDEO_LOOP, NostrKind.LONG_FORM, NostrKind.REPOST),
+                                kinds = TIMELINE_FETCH_KINDS,
                                 authors = group.take(TIMELINE_FOLLOW_CHUNK_SIZE),
                                 since = since,
                                 until = until,
@@ -173,7 +201,7 @@ suspend fun NostrRepository.fetchGlobalTimelinePage(
     repeat(8) { attempt ->
         val since = cursor - TIMELINE_PAGE_WINDOW_SECS
         val filter = NostrClient.Filter(
-            kinds = listOf(NostrKind.TEXT_NOTE, NostrKind.VIDEO_LOOP, NostrKind.LONG_FORM, NostrKind.REPOST),
+            kinds = TIMELINE_FETCH_KINDS,
             since = since,
             until = cursor,
             limit = limit
@@ -328,14 +356,14 @@ private suspend fun NostrRepository.fetchGlobalTimelineLegacy(limit: Int): List<
     val (allEvents, followList, secondDegreeFollows) = coroutineScope {
         val viralJob = async {
             client.fetchEvents(NostrClient.Filter(
-                kinds = listOf(NostrKind.TEXT_NOTE, NostrKind.VIDEO_LOOP, NostrKind.LONG_FORM),
+                kinds = TIMELINE_NOTE_KINDS,
                 limit = 100,
                 since = oneHourAgo
             ), timeoutMs = 4000)
         }
         val recentJob = async {
             client.fetchEvents(NostrClient.Filter(
-                kinds = listOf(NostrKind.TEXT_NOTE, NostrKind.VIDEO_LOOP, NostrKind.LONG_FORM),
+                kinds = TIMELINE_NOTE_KINDS,
                 limit = 50,
                 since = oneHourAgo
             ), timeoutMs = 4000)
@@ -357,7 +385,7 @@ private suspend fun NostrRepository.fetchGlobalTimelineLegacy(limit: Int): List<
         // Fetch some posts from 2nd degree network
         val secondDegreePosts = if (secondDegree.isNotEmpty()) {
             client.fetchEvents(NostrClient.Filter(
-                kinds = listOf(NostrKind.TEXT_NOTE, NostrKind.VIDEO_LOOP, NostrKind.LONG_FORM),
+                kinds = TIMELINE_NOTE_KINDS,
                 authors = secondDegree.take(50).toList(),
                 limit = 50,
                 since = threeHoursAgo
@@ -486,7 +514,7 @@ private suspend fun NostrRepository.fetchFollowTimelineLegacy(pubkeyHex: String,
     if (followList.isEmpty()) return emptyList()
 
     val filter = NostrClient.Filter(
-        kinds = listOf(NostrKind.TEXT_NOTE, NostrKind.VIDEO_LOOP, NostrKind.LONG_FORM, NostrKind.REPOST),
+        kinds = TIMELINE_FETCH_KINDS,
         authors = followList.take(500),
         limit = limit,
         // Follow feeds can be quiet. A 1-hour window made healthy timelines look
@@ -514,7 +542,7 @@ suspend fun NostrRepository.searchNotes(query: String, limit: Int = 30): List<Sc
     )
     val events = client.fetchEventsFrom(
         listOf(NostrClient.SEARCH_RELAY), filter, timeoutMs = 6_000
-    ).filter { it.kind == NostrKind.TEXT_NOTE || it.kind == NostrKind.VIDEO_LOOP }
+    ).filter { it.kind == NostrKind.TEXT_NOTE }
     cache.setCachedEvents(events)
     val muted = getCachedMuteList(myPubkeyHex)?.pubkeys?.toSet() ?: emptySet()
     return events.filter { it.pubkey !in muted }.map { ev ->
@@ -560,7 +588,7 @@ suspend fun NostrRepository.advancedSearch(
         client.fetchEventsFrom(listOf(NostrClient.SEARCH_RELAY), filter, timeoutMs = 6_000)
     } else {
         val filter = NostrClient.Filter(
-            kinds   = listOf(NostrKind.TEXT_NOTE, NostrKind.VIDEO_LOOP),
+            kinds   = listOf(NostrKind.TEXT_NOTE),
             authors = fromHex.takeIf { it.isNotEmpty() },
             tags    = tagFilters,
             since   = parsed.since,
@@ -573,7 +601,7 @@ suspend fun NostrRepository.advancedSearch(
     // クライアント側後処理フィルタ
     val filtered = rawEvents.filter { event ->
         val c = event.content
-        (event.kind == NostrKind.TEXT_NOTE || event.kind == NostrKind.VIDEO_LOOP) &&
+        event.kind == NostrKind.TEXT_NOTE &&
         parsed.excludeWords.none  { w -> c.contains(w, ignoreCase = true) } &&
         parsed.exactPhrases.all   { p -> c.contains(p) } &&
         when (parsed.mediaFilter) {

@@ -207,6 +207,29 @@ fun LoginScreen(
                         }
                     }
 
+                    if (remember { viewModel.nosskeyManager.isPlatformSupported(context) }) {
+                        Button(
+                            onClick = {
+                                requireTerms {
+                                    val act = context as? ComponentActivity
+                                    if (act != null) viewModel.loginWithPasskey(act)
+                                    else android.widget.Toast.makeText(context, "パスキーログインはアプリ画面から実行してください", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(56.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = LineGreen.copy(alpha = 0.1f)),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, LineGreen),
+                            shape = RoundedCornerShape(20.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Icon(Icons.Default.Fingerprint, contentDescription = null, modifier = Modifier.size(20.dp), tint = LineGreen)
+                                Text("パスキーでログイン", fontSize = 16.sp, color = LineGreen, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+
                     // Login Button (Combined)
                     Button(
                         onClick = { requireTerms { showNsecLogin = true } },
@@ -332,9 +355,10 @@ fun LoginScreen(
                                     modifier = Modifier.padding(top = 8.dp),
                                     verticalArrangement = Arrangement.spacedBy(16.dp)
                                 ) {
-                                    // Passkey login button (only shown when a nosskey credential exists locally).
-                                    val hasNosskey = remember { viewModel.nosskeyManager.loadStoredKeyInfo(context) != null }
-                                    if (hasNosskey) {
+                                    // Passkey login button. Show on supported devices; if no credential exists,
+                                    // AuthViewModel shows the explanatory error.
+                                    val supportsPasskey = remember { viewModel.nosskeyManager.isPlatformSupported(context) }
+                                    if (supportsPasskey) {
                                         Button(
                                             onClick = {
                                                 requireTerms {

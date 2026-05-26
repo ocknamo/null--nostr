@@ -658,6 +658,8 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             try {
+                activeNosskeySigner?.close()
+                activeNosskeySigner = null
                 // hex → ByteArray → SecureKeyManager で暗号化保存
                 val keyBytes = hexToBytes(privKeyHex)
                 if (keyBytes == null || keyBytes.size != 32) {
@@ -683,6 +685,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
 
                 prefs.publicKeyHex = pubKeyHex
                 prefs.isExternalSigner = false
+                prefs.loginMethod = null
                 prefs.clearPrivateKey()
 
                 syncRelayListOnLogin(pubKeyHex, io.nurunuru.app.data.InternalSigner(keyManager))
@@ -706,6 +709,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         username: String
     ): GeneratedAccount? = withContext(Dispatchers.IO) {
         try {
+            keyManager.deleteAll()
             val creation = nosskeyManager.createPasskeyWithSecret(
                 activity = activity,
                 username = username,
@@ -774,6 +778,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 } finally {
                     secret.fill(0)
                 }
+                keyManager.deleteAll()
                 prefs.publicKeyHex = keyInfo.pubkey
                 prefs.loginMethod = "nosskey"
                 prefs.isExternalSigner = false

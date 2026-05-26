@@ -2,6 +2,16 @@
 
 LLM Wiki の時系列ログです。追記専用として扱います。
 
+## [2026-05-26] fix | Timeline/passkey/link notification hardening
+
+- Android regular timeline fetches now exclude NIP-71 short-video kind 34236 while keeping text notes, long-form posts, and Kind 6 reposts. Repost unwrap now preserves repostedBy / repostTime so follow timelines show repost provenance instead of looking like unfollowed direct posts.
+- Android and iOS infinite-scroll load-more no longer permanently disables older pagination after a single empty/failed older-page response.
+- Android post text URL spans are clickable and open through LocalUriHandler; URL previews remain rendered below the text.
+- Android passkey login is visible on supported devices from the initial login choices and from other login methods; missing local credential is reported by AuthViewModel.
+- iOS passkey-backed publishing warms the NosskeySigner cache before repository publish, fixing cold-cache failures after the first post. Logout now explicitly zeroizes the passkey signer cache.
+- Notification cache restore is type-whitelisted on Android and iOS so unexpected notification kinds/types are not displayed.
+- Source: android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepositoryTimeline.kt, android/app/src/main/kotlin/io/nurunuru/app/viewmodel/TimelineViewModel.kt, android/app/src/main/kotlin/io/nurunuru/app/ui/components/PostContent.kt, android/app/src/main/kotlin/io/nurunuru/app/ui/screens/LoginScreen.kt, android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepositoryNotifications.kt, ios/NuruNuru/Data/NostrRepository.swift, ios/NuruNuru/ViewModels/AuthViewModel.swift, ios/NuruNuru/ViewModels/TimelineViewModel.swift, ios/NuruNuru/Data/NostrRepository+Notifications.swift.
+
 ## [2026-05-23] sec | Dependabot 9 件 (high 2 / moderate 2 / low 5) 解消
 
 - GHSA-hc3c-63hc-2r9f **high** `libcrux-chacha20poly1305 0.0.7 → 0.0.8` — Overlong ciphertext buffer での panic を修正。`libcrux-aead` も 0.0.7→0.0.8 へ追従。

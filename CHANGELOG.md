@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-05-26
+
+### Fixed
+- Android の通常タイムラインから NIP-71 ろくなな動画イベントを除外し、専用サーフェスとの表示境界を明確化。
+- Android のリポスト展開で repostedBy / repostTime を保持し、フォロータイムラインのリポスト文脈を表示しやすくしました。
+- Android / iOS の古いページ読み込みで、単発の空ページまたは失敗が無限スクロールを即停止させないよう改善。
+- Android 投稿本文内 URL をタップで開けるようにしました。
+- Android / iOS の通知 fetch / cache restore で表示対象タイプを whitelist し、想定外の通知種別を表示対象外にしました。
+- Android パスキーログインの導線を対応端末で表示し、iOS のパスキー署名セッションを投稿前に warm cache するよう改善。
+
+### Changed
+- Android versionCode を 27、Web / Android / iOS 表示バージョンを 1.5.4、iOS build number を 10 に更新。
+
+### Release artifacts
+- Android APK: release-artifacts/nurunuru-1.5.4-arm64-v8a.apk
+- Google Play AAB: release-artifacts/nurunuru-1.5.4-google-play.aab
+
 ## [1.5.3] - 2026-05-26
 
 ### Fixed

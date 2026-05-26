@@ -1,0 +1,3 @@
+3fe686225cf718f5fa6b2b6e8908277eb6064f5756b4cc6db3fa88b11efd46ec  release-artifacts/nurunuru-1.5.4-arm64-v8a.apk
+43ea2f4de7824cc10f92e98a45ead624b096ebdacfe2351b426f7f56892e4399  release-artifacts/nurunuru-1.5.4-google-play.aab
+aebcc40dde307d751df9df364722aaff46101822d80701c224cc81f021c240ba  release-artifacts/ios/app-store-connect-1.5.4/NuruNuru.ipa

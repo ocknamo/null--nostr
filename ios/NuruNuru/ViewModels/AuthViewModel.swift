@@ -445,6 +445,7 @@ final class AuthViewModel {
         // (credentialId/pubkey/salt) required for "パスキーでログイン" after logout.
         // The actual secret remains inside the Passkey and is re-derived only
         // after biometric authentication.
+        nosskeySigner?.zeroizeCache()
         nosskeySigner = nil
         prefs.clear()
         state = .loggedOut

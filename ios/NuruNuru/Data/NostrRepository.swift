@@ -121,7 +121,29 @@ actor NostrRepository {
         self.prefs = prefs
         // If the caller (e.g. AuthViewModel during a Passkey sign-up) injects a
         // signer we honor it. Otherwise default to the existing nsec-backed path.
-        let resolvedSigner: EventSigner = signer ?? InternalSigner(keyManager: keyManager)
+        let resolvedSigner: EventSigner
+        if let signer {
+            resolvedSigner = signer
+        } else if prefs.loginMethod == "nosskey" {
+            // MainTabView creates the session repository synchronously, so it cannot
+            // await AuthViewModel.currentSessionSigner(). For passkey sessions, build
+            // the PRF-backed signer here instead of falling back to InternalSigner,
+            // otherwise PostSheet reports "署名機能が利用できません" because no nsec
+            // is stored in Keychain. NosskeyManager is MainActor-isolated because
+            // AuthenticationServices is UIKit-bound; this initializer is called from
+            // the SwiftUI main path for the shared session repository.
+            if let passkeySigner = MainActor.assumeIsolated({ () -> EventSigner? in
+                let manager = NosskeyManager()
+                guard let keyInfo = manager.loadStoredKeyInfo() else { return nil }
+                return NosskeySigner(nosskeyManager: manager, keyInfo: keyInfo)
+            }) {
+                resolvedSigner = passkeySigner
+            } else {
+                resolvedSigner = InternalSigner(keyManager: keyManager)
+            }
+        } else {
+            resolvedSigner = InternalSigner(keyManager: keyManager)
+        }
         self.signer = resolvedSigner
         self.client = NostrClient(authEventSigner: { relayUrl, challenge in
             try resolvedSigner.signEvent(
@@ -381,6 +403,9 @@ actor NostrRepository {
             isConnected = true
         }
 
+        if let passkeySigner = signer as? NosskeySigner {
+            try await passkeySigner.warmCache()
+        }
         let event = try signer.signEvent(kind: kind, tags: tags, content: content)
         try await client.publish(event: event, waitForAllRelays: waitForAllRelays)
         return event

@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import io.nurunuru.app.data.*
 import io.nurunuru.app.data.models.NostrKind
 import io.nurunuru.app.data.models.ScoredPost
@@ -270,6 +271,7 @@ fun PostContent(
     onNoteClick: ((String) -> Unit)? = null
 ) {
     val nuruColors = LocalNuruColors.current
+    val uriHandler = LocalUriHandler.current
     val content = overrideContent ?: post.event.content
     val cleanContent = removeImageUrls(content).trim()
     if (cleanContent.isBlank()) return
@@ -317,6 +319,7 @@ fun PostContent(
 
     val hasCards = parts.any { it is ContentPart.Nostr || it is ContentPart.Link }
     val hasMentions = parts.any { it is ContentPart.Mention }
+    val hasLinks = parts.any { it is ContentPart.Link }
 
     // メンションされたユーザーのプロフィールを非同期フェッチ
     val mentionPubkeys = remember(parts) {
@@ -360,7 +363,13 @@ fun PostContent(
                         append(part.code)
                     }
                 }
-                is ContentPart.Link -> withStyle(SpanStyle(color = nuruColors.lineGreen)) { append(part.url.take(40) + if (part.url.length > 40) "..." else "") }
+                is ContentPart.Link -> {
+                    pushStringAnnotation("url", part.url)
+                    withStyle(SpanStyle(color = nuruColors.lineGreen)) {
+                        append(part.url.take(40) + if (part.url.length > 40) "..." else "")
+                    }
+                    pop()
+                }
                 is ContentPart.Nostr -> { /* nostr: リンクはカードとして描画するためテキスト出力しない */ }
                 is ContentPart.Mention -> {
                     pushStringAnnotation("mention", part.pubkeyHex)
@@ -388,10 +397,15 @@ fun PostContent(
             color = MaterialTheme.colorScheme.onBackground,
             lineHeight = 22.sp,
             onTextLayout = { textLayoutResult = it },
-            modifier = if (onHashtagClick != null || hasMentions) Modifier.pointerInput(annotated) {
+            modifier = if (onHashtagClick != null || hasMentions || hasLinks) Modifier.pointerInput(annotated) {
                 detectTapGestures { offset ->
                     textLayoutResult?.let { layout ->
                         val position = layout.getOffsetForPosition(offset)
+                        annotated.getStringAnnotations("url", position, position)
+                            .firstOrNull()?.let { annotation ->
+                                runCatching { uriHandler.openUri(annotation.item) }
+                                return@let
+                            }
                         annotated.getStringAnnotations("mention", position, position)
                             .firstOrNull()?.let { onProfileClick(it.item); return@let }
                         if (onHashtagClick != null) {

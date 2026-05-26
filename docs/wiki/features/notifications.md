@@ -6,8 +6,8 @@ Notifications は repost、reply、mention などの通知表示を扱います�
 
 ## Current behavior
 
-- Android の通知には reaction, zap receipt, repost, reply / mention, badges, follows などが含まれる。
-- Kind 6 repost と Kind 1 `#p` reply / mention が明示的に扱われる。
+- Android / iOS の通知には reaction, zap receipt, repost, reply / mention, badges, follows など whitelist 済みタイプのみが含まれる。
+- Kind 6 repost と Kind 1 #p reply / mention が明示的に扱われる。想定外 kind/type（例: kind 9 相当）は fetch 経路と通知キャッシュ復元時に表示対象外にする。
 - `NotificationModal.kt` は通知タイプごとに `NotifStyle` を持つ。
 - Android では 30 秒の background polling がある。
 - 新規 item pill は `Column > AnimatedVisibility` の構造で表示する。

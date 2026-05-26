@@ -30,6 +30,8 @@ final class TimelineViewModel {
     var hasMoreFollowingPosts: Bool = true
     private var relayPageCursor: Int64? = nil
     private var followingPageCursor: Int64? = nil
+    private var relayEmptyPageStreak: Int = 0
+    private var followingEmptyPageStreak: Int = 0
     var feedType:            FeedType = .following
     var followList:          [String]  = []
     var errorMessage:        String?   = nil
@@ -329,6 +331,7 @@ final class TimelineViewModel {
         isRelayRefreshing = true
         relayPageCursor = nil
         hasMoreRelayPosts = true
+        relayEmptyPageStreak = 0
         let fresh: [ScoredPost]
         if let url = selectedRelayUrl {
             fresh = await repository.fetchGlobalTimelineFromRelay(url)
@@ -351,6 +354,7 @@ final class TimelineViewModel {
         isFollowingRefreshing = true
         followingPageCursor = nil
         hasMoreFollowingPosts = true
+        followingEmptyPageStreak = 0
         let fresh = await repository.fetchFollowingTimeline(authors: followList)
 
         // 新着なしで空レスポンスでも既存表示は維持（誤って空画面にしない）
@@ -380,8 +384,11 @@ final class TimelineViewModel {
         if !older.isEmpty {
             relayPosts = mergeTimeline(relayPosts, with: older)
             relayPageCursor = olderCursor(for: older) ?? relayPageCursor
+            relayEmptyPageStreak = 0
+        } else {
+            relayEmptyPageStreak += 1
         }
-        hasMoreRelayPosts = !older.isEmpty
+        hasMoreRelayPosts = !older.isEmpty || relayEmptyPageStreak < 3
         isRelayLoadingMore = false
         if !older.isEmpty { Task { await enrichProfiles(for: .relay) } }
     }
@@ -396,8 +403,11 @@ final class TimelineViewModel {
         if !older.isEmpty {
             followingPosts = mergeTimeline(followingPosts, with: older)
             followingPageCursor = olderCursor(for: older) ?? followingPageCursor
+            followingEmptyPageStreak = 0
+        } else {
+            followingEmptyPageStreak += 1
         }
-        hasMoreFollowingPosts = !older.isEmpty
+        hasMoreFollowingPosts = !older.isEmpty || followingEmptyPageStreak < 3
         isFollowingLoadingMore = false
         if !older.isEmpty { Task { await enrichProfiles(for: .following) } }
     }
