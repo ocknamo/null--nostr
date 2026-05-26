@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.3] - 2026-05-26
+
+### Fixed
+- Android のフォロー / グローバル / リレー別タイムラインで、空の6時間 pagination window に当たっても複数ウィンドウを探索するよう改善。
+- 投稿が少ないフォロー先やリレーで、過去投稿の無限スクロールが途中で止まりにくくなりました。
+
+### Changed
+- Android versionCode を 26、Web / Android / iOS 表示バージョンを 1.5.3、iOS build number を 9 に更新。
+
+### Release artifacts
+- Android APK: release-artifacts/nurunuru-1.5.3-arm64-v8a.apk
+- Google Play AAB: release-artifacts/nurunuru-1.5.3-google-play.aab
+- App Store Connect IPA: release-artifacts/ios/app-store-connect-1.5.3/NuruNuru.ipa
+
 ## [1.5.2] - 2026-05-26
 
 ### Changed
