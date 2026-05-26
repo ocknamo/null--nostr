@@ -11,7 +11,7 @@ Timeline は投稿一覧表示とリアクション状態を扱う主要機能�
 - Timeline event cache is fallback-only for offline / hard relay failure cases; profile/avatar/follow-list caches remain cache-first.
 - Timeline refresh is cache-safe: transient empty relay responses must not replace an already-visible non-empty timeline or overwrite healthy cached timelines.
 - Pagination cursors track the oldest post in the fresh contiguous head, not the oldest stale cached post, so users can fill gaps between new posts and old cache.
-- Older-page fetches are bounded to a 6-hour window and return raw posts with cached profiles first; engagement/profile enrichment runs after render.
+- Older-page fetches are bounded to a 6-hour window and return raw posts with cached profiles first; engagement/profile enrichment runs after render. Empty pagination windows are skipped across several bounded windows before stopping, so sparse follow/relay feeds can continue to older posts.
 - Follow pagination uses active-author discovery plus smaller author chunks instead of one huge 500-author REQ.
 - Follow pagination also races the default connected-relay fetch with NIP-65 outbox relay-hinted fetches for active authors.
 - Selected relay timelines also support older-page pagination using the same bounded `until` window.

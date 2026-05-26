@@ -113,18 +113,23 @@ suspend fun NostrRepository.fetchRelayTimelinePage(
     limit: Int = 50
 ): List<ScoredPost> = withContext(Dispatchers.IO) {
     try {
-        val now = System.currentTimeMillis() / 1000
-        val since = (until ?: now) - 6L * 60L * 60L
-        val events = fetchFromSingleRelayWs(relayUrl, limit, since, until, timeoutMs = 3_500)
-        android.util.Log.d("NostrRepository", "fetchRelayTimelinePage(" + relayUrl + " until=" + until + "): " + events.size + " events")
-        if (events.isEmpty()) return@withContext emptyList()
-        cache.setCachedEvents(events)
-        val muteData = getCachedMuteList(myPubkeyHex)
-        val mutedPks = muteData?.pubkeys?.toSet() ?: emptySet()
-        val mutedIds = muteData?.eventIds?.toSet() ?: emptySet()
-        postsFromRawTimelineEvents(events)
-            .filter { it.event.pubkey !in mutedPks && it.event.id !in mutedIds }
-            .take(limit)
+        var cursor = until ?: (System.currentTimeMillis() / 1000)
+        repeat(8) { attempt ->
+            val since = cursor - 6L * 60L * 60L
+            val events = fetchFromSingleRelayWs(relayUrl, limit, since, cursor, timeoutMs = 3_500)
+            android.util.Log.d("NostrRepository", "fetchRelayTimelinePage(" + relayUrl + " attempt=" + (attempt + 1) + " until=" + cursor + "): " + events.size + " events")
+            if (events.isNotEmpty()) {
+                cache.setCachedEvents(events)
+                val muteData = getCachedMuteList(myPubkeyHex)
+                val mutedPks = muteData?.pubkeys?.toSet() ?: emptySet()
+                val mutedIds = muteData?.eventIds?.toSet() ?: emptySet()
+                return@withContext postsFromRawTimelineEvents(events)
+                    .filter { it.event.pubkey !in mutedPks && it.event.id !in mutedIds }
+                    .take(limit)
+            }
+            cursor = since - 1
+        }
+        emptyList()
     } catch (e: Exception) {
         android.util.Log.e("NostrRepository", "fetchRelayTimelinePage failed: " + e.message, e)
         emptyList()

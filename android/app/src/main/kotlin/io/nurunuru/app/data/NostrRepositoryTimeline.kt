@@ -169,22 +169,27 @@ suspend fun NostrRepository.fetchGlobalTimelinePage(
     until: Long,
     limit: Int = 50
 ): List<ScoredPost> = withContext(Dispatchers.IO) {
-    val filter = NostrClient.Filter(
-        kinds = listOf(NostrKind.TEXT_NOTE, NostrKind.VIDEO_LOOP, NostrKind.LONG_FORM, NostrKind.REPOST),
-        since = until - TIMELINE_PAGE_WINDOW_SECS,
-        until = until,
-        limit = limit
-    )
-    val events = client.fetchEvents(filter, timeoutMs = TIMELINE_MORE_TIMEOUT_MS)
-        .distinctBy { it.id }
-        .filter { it.getTagValues("e").isEmpty() }
-        .sortedByDescending { it.createdAt }
-    if (events.isEmpty()) return@withContext emptyList()
-    cache.setCachedEvents(events)
-    val muted = getCachedMuteList(myPubkeyHex)?.pubkeys?.toSet() ?: emptySet()
-    events.filter { it.pubkey !in muted }.map { ev ->
-        ScoredPost(event = ev, profile = getCachedProfile(ev.pubkey))
+    var cursor = until
+    repeat(8) { attempt ->
+        val since = cursor - TIMELINE_PAGE_WINDOW_SECS
+        val filter = NostrClient.Filter(
+            kinds = listOf(NostrKind.TEXT_NOTE, NostrKind.VIDEO_LOOP, NostrKind.LONG_FORM, NostrKind.REPOST),
+            since = since,
+            until = cursor,
+            limit = limit
+        )
+        val events = client.fetchEvents(filter, timeoutMs = TIMELINE_MORE_TIMEOUT_MS)
+            .distinctBy { it.id }
+            .filter { it.getTagValues("e").isEmpty() }
+            .sortedByDescending { it.createdAt }
+        if (events.isNotEmpty()) {
+            cache.setCachedEvents(events)
+            return@withContext postsFromRawTimelineEvents(events).take(limit)
+        }
+        android.util.Log.d("NostrRepository", "global timeline page empty window attempt=" + (attempt + 1) + " until=" + cursor + " since=" + since)
+        cursor = since - 1
     }
+    emptyList()
 }
 
 /** Fetch older following timeline posts before [until]. Used by infinite scroll. */
@@ -196,26 +201,33 @@ suspend fun NostrRepository.fetchFollowTimelinePage(
     val followList = getCachedFollowList(pubkeyHex)?.takeIf { it.isNotEmpty() }
         ?: fetchFollowList(pubkeyHex)
     if (followList.isEmpty()) return@withContext emptyList()
-    val since = until - TIMELINE_PAGE_WINDOW_SECS
-    val discovery = fetchTimelineChunkedByAuthors(
-        authors = followList.take(500),
-        since = since,
-        until = until,
-        limit = TIMELINE_ACTIVE_AUTHOR_SAMPLE,
-        timeoutMs = 1_800L
-    )
-    val activeAuthors = discovery.activeAuthors(TIMELINE_ACTIVE_AUTHOR_SAMPLE)
-    val targetAuthors = if (activeAuthors.isNotEmpty()) activeAuthors else followList.take(500)
-    val events = fetchTimelineWithRelayHints(
-        authors = targetAuthors,
-        since = since,
-        until = until,
-        limit = limit,
-        timeoutMs = TIMELINE_MORE_TIMEOUT_MS
-    ).ifEmpty { discovery }
-    if (events.isEmpty()) return@withContext emptyList()
-    cache.setCachedEvents(events)
-    postsFromRawTimelineEvents(events).take(limit)
+    var cursor = until
+    repeat(8) { attempt ->
+        val since = cursor - TIMELINE_PAGE_WINDOW_SECS
+        val discovery = fetchTimelineChunkedByAuthors(
+            authors = followList.take(500),
+            since = since,
+            until = cursor,
+            limit = TIMELINE_ACTIVE_AUTHOR_SAMPLE,
+            timeoutMs = 1_800L
+        )
+        val activeAuthors = discovery.activeAuthors(TIMELINE_ACTIVE_AUTHOR_SAMPLE)
+        val targetAuthors = if (activeAuthors.isNotEmpty()) activeAuthors else followList.take(500)
+        val events = fetchTimelineWithRelayHints(
+            authors = targetAuthors,
+            since = since,
+            until = cursor,
+            limit = limit,
+            timeoutMs = TIMELINE_MORE_TIMEOUT_MS
+        ).ifEmpty { discovery }
+        if (events.isNotEmpty()) {
+            cache.setCachedEvents(events)
+            return@withContext postsFromRawTimelineEvents(events).take(limit)
+        }
+        android.util.Log.d("NostrRepository", "follow timeline page empty window attempt=" + (attempt + 1) + " until=" + cursor + " since=" + since)
+        cursor = since - 1
+    }
+    emptyList()
 }
 
 suspend fun NostrRepository.prefetchProfilesAndBadges(pubkeys: List<String>, limit: Int = 80) = coroutineScope {

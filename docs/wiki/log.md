@@ -578,4 +578,9 @@ LLM Wiki の時系列ログです。追記専用として扱います。
 - Fixed selected relay timeline continuity by applying the shared repost unwrap/repost-time ordering path to relay-specific pages.
 - Repost timeline display now uses the repost event timestamp rather than the original event timestamp on Android/iOS, preventing 11m-to-1d jumps caused by fresh reposts of old notes.
 - Source references: Android NostrRepositoryTimeline / NostrRepositoryLiveStream and iOS NostrRepository+Timeline / ScoredPost.
+## [2026-05-26] fix | Sparse timeline pagination windows
+
+- Android follow/global/selected-relay older-page fetches now skip several empty 6-hour windows before declaring the timeline exhausted.
+- This fixes cases where sparse follow or relay timelines could not scroll past an empty bounded window.
+- Source references: `android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepositoryTimeline.kt`, `android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepositoryLiveStream.kt`.
 
