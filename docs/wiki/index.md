@@ -30,6 +30,7 @@
 | Page | Summary |
 |---|---|
 | [[strategy/themaday-2026-05-25]] | Block の “From Hierarchy to Intelligence” とストアデータを踏まえた ThemaDAY 経営会議・リーダー方向性すり合わせ。 |
+| [[strategy/nuruh-ip-2026-05-28]] | ぬるる IP マーケティング & 成長戦略 v1.0。四箇条 / 3層接点 / 5ループ / ライセンス階段 / KPI+ガードレール / 90日と24ヶ月ロードマップ。 |
 
 ## Platforms
 
@@ -105,6 +106,8 @@
 | [[decisions/adr-0007-design-crit-ritual]] | Weekly Nuru Design Crit を制度化する判断。 |
 | [[decisions/adr-0008-four-freedoms-mission]] | 4軸自由ドクトリンを長期ミッションとして起票する判断。 |
 | [[decisions/adr-0009-mls-db-encryption]] | MLS storage DB を SQLCipher で暗号化する判断 (issue #181)。 |
+| [[decisions/adr-0010-passkey-prf-direct-method]] | Passkey PRF を直接署名手段として採用する判断。 |
+| [[decisions/adr-0011-nuruh-ip-doctrine]] | ぬるる IP 憲章 (四箇条)。「商品ではなく住人」として育てる長期方針。 |
 
 ## Maintenance checklist for agents
 

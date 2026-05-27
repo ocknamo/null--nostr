@@ -2,6 +2,23 @@
 
 LLM Wiki の時系列ログです。追記専用として扱います。
 
+## [2026-05-28] strategy | ぬるる IP マーケティング & 成長戦略 v1.0 起票
+
+- 新規ページ `docs/wiki/strategy/nuruh-ip-2026-05-28.md` を追加。ぬるぬる公式マスコット「ぬるる」を**商品ではなく住人**として育てる長期 IP 戦略 v1.0。中核構成は以下5層:
+  1. **ぬるるドクトリン四箇条** (IP 憲章) — 第一条「ユーザーである」/ 第二条「商品ではない」/ 第三条「溶ける」/ 第四条「誰のものでもない」。
+  2. **3層接点モデル** — 接触 (Surface) / 関与 (Engage) / 共生 (Symbiosis)。層3に直接介入しない設計思想。
+  3. **5つの成長ループ** — 日常投稿 / 二次創作 / プロダクト内 / 物理 / コラボ (年4本上限)。
+  4. **ライセンス階段 L0〜L4** — L0 鑑賞 / L1 二次創作 / L2 同人物販 (**年商100万円まで届出不要**) / L3 商用 (Design Crit) / L4 公式コラボ (招待制)。商標は最小限取るがファンの利用制約には使わない。
+  5. **KPI 6軸 + ガードレール 7軸** — 文化指標を短期数値で曲げない二層構造。
+- 上記四箇条を [[decisions/adr-0011-nuruh-ip-doctrine]] として ADR 化 (Proposed)。変更には Design Crit 2回連続の合意を要する。具体運用 (KPI 値・ライセンス・施策内訳) は戦略文書側で更新可能とし、別 ADR 不要。
+- **即決3事項** (Design Crit にかける提案): (a) L2 同人物販閾値 100万円、(b) ぬるる本体 npub は NIP-46 bunker + 2-of-N 合議、(c) 「ぬるるの日」を **8月8日** に制定。
+- **90日 (Phase 0)** チェックリスト: Week 1-2 で四箇条 ADR / npub + bunker / ガイドライン / 8表情 NIP-30 絵文字パック配布。Week 3-4 でおやつ15時 + おやすみ23時 開始。Week 5-8 で月例とろけ便り第1号と Talk「ぬるるルーム」開設。Week 9-13 でステッカー小ロット + 90日レビュー。
+- **24ヶ月ロードマップ** は [[decisions/adr-0008-four-freedoms-mission|Four Freedoms]] と Phase 同期 (Phase 0〜4)。
+- **体制**: 最小3名 (代弁者2 + 兼任1) で開始、Phase 2 までに5名 (代弁者 / 図鑑キュレーター / 儀式運用 / Design Crit 主宰 / コラボ窓口) に拡張。
+- **doctrine alignment**: 五箇条すべて (第一条〜第五条) との整合を本文に明示。特に第三条「複雑さは裏側に隠す」(NIP-46 bunker / NIP-30 / NIP-65 を表層に出さない) と第五条「かわいさと厳格さを同時に」(かわいいキャラの 2-of-N 鍵管理) を強調。
+- `docs/wiki/index.md` の Strategy セクションと Decisions セクションを更新 (ADR-0010 / ADR-0011 を追記)。
+- Source: `docs/wiki/strategy/nuruh-ip-2026-05-28.md`, `docs/wiki/decisions/adr-0011-nuruh-ip-doctrine.md`, `docs/wiki/index.md`, `docs/wiki/culture/principles.md`, `docs/wiki/culture/not-doing.md`, `docs/wiki/culture/copy-style.md`, `docs/wiki/culture/four-freedoms.md`, `docs/wiki/decisions/adr-0008-four-freedoms-mission.md`.
+
 ## [2026-05-26] fix | Timeline/passkey/link notification hardening
 
 - Android regular timeline fetches now exclude NIP-71 short-video kind 34236 while keeping text notes, long-form posts, and Kind 6 reposts. Repost unwrap now preserves repostedBy / repostTime so follow timelines show repost provenance instead of looking like unfollowed direct posts.
