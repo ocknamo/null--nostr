@@ -61,3 +61,10 @@ ios/NuruNuru.xcodeproj/project.xcworkspace/xcuserdata/
 
 # Swift Package Manager / xcodebuild .build directory (Xcode 17+ emits here for some configs)
 ios/.build/
+
+# Release artifacts — Xcode archive intermediates only.
+# .xcarchive is a build intermediate (not for distribution); the signed .ipa
+# is exported separately into release-artifacts/ios/app-store-connect-*/.
+# Distributable artifacts (apk / aab / ipa / release-notes) remain tracked
+# per the existing release workflow and are not ignored here.
+release-artifacts/ios/*.xcarchive/
