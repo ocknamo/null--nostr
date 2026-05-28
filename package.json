@@ -14,7 +14,10 @@
     "tokens": "node design-tokens/generate.mjs",
     "tokens:check": "node design-tokens/generate.mjs --check",
     "wiki:lint": "node scripts/wiki-lint.mjs",
-    "lint:issue-181": "node scripts/issue-181-guard.mjs"
+    "lint:issue-181": "node scripts/issue-181-guard.mjs",
+    "mcp:nurunuru": "node scripts/mcp/nurunuru-mcp.mjs",
+    "feedback:search": "node scripts/mcp/nurunuru-mcp.mjs search",
+    "feedback:collect": "node scripts/mcp/nurunuru-mcp.mjs collect"
   },
   "dependencies": {
     "22": "^0.0.0",

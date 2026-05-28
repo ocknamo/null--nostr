@@ -31,6 +31,7 @@
 |---|---|
 | [[strategy/themaday-2026-05-25]] | Block の “From Hierarchy to Intelligence” とストアデータを踏まえた ThemaDAY 経営会議・リーダー方向性すり合わせ。 |
 | [[strategy/nuruh-ip-2026-05-28]] | ぬるる IP マーケティング & 成長戦略 v1.0。四箇条 / 3層接点 / 5ループ / ライセンス階段 / KPI+ガードレール / 90日と24ヶ月ロードマップ。 |
+| [[operations/feedback-loop]] | NIP-50 search relay と nurunuru-mcp による Nostr feedback 収集、Issue draft、autofix 運用。 |
 
 ## Platforms
 
@@ -85,6 +86,7 @@
 | [[nips/nip-58]] | Badges: awards, definitions, profile badges。 |
 | [[nips/nip-59]] | Gift wrap: NIP-17 DMs and Marmot Welcome delivery。 |
 | [[nips/nip-46]] | Nostr Connect / 外部署名。 |
+| [[nips/nip-50]] | Search capability / searchnos / feedback-loop MCP。 |
 | [[nips/nip-57]] | Lightning Zaps。 |
 | [[nips/nip-65]] | Relay List Metadata / outbox model。 |
 | [[nips/nip-70]] | Protected events / `[-]` tag。 |

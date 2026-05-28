@@ -19,6 +19,19 @@ LLM Wiki の時系列ログです。追記専用として扱います。
 - `docs/wiki/index.md` の Strategy セクションと Decisions セクションを更新 (ADR-0010 / ADR-0011 を追記)。
 - Source: `docs/wiki/strategy/nuruh-ip-2026-05-28.md`, `docs/wiki/decisions/adr-0011-nuruh-ip-doctrine.md`, `docs/wiki/index.md`, `docs/wiki/culture/principles.md`, `docs/wiki/culture/not-doing.md`, `docs/wiki/culture/copy-style.md`, `docs/wiki/culture/four-freedoms.md`, `docs/wiki/decisions/adr-0008-four-freedoms-mission.md`.
 
+## [2026-05-27] improvement | Feedback MCP query and classifier tuning
+
+- Updated feedback collection defaults to search ぬるぬる, #ぬるぬるはじめました, nullnull Android, nullnull iOS, nullnull, and via nullnull variants.
+- Improved feedback classification with client/via metadata platform inference, signing and post_content areas, URL/OGP/link signals, and safer grouping for vague unknown reports.
+- Source references: `scripts/mcp/nurunuru-feedback.mjs`, `src/__tests__/mcp/nurunuru-feedback.test.ts`, `docs/wiki/operations/feedback-loop.md`.
+
+## [2026-05-26] feature | NIP-50 feedback-loop MCP
+
+- Added `scripts/mcp/nurunuru-mcp.mjs`, a stdio MCP server and CLI exposing `nip50_search`, `collect_feedback`, `classify_feedback`, and `draft_github_issue` tools for Nostr feedback automation.
+- Added NIP-50 / search.nos.today feedback classification helpers, Vitest coverage, and package scripts (`mcp:nurunuru`, `feedback:search`, `feedback:collect`) for daily feedback triage.
+- Documented the feedback-loop boundaries: Issue / PR drafts may be automated, but merge, Design Crit, secrets / signing changes, and production release remain human-approved.
+- Source references: `scripts/mcp/nurunuru-mcp.mjs`, `scripts/mcp/nurunuru-feedback.mjs`, `src/__tests__/mcp/nurunuru-feedback.test.ts`, `docs/wiki/operations/feedback-loop.md`, `docs/wiki/nips/nip-50.md`, `docs/wiki/features/search.md`, `docs/wiki/nips/README.md`.
+
 ## [2026-05-26] fix | Timeline/passkey/link notification hardening
 
 - Android regular timeline fetches now exclude NIP-71 short-video kind 34236 while keeping text notes, long-form posts, and Kind 6 reposts. Repost unwrap now preserves repostedBy / repostTime so follow timelines show repost provenance instead of looking like unfollowed direct posts.

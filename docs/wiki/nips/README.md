@@ -74,6 +74,7 @@ null--nostr は複数の Nostr Implementation Possibilities を扱います。�
 - [[nip-30]] — custom emoji lists and sets.
 - [[nip-44]] — versioned encryption.
 - [[nip-46]] — Nostr Connect / external signing.
+- [[nip-50]] — search capability / searchnos / feedback-loop MCP.
 - [[nip-51]] — lists: mute, bookmarks, emoji list.
 - [[nip-57]] — Lightning Zaps.
 - [[nip-58]] — badges.
