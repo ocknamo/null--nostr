@@ -68,3 +68,8 @@ ios/.build/
 # Distributable artifacts (apk / aab / ipa / release-notes) remain tracked
 # per the existing release workflow and are not ignored here.
 release-artifacts/ios/*.xcarchive/
+
+# Goose workspace (local-only).
+# Recipes, session_state, and other goose-related files are managed locally
+# per contributor and are not shared via the repository.
+.goose/
