@@ -139,124 +139,141 @@ fun PostHeader(
     var showMenu by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val shareUrl = remember(post.event.id) { "https://www.nullnull.app/e/${post.event.id}" }
+    val headerNip05 = profile?.nip05?.takeIf { it.isNotBlank() }
 
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
+    Column(
+        modifier = Modifier.fillMaxWidth()
     ) {
         Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = profile?.displayedName ?: NostrKeyUtils.shortenPubkey(post.event.pubkey),
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onBackground,
-                maxLines = 1,
-                modifier = Modifier.clickable { onProfileClick(post.event.pubkey) }
-            )
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = profile?.displayedName ?: NostrKeyUtils.shortenPubkey(post.event.pubkey),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 1,
+                    modifier = Modifier.clickable { onProfileClick(post.event.pubkey) }
+                )
 
-            if (internalVerified && profile?.nip05 != null) {
-                Icon(
-                    imageVector = NuruIcons.Verified,
-                    contentDescription = "認証済み",
-                    tint = Color.Unspecified,
-                    modifier = Modifier.size(14.dp)
+                if (internalVerified && headerNip05 != null) {
+                    Icon(
+                        imageVector = NuruIcons.Verified,
+                        contentDescription = "認証済み",
+                        tint = Color.Unspecified,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
+
+                BadgeDisplay(
+                    pubkey = post.event.pubkey,
+                    repository = repository,
+                    initialBadges = post.badges
                 )
             }
 
-            BadgeDisplay(
-                pubkey = post.event.pubkey,
-                repository = repository,
-                initialBadges = post.badges
-            )
-        }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = formatPostTimestamp(post.repostTime ?: post.event.createdAt),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = nuruColors.textTertiary
+                )
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = formatPostTimestamp(post.repostTime ?: post.event.createdAt),
-                style = MaterialTheme.typography.bodySmall,
-                color = nuruColors.textTertiary
-            )
-
-            Box {
-                IconButton(
-                    onClick = { showMenu = true },
-                    modifier = Modifier.size(24.dp)
-                ) {
-                    Icon(
-                        NuruIcons.MoreVert,
-                        contentDescription = "Menu",
-                        tint = nuruColors.textTertiary,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-                DropdownMenu(
-                    expanded = showMenu,
-                    onDismissRequest = { showMenu = false },
-                    modifier = Modifier.background(nuruColors.bgSecondary)
-                ) {
-                    val clipboardManager = LocalClipboardManager.current
-                    DropdownMenuItem(
-                        text = { Text("投稿を共有", color = nuruColors.textPrimary) },
-                        onClick = {
-                            showMenu = false
-                            val sendIntent = Intent(Intent.ACTION_SEND).apply {
-                                type = "text/plain"
-                                putExtra(Intent.EXTRA_TEXT, shareUrl)
-                                putExtra(Intent.EXTRA_TITLE, "ぬるぬるの投稿")
-                            }
-                            context.startActivity(Intent.createChooser(sendIntent, "投稿を共有"))
-                        },
-                        leadingIcon = { Icon(Icons.Default.Share, null, tint = nuruColors.textSecondary, modifier = Modifier.size(18.dp)) }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("テキストをコピー", color = nuruColors.textPrimary) },
-                        onClick = {
-                            showMenu = false
-                            clipboardManager.setText(AnnotatedString(post.event.content))
-                        },
-                        leadingIcon = { Icon(Icons.Default.ContentCopy, null, tint = nuruColors.textSecondary, modifier = Modifier.size(18.dp)) }
-                    )
-                    if (onNotInterested != null && !isOwnPost) {
-                        DropdownMenuItem(
-                            text = { Text("この投稿に興味がない", color = nuruColors.textPrimary) },
-                            onClick = { showMenu = false; onNotInterested() },
-                            leadingIcon = { Icon(NuruIcons.NotInterested, null, tint = nuruColors.textSecondary, modifier = Modifier.size(18.dp)) }
+                Box {
+                    IconButton(
+                        onClick = { showMenu = true },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            NuruIcons.MoreVert,
+                            contentDescription = "Menu",
+                            tint = nuruColors.textTertiary,
+                            modifier = Modifier.size(16.dp)
                         )
                     }
-                    if (onBirdwatch != null && !isOwnPost) {
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false },
+                        modifier = Modifier.background(nuruColors.bgSecondary)
+                    ) {
+                        val clipboardManager = LocalClipboardManager.current
                         DropdownMenuItem(
-                            text = { Text("Birdwatch", color = nuruColors.textPrimary) },
-                            onClick = { showMenu = false; onBirdwatch() },
-                            leadingIcon = { Icon(NuruIcons.BirdwatchCheck, null, tint = nuruColors.textSecondary, modifier = Modifier.size(18.dp)) }
+                            text = { Text("投稿を共有", color = nuruColors.textPrimary) },
+                            onClick = {
+                                showMenu = false
+                                val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_TEXT, shareUrl)
+                                    putExtra(Intent.EXTRA_TITLE, "ぬるぬるの投稿")
+                                }
+                                context.startActivity(Intent.createChooser(sendIntent, "投稿を共有"))
+                            },
+                            leadingIcon = { Icon(Icons.Default.Share, null, tint = nuruColors.textSecondary, modifier = Modifier.size(18.dp)) }
                         )
-                    }
-                    if (onReport != null && !isOwnPost) {
                         DropdownMenuItem(
-                            text = { Text("通報", color = nuruColors.textPrimary) },
-                            onClick = { showMenu = false; onReport() },
-                            leadingIcon = { Icon(NuruIcons.Warning, null, tint = nuruColors.textSecondary, modifier = Modifier.size(18.dp)) }
+                            text = { Text("テキストをコピー", color = nuruColors.textPrimary) },
+                            onClick = {
+                                showMenu = false
+                                clipboardManager.setText(AnnotatedString(post.event.content))
+                            },
+                            leadingIcon = { Icon(Icons.Default.ContentCopy, null, tint = nuruColors.textSecondary, modifier = Modifier.size(18.dp)) }
                         )
-                    }
-                    if (onMute != null && !isOwnPost) {
-                        DropdownMenuItem(
-                            text = { Text("ミュート", color = nuruColors.error) },
-                            onClick = { showMenu = false; onMute() },
-                            leadingIcon = { Icon(NuruIcons.Block, null, tint = nuruColors.error, modifier = Modifier.size(18.dp)) }
-                        )
-                    }
-                    if (isOwnPost && onDelete != null) {
-                        DropdownMenuItem(
-                            text = { Text("削除", color = nuruColors.error) },
-                            onClick = { showMenu = false; onDelete() },
-                            leadingIcon = { Icon(NuruIcons.Trash, null, tint = nuruColors.error, modifier = Modifier.size(18.dp)) }
-                        )
+                        if (onNotInterested != null && !isOwnPost) {
+                            DropdownMenuItem(
+                                text = { Text("この投稿に興味がない", color = nuruColors.textPrimary) },
+                                onClick = { showMenu = false; onNotInterested() },
+                                leadingIcon = { Icon(NuruIcons.NotInterested, null, tint = nuruColors.textSecondary, modifier = Modifier.size(18.dp)) }
+                            )
+                        }
+                        if (onBirdwatch != null && !isOwnPost) {
+                            DropdownMenuItem(
+                                text = { Text("Birdwatch", color = nuruColors.textPrimary) },
+                                onClick = { showMenu = false; onBirdwatch() },
+                                leadingIcon = { Icon(NuruIcons.BirdwatchCheck, null, tint = nuruColors.textSecondary, modifier = Modifier.size(18.dp)) }
+                            )
+                        }
+                        if (onReport != null && !isOwnPost) {
+                            DropdownMenuItem(
+                                text = { Text("通報", color = nuruColors.textPrimary) },
+                                onClick = { showMenu = false; onReport() },
+                                leadingIcon = { Icon(NuruIcons.Warning, null, tint = nuruColors.textSecondary, modifier = Modifier.size(18.dp)) }
+                            )
+                        }
+                        if (onMute != null && !isOwnPost) {
+                            DropdownMenuItem(
+                                text = { Text("ミュート", color = nuruColors.error) },
+                                onClick = { showMenu = false; onMute() },
+                                leadingIcon = { Icon(NuruIcons.Block, null, tint = nuruColors.error, modifier = Modifier.size(18.dp)) }
+                            )
+                        }
+                        if (isOwnPost && onDelete != null) {
+                            DropdownMenuItem(
+                                text = { Text("削除", color = nuruColors.error) },
+                                onClick = { showMenu = false; onDelete() },
+                                leadingIcon = { Icon(NuruIcons.Trash, null, tint = nuruColors.error, modifier = Modifier.size(18.dp)) }
+                            )
+                        }
                     }
                 }
             }
+        }
+
+        if (headerNip05 != null) {
+            Text(
+                text = formatNip05(headerNip05),
+                style = MaterialTheme.typography.labelSmall,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                color = if (internalVerified) nuruColors.lineGreen else nuruColors.textTertiary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }

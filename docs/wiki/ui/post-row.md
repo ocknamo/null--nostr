@@ -8,6 +8,7 @@ Post rendering covers profile header, text/link parsing, media extraction, embed
 
 - Android `PostItem.kt` / `PostContent.kt` render normal posts, repost headers, reply context, media grids, and embedded `nostr:` content cards.
 - iOS `PostRow.swift` / `PostContent.swift` mirror the same broad responsibilities.
+- Timeline post headers show the display name, verification/badges, timestamp, and menu on the first line. When `profile.nip05` is present, Android and iOS render formatted NIP-05 (`_@domain` → `domain`) directly under the display name; verified NIP-05 uses LineGreen, otherwise tertiary text.
 - `PostActions` is a child component and may include bookmark in addition to like / repost / zap.
 - Long-form articles use dedicated `LongFormPostItem` components. Article readers render Markdown and resolve Nostr references (`nostr:note1...`, `nostr:nevent1...`, `nostr:naddr1...`, `nostr:npub1...`, `nostr:nprofile1...`; native readers also accept bare bech32 forms) into embedded cards/mentions instead of leaving them as plain text links.
 - Media extraction uses content URLs and, on iOS, NIP-92 `imeta` tags.

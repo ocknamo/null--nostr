@@ -660,3 +660,9 @@ LLM Wiki の時系列ログです。追記専用として扱います。
 - Framed external coverage as a trust surface and pre-publication fact-checking as a lightweight partnership pattern that preserves editorial independence.
 - Captured near-term developer initiative guidance: source-backed NIP/status docs, external-contributor task boundaries, and feedback-loop routing without bypassing human review.
 - Source references: Nostr Compass #24 njump event, andotherstuff/nostr-compass PR #95, culture/strategy/operations wiki pages.
+
+## [2026-05-29] fix | Android timeline NIP-05 display parity
+
+- Android timeline post headers now render `profile.nip05` directly under the display name, matching iOS.
+- The verified checkmark remains beside the display name; the NIP-05 text is visible whenever present and uses LineGreen only when verified.
+- Source references: `android/app/src/main/kotlin/io/nurunuru/app/ui/components/PostContent.kt`, `android/app/src/main/kotlin/io/nurunuru/app/ui/components/PostItem.kt`, `android/app/src/main/kotlin/io/nurunuru/app/ui/components/LongFormPostItem.kt`, `ios/NuruNuru/Views/Components/PostContent.swift`.

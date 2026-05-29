@@ -73,6 +73,7 @@ fun PostItem(
         }
     }
     val profile = resolvedProfile
+    val headerPost = if (profile != post.profile) post.copy(profile = profile) else post
 
     // NIP-05 verification is now handled in the ViewModel/Repository
     val internalVerified = post.isVerified || isVerified
@@ -149,7 +150,7 @@ fun PostItem(
 
             Column(modifier = Modifier.weight(1f)) {
                 PostHeader(
-                    post = post,
+                    post = headerPost,
                     internalVerified = internalVerified,
                     onProfileClick = onProfileClick,
                     repository = repository,

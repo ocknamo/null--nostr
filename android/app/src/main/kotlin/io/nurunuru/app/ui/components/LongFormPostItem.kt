@@ -77,6 +77,7 @@ fun LongFormPostItem(
         }
     }
     val profile = resolvedProfile
+    val headerPost = if (profile != post.profile) post.copy(profile = profile) else post
     var showReader by remember { mutableStateOf(false) }
 
     var showReportModal by remember { mutableStateOf(false) }
@@ -141,7 +142,7 @@ fun LongFormPostItem(
 
             Column(modifier = Modifier.weight(1f)) {
                 PostHeader(
-                    post = post,
+                    post = headerPost,
                     internalVerified = false,
                     onProfileClick = onProfileClick,
                     repository = repository,

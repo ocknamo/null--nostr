@@ -36,6 +36,10 @@ Android と iOS は LINE 風 UI を platform native に実装しつつ、見た�
 - When a Talk conversation is open, the global bottom tab bar is hidden so the composer sits at the bottom like LINE. The tab bar returns on the Talk list and other tabs.
 - Debug identifiers must not appear in the chat header, message composer, or conversation list. The MLS group ID is shown only in the group information sheet.
 
+### Post headers
+
+- Timeline post headers must show NIP-05 directly under the user display name when `UserProfile.nip05` is present. The verification checkmark stays beside the name only when NIP-05 resolves to the author pubkey. The NIP-05 text remains visible even before/without verification, colored LineGreen when verified and tertiary text otherwise. `_@domain` is displayed as `domain`.
+
 ### PostActions
 
 現行コードでは PostActions は **常時 3 ボタンではありません**。
@@ -54,6 +58,8 @@ Android と iOS は LINE 風 UI を platform native に実装しつつ、見た�
 
 ## Source references
 
+- `android/app/src/main/kotlin/io/nurunuru/app/ui/components/PostContent.kt`
+- `ios/NuruNuru/Views/Components/PostContent.swift`
 - `android/app/src/main/kotlin/io/nurunuru/app/ui/components/PostActions.kt`
 - `ios/NuruNuru/Views/Components/PostActions.swift`
 - `android/app/src/main/kotlin/io/nurunuru/app/ui/screens/MainScreen.kt`
