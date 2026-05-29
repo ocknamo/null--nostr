@@ -172,6 +172,9 @@ struct LoginView: View {
                 if NosskeyManager.isPlatformSupported {
                     passkeyLoginButton
                 }
+                if let msg = errorMessage {
+                    inlineErrorMessage(msg)
+                }
                 loginToggleButton
             }
         } else {
@@ -199,6 +202,7 @@ struct LoginView: View {
 
     private var passkeyLoginButton: some View {
         Button {
+            viewModel.clearError()
             requestTermsAgreement(for: .passkeyLogin)
         } label: {
             HStack(spacing: NuruSpacing.space3) {
@@ -213,6 +217,15 @@ struct LoginView: View {
             .frame(height: 56)
         }
         .buttonStyle(NuruSecondaryButtonStyle(theme: theme))
+    }
+
+    private func inlineErrorMessage(_ msg: String) -> some View {
+        Text(msg)
+            .font(NuruFont.bodySmall())
+            .foregroundStyle(NuruColors.colorError)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, NuruSpacing.space2)
+            .transition(.opacity)
     }
 
     private var loginToggleButton: some View {

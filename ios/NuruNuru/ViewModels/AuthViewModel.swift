@@ -316,21 +316,35 @@ final class AuthViewModel {
         }
     }
 
-    /// Verify a previously registered Passkey by performing a PRF assertion and
-    /// move the session to `loggedIn`. Used by the LoginView "パスキーでログイン"
-    /// button.
+    /// Verify a Passkey by performing a PRF assertion and move the session to
+    /// loggedIn. If local metadata was lost by reinstall, use a discoverable
+    /// assertion to restore credentialId / pubkey / salt from iCloud Keychain.
     @MainActor
     func loginWithPasskey() async -> Bool {
         guard NosskeyManager.isPlatformSupported else {
             state = .error("パスキーログインは iOS 18 以降が必要です")
             return false
         }
-        guard let keyInfo = nosskeyManager.loadStoredKeyInfo() else {
-            state = .error("パスキーが登録されていません。先に新規登録してください")
-            return false
-        }
+
+        state = .checking
         do {
-            var secret = try await nosskeyManager.deriveSecretKey(for: keyInfo)
+            let keyInfo: NosskeyKeyInfo
+            var secret: [UInt8]
+
+            if let stored = nosskeyManager.loadStoredKeyInfo() {
+                keyInfo = stored
+                secret = try await nosskeyManager.deriveSecretKey(for: stored)
+            } else {
+                var restored = try await nosskeyManager.discoverPasskeyWithSecret()
+                keyInfo = restored.keyInfo
+                secret = restored.secretKey
+                let restoredSecretCount = restored.secretKey.count
+                restored.secretKey.withUnsafeMutableBufferPointer {
+                    $0.baseAddress?.initialize(repeating: 0, count: restoredSecretCount)
+                }
+                nosskeyManager.saveKeyInfo(keyInfo)
+            }
+
             defer {
                 let secretCount = secret.count
                 secret.withUnsafeMutableBufferPointer {
@@ -348,7 +362,10 @@ final class AuthViewModel {
             state = .loggedIn(pubkeyHex: keyInfo.pubkey)
             return true
         } catch let err as NosskeyError {
-            if case .userCancelled = err { return false }
+            if case .userCancelled = err {
+                state = .loggedOut
+                return false
+            }
             state = .error(err.errorDescription ?? "パスキーログインに失敗しました")
             return false
         } catch {

@@ -68,6 +68,7 @@ UI は親しみやすく、しかし鍵管理は妥協しない。Keychain only 
 
 - [[not-doing]] — ぬるぬるが意図的にやらないこと
 - [[design-crit]] — Weekly Nuru Design Crit の運用
+- [[release-quality]] — 月曜リリース列車と Nuru Production System
 - [[copy-style]] — 日本語コピー規約
 - [[llm-onboarding]] — LLM コントリビュータ向け
 - [[four-freedoms]] — 10年先の4軸自由ドクトリン

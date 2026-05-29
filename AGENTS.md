@@ -18,6 +18,7 @@ null--nostr is a LINE-style Nostr client for the Japanese community. It runs as 
 - [docs/wiki/culture/principles.md](./docs/wiki/culture/principles.md) — 北極星 + 五箇条
 - [docs/wiki/culture/not-doing.md](./docs/wiki/culture/not-doing.md) — やらないことリスト
 - [docs/wiki/culture/design-crit.md](./docs/wiki/culture/design-crit.md) — Weekly Nuru Design Crit
+- [docs/wiki/culture/release-quality.md](./docs/wiki/culture/release-quality.md) — 月曜リリース列車 + Nuru Production System
 - [docs/wiki/culture/copy-style.md](./docs/wiki/culture/copy-style.md) — 日本語コピー規約
 - [docs/wiki/culture/llm-onboarding.md](./docs/wiki/culture/llm-onboarding.md) — LLM コントリビュータ向け
 - [docs/wiki/culture/four-freedoms.md](./docs/wiki/culture/four-freedoms.md) — 10年先の4軸自由ドクトリン

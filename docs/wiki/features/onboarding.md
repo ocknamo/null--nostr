@@ -158,7 +158,7 @@ Password Manager で同期されるリカバリ手段であり、nsec を別途�
 |---|---|
 | Web | 「パスキーでログイン」常時 (PublicKeyCredential サポート時のみ) |
 | Android | 「パスキーでログイン」ボタンは `NosskeyManager.loadStoredKeyInfo() != null` のときだけ表示 |
-| iOS | 現在は LoginView 直下の従来ボタン群を維持 — `loginWithPasskey()` メソッドは ViewModel 側に実装済み (UI 露出は次フェーズ) |
+| iOS 18+ | LoginView 直下に「パスキーでログイン」を表示。ローカル `NosskeyKeyInfo` がない再インストール直後でも discoverable assertion で iCloud Keychain の Passkey picker を開き、`credentialId / pubkey / salt` を復元してログインする。 |
 
 ### 投稿フロー内の Signer 解決
 
@@ -173,11 +173,13 @@ Password Manager で同期されるリカバリ手段であり、nsec を別途�
 
 ### ログアウト時の挙動
 
-- iOS: `nosskeyManager.clearStoredKeyInfo()` でローカル metadata を削除。
-  Passkey 自体は iCloud Keychain / OS Settings 側に残り、再登録時に再利用可能。
-- Android: 同様に SharedPreferences から削除。Google Password Manager 側に
-  Passkey は残る。
-- 3 プラットフォーム共通で `prefs.loginMethod` を null にクリア。
+- iOS: logout ではローカル `NosskeyKeyInfo` を削除しない。非秘密 metadata
+  (credentialId / pubkey / salt) はログアウト後の「パスキーでログイン」に必要なため。
+  アプリ再インストールで UserDefaults が消えた場合は、`loginWithPasskey()` が
+  discoverable assertion を使って iCloud Keychain から同 metadata を復元する。
+- Android: SharedPreferences の metadata はログアウト後も維持する。Google Password
+  Manager 側の Passkey 自体は OS / provider 管理。
+- 3 プラットフォーム共通で `prefs.loginMethod` は null にクリアし、次回ログインで再設定する。
 
 ### Profile sharing and referral follow
 

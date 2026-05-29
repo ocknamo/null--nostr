@@ -14,6 +14,12 @@ This directory stores lightweight Architecture Decision Records (ADRs). Use ADRs
 | [[adr-0004-design-tokens-are-source-of-truth]] | Design tokens are source of truth for generated constants. |
 | [[adr-0005-postactions-no-reply-button]] | PostActions has no reply button and may include optional bookmark. |
 | [[adr-0006-web-rust-bridge-is-stub]] | Web Rust bridge is currently stubbed; Web Nostr operations use JS modules. |
+| [[adr-0007-design-crit-ritual]] | Weekly Nuru Design Crit を制度化する判断。 |
+| [[adr-0008-four-freedoms-mission]] | 4軸自由ドクトリンを長期ミッションとして起票する判断。 |
+| [[adr-0009-mls-db-encryption]] | MLS storage DB を SQLCipher で暗号化する判断 (issue #181)。 |
+| [[adr-0010-passkey-prf-direct-method]] | Passkey PRF を直接署名手段として採用する判断。 |
+| [[adr-0011-nuruh-ip-doctrine]] | ぬるる IP 憲章 (四箇条) を起票する判断。 |
+| [[adr-0012-monday-release-nuru-production-system]] | 月曜リリース列車と Nuru Production System を採用する判断。 |
 
 ## ADR convention
 

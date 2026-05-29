@@ -25,9 +25,10 @@ iOS, Android) in the new-user onboarding flow.
 3. The 32-byte PRF output IS the secp256k1 Schnorr private key.
 4. Wipe the secret from memory after use.
 
-The same passkey + same salt deterministically yields the same Nostr key, so
-even if the local metadata is lost the user can re-derive their identity by
-re-registering with the device's existing passkey credential.
+The same passkey + same salt deterministically yields the same Nostr key. On
+platforms that support discoverable credentials, a fresh app install can ask the
+Passkey picker for any credential under the RP and rebuild the local metadata
+from the assertion result.
 
 ## Standard salt
 
@@ -68,10 +69,16 @@ across all three platforms are now created with the standard salt.
   On iOS 17 the UI shows the classic "アカウントを作成する" button + caption
   "パスキー対応はiOS 18以降で利用できます".
 - `NosskeyManager` (`@MainActor`) wraps:
-  - `ASAuthorizationPlatformPublicKeyCredentialRegistrationRequest.prf =
-    .checkForSupport` for registration.
-  - `ASAuthorizationPlatformPublicKeyCredentialAssertionRequest.prf =
-    .inputValues(saltInput1: …)` for every secret derivation.
+  - `ASAuthorizationPlatformPublicKeyCredentialRegistrationRequest.prf`
+    with `InputValues(saltInput1: "nostr-pwk")` for registration. If the
+    registration result does not include PRF bytes, iOS immediately performs one
+    assertion to derive the Nostr secret.
+  - `ASAuthorizationPlatformPublicKeyCredentialAssertionRequest.prf`
+    with `.inputValues(saltInput1: …)` for every secret derivation.
+  - Discoverable assertions with no `allowedCredentials` as the reinstall
+    recovery path. If UserDefaults metadata is gone, iOS shows the RP's Passkey
+    picker, returns the credential ID + PRF output, and the app saves a fresh
+    `NosskeyKeyInfo` before entering the session.
 - `NosskeySigner` implements the common `EventSigner` protocol so it slots
   into existing `NostrRepository` paths without further refactoring. It keeps
   a 5-minute in-memory PRF cache to avoid prompting the user on every event.
@@ -181,6 +188,9 @@ prompt and zeroized after use.
   physical devices fails; Simulator/emulator paths work.
 - iOS deployment-target bump from 17.0 → 18.0 is not done. iOS 17 users see
   the classic nsec flow with a "iOS 18以降で利用できます" notice.
+- iOS reinstall recovery should be verified on physical devices with iCloud
+  Keychain enabled and production AASA deployed; Simulator behavior is not a
+  substitute for the synced-Passkey path.
 - Should `NosskeyKeyInfo.username` be exposed in profile copy ("@user")
   somewhere in Settings? Currently we hardcode `"user"` to avoid asking the
   user up-front.

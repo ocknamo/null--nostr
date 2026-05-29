@@ -39,8 +39,8 @@ targets:
         UIAppFonts:
           - LineSeedJP-Rg.ttf
           - LineSeedJP-Bd.ttf
-        CFBundleShortVersionString: "1.5.2"
-        CFBundleVersion: "8"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         CFBundleDisplayName: ぬるぬる
         CFBundleURLTypes:
           - CFBundleURLName: io.nurunuru.app
@@ -70,8 +70,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: io.nurunuru.app
         SWIFT_VERSION: "5.9"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
-        MARKETING_VERSION: "1.5.4"
-        CURRENT_PROJECT_VERSION: "10"
+        MARKETING_VERSION: "1.5.5"
+        CURRENT_PROJECT_VERSION: "11"
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: "66G7S3P755"
         CODE_SIGN_ENTITLEMENTS: NuruNuru/NuruNuru.entitlements

@@ -21,6 +21,7 @@
 | [[culture/principles]] | 北極星 + 五箇条。ぬるぬるの文化的憲章 v0.1。 |
 | [[culture/not-doing]] | ぬるぬるが意図的にやらないこと。 |
 | [[culture/design-crit]] | Weekly Nuru Design Crit の運用と Crit ルール。 |
+| [[culture/release-quality]] | 月曜リリース列車と Nuru Production System (TPS-inspired quality/stability)。 |
 | [[culture/copy-style]] | 日本語コピー規約 (直訳禁止、既存採用語の保護)。 |
 | [[culture/llm-onboarding]] | LLM コントリビュータのオンボーディングと出力規約。 |
 | [[culture/four-freedoms]] | 4軸自由ドクトリン (言論 / プライバシー / 経済 / 配布)。 |
@@ -30,6 +31,7 @@
 | Page | Summary |
 |---|---|
 | [[strategy/themaday-2026-05-25]] | Block の “From Hierarchy to Intelligence” とストアデータを踏まえた ThemaDAY 経営会議・リーダー方向性すり合わせ。 |
+| [[strategy/themaday-2026-05-28-partnerships]] | Nostr Compass #24 掲載・公開前レビューを起点に、外部提携 / パートナーシップ / 開発者向け施策の方針を整理。 |
 | [[strategy/nuruh-ip-2026-05-28]] | ぬるる IP マーケティング & 成長戦略 v1.0。四箇条 / 3層接点 / 5ループ / ライセンス階段 / KPI+ガードレール / 90日と24ヶ月ロードマップ。 |
 | [[operations/feedback-loop]] | NIP-50 search relay と nurunuru-mcp による Nostr feedback 収集、Issue draft、autofix 運用。 |
 
@@ -110,6 +112,7 @@
 | [[decisions/adr-0009-mls-db-encryption]] | MLS storage DB を SQLCipher で暗号化する判断 (issue #181)。 |
 | [[decisions/adr-0010-passkey-prf-direct-method]] | Passkey PRF を直接署名手段として採用する判断。 |
 | [[decisions/adr-0011-nuruh-ip-doctrine]] | ぬるる IP 憲章 (四箇条)。「商品ではなく住人」として育てる長期方針。 |
+| [[decisions/adr-0012-monday-release-nuru-production-system]] | 月曜リリース列車と Nuru Production System を採用する判断。 |
 
 ## Maintenance checklist for agents
 

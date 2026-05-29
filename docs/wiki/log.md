@@ -2,6 +2,35 @@
 
 LLM Wiki の時系列ログです。追記専用として扱います。
 
+## [2026-05-29] chore | iOS App Store Connect version bump
+
+- iOS App Store Connect upload metadata bumped to MARKETING_VERSION 1.5.5 / CURRENT_PROJECT_VERSION 11.
+- Normalized ios/project.yml Info.plist version keys to $(MARKETING_VERSION) / $(CURRENT_PROJECT_VERSION) so XcodeGen regeneration does not restore stale 1.5.2 / 8 values.
+- Source: ios/project.yml, ios/NuruNuru.xcodeproj/project.pbxproj.
+
+## [2026-05-29] fix | iOS passkey login after reinstall
+
+- iOS loginWithPasskey() no longer stops at missing local NosskeyKeyInfo. When UserDefaults was wiped by app reinstall, it now runs a discoverable Passkey assertion with no allowedCredentials so iCloud Keychain can show the RP's Passkey picker, then rebuilds and saves credentialId / pubkey / salt before entering the session.
+- LoginView now surfaces passkey-login errors in the initial button stack, so missing or failed credentials are visible instead of looking like an inert button.
+- Source: ios/NuruNuru/Data/NosskeyManager.swift, ios/NuruNuru/ViewModels/AuthViewModel.swift, ios/NuruNuru/Views/Screens/LoginView.swift, docs/wiki/features/onboarding.md, docs/wiki/nips/nosskey.md.
+
+## [2026-05-29] culture | Platform別実機テスト時間割と反復テスト項目を追加
+
+- 月曜リリース列車 / Nuru Production System に、platform ごとの dedicated 実機テスト時間割を追加。初期値は午前 iOS、午後 Android、夕方 Web / cross-platform parity、最後に GO / HOLD / STOP / HOTFIX 判定。
+- 「日常的に使ってみた」だけでは release test と呼ばない方針を明文化。事前定義した test case を PASS / FAIL / BLOCKED / NOT RUN で記録し、重要項目は最低2周 (機能確認 + 再現性/回帰確認) する。
+- iOS / Android / Web / cross-platform の標準実機テスト項目を追加。Keychain / Secure storage、passkey/nsec/外部署名、投稿140文字、画像、timeline、Talk MLS、通知/share、CameraX/Media3、relay/security/parity/NIP behavior を release candidate ごとの確認対象にした。
+- ADR-0012 の中核判断に「platform ごとの dedicated 実機テスト slot」と「test case に基づく反復確認」を追加。トヨタ級の世界最高品質と安定供給を NPS の標準作業へ接続。
+- Source: User directive (2026-05-29), docs/wiki/culture/release-quality.md, docs/wiki/decisions/adr-0012-monday-release-nuru-production-system.md.
+
+## [2026-05-29] culture | 月曜リリース列車と Nuru Production System を制度化
+
+- Thema DAY「企業文化 / カルチャー構築」の方針として、週刊少年ジャンプ型の月曜リリース列車を文化規約に追加。定期 release は原則 月曜日 (JST) に集約し、品質ゲート不通過時は GO ではなく HOLD / STOP として次の列車へ回す。
+- トヨタ生産方式 (TPS) を Nostr クライアント向けに翻訳した Nuru Production System (NPS) を定義。Jidoka / Andon / Just-in-Time / Heijunka / Standardized Work / Genchi Genbutsu / Kaizen を、秘密鍵・署名・relay・Talk MLS・platform parity・日本語 UI の品質保証に接続。
+- 新規ページ [[culture/release-quality]] を追加。週間リズム、release skip / hotfix 条件、品質ゲート (Build/Test, Nostr protocol, UX/Japanese quality, Stability, Release communication)、Nostr 最高品質の7軸、metrics、roles、Open Questions を整理。
+- 新規 ADR [[decisions/adr-0012-monday-release-nuru-production-system]] を Accepted で追加。CI / scheduler / GitHub labels による enforcement は未実装だが、release / quality / culture の判断規約として即日有効。
+- AGENTS.md, docs/wiki/index.md, docs/wiki/culture/principles.md, docs/wiki/decisions/README.md に新規ページ / ADR へのリンクを追加。
+- Source: User directive (2026-05-29), docs/wiki/culture/release-quality.md, docs/wiki/decisions/adr-0012-monday-release-nuru-production-system.md, AGENTS.md, docs/wiki/index.md, docs/wiki/culture/principles.md, docs/wiki/decisions/README.md.
+
 ## [2026-05-28] strategy | ぬるる IP マーケティング & 成長戦略 v1.0 起票
 
 - 新規ページ `docs/wiki/strategy/nuruh-ip-2026-05-28.md` を追加。ぬるぬる公式マスコット「ぬるる」を**商品ではなく住人**として育てる長期 IP 戦略 v1.0。中核構成は以下5層:
@@ -624,3 +653,10 @@ LLM Wiki の時系列ログです。追記専用として扱います。
 - This fixes cases where sparse follow or relay timelines could not scroll past an empty bounded window.
 - Source references: `android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepositoryTimeline.kt`, `android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepositoryLiveStream.kt`.
 
+
+## [2026-05-28] strategy | ThemaDAY partnerships and developer initiatives
+
+- Added docs/wiki/strategy/themaday-2026-05-28-partnerships.md to record that ぬるぬる was covered in and other stuff's Nostr Compass #24 and participated in pre-publication review.
+- Framed external coverage as a trust surface and pre-publication fact-checking as a lightweight partnership pattern that preserves editorial independence.
+- Captured near-term developer initiative guidance: source-backed NIP/status docs, external-contributor task boundaries, and feedback-loop routing without bypassing human review.
+- Source references: Nostr Compass #24 njump event, andotherstuff/nostr-compass PR #95, culture/strategy/operations wiki pages.

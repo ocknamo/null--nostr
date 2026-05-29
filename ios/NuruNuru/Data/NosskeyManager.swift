@@ -230,6 +230,34 @@ final class NosskeyManager: NSObject {
         return result.keyInfo
     }
 
+    /// Reconstruct local Nosskey metadata by asking the platform authenticator to
+    /// show the discoverable Passkey picker for this RP. This is the reinstall /
+    /// fresh-install recovery path: UserDefaults metadata is gone, but the synced
+    /// iCloud Keychain Passkey still knows its credential ID and can evaluate PRF.
+    func discoverPasskeyWithSecret(
+        username: String? = nil,
+        rpId: String = NosskeyManager.defaultRpId
+    ) async throws -> NosskeyCreationResult {
+        guard #available(iOS 18.0, *) else { throw NosskeyError.unsupported }
+
+        let assertion = try await runAssertion(
+            credentialId: nil,
+            rpId: rpId,
+            salt: NosskeyManager.nosskeySalt
+        )
+        guard assertion.prfOutput.count == 32 else { throw NosskeyError.invalidPrfOutput }
+
+        let secret = [UInt8](assertion.prfOutput)
+        let pubkeyHex = try derivePubkeyHex(fromPrfBytes: secret)
+        let info = NosskeyKeyInfo(
+            credentialId: assertion.credentialId,
+            pubkey: pubkeyHex,
+            salt: NosskeyManager.nosskeySalt,
+            username: username
+        )
+        return NosskeyCreationResult(keyInfo: info, secretKey: secret)
+    }
+
     /// Re-derive the 32-byte secp256k1 secret by prompting for a Passkey assertion.
     /// The caller is responsible for zeroing the returned array after use.
     func deriveSecretKey(
@@ -266,7 +294,7 @@ final class NosskeyManager: NSObject {
 
     /// Run a single Passkey assertion with PRF eval for the given credential / salt.
     private func runAssertion(
-        credentialId: Data,
+        credentialId: Data?,
         rpId: String,
         salt: Data
     ) async throws -> AssertionResult {
@@ -282,9 +310,11 @@ final class NosskeyManager: NSObject {
             relyingPartyIdentifier: rpId
         )
         let request = provider.createCredentialAssertionRequest(challenge: challenge)
-        request.allowedCredentials = [
-            ASAuthorizationPlatformPublicKeyCredentialDescriptor(credentialID: credentialId)
-        ]
+        if let credentialId {
+            request.allowedCredentials = [
+                ASAuthorizationPlatformPublicKeyCredentialDescriptor(credentialID: credentialId)
+            ]
+        }
         let prfInputValues = ASAuthorizationPublicKeyCredentialPRFAssertionInput.InputValues(
             saltInput1: salt
         )
