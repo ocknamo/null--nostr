@@ -492,6 +492,7 @@ struct AppSettingsView: View {
 
     private let privacyURL = URL(string: "https://tami1A84.github.io/null--nostr/privacy.html")!
     private let termsURL = URL(string: "https://tami1A84.github.io/null--nostr/terms.html")!
+    private let githubURL = URL(string: "https://github.com/tami1A84/null--nostr")!
 
     var body: some View {
         NavigationStack {
@@ -513,6 +514,15 @@ struct AppSettingsView: View {
                         trailing: "chevron.right"
                     ) {
                         UIApplication.shared.open(termsURL)
+                    }
+
+                    settingsRow(
+                        icon: "chevron.left.forwardslash.chevron.right",
+                        title: "アプリケーション情報",
+                        subtitle: "ソースコードをGitHubで確認",
+                        trailing: "chevron.right"
+                    ) {
+                        UIApplication.shared.open(githubURL)
                     }
 
                     settingsRow(
