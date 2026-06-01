@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { nip19, getPublicKey } from 'nostr-tools'
+import { nip19 } from 'nostr-tools'
 import {
   savePubkey,
   setStoredPrivateKey,
@@ -135,23 +135,17 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
     setLoading(true)
     setError('')
     try {
-      // 2. Export private key - This triggers the SECOND biometric prompt
-      // We use the credentialId from the previous step
-      const privateKeyHex = await nosskeyManager.exportNostrKey(null, credentialId)
+      // 2. Derive the Nostr key info from the passkey - This triggers the
+      // SECOND biometric prompt. createNostrKey returns a fully-formed
+      // NostrKeyInfo (credentialId hex, derived pubkey, standard salt), so we
+      // no longer construct it by hand. exportNostrKey then reuses the cached
+      // PRF secret to return the raw private key without an extra prompt.
+      const keyInfo = await nosskeyManager.createNostrKey(credentialId)
+      const privateKeyHex = await nosskeyManager.exportNostrKey(keyInfo)
 
       if (privateKeyHex) {
-        // Derive public key from the exported private key
-        const pk = getPublicKey(hexToBytes(privateKeyHex))
+        const pk = keyInfo.pubkey
         setCreatedPubkey(pk)
-
-        // Construct key info for Nosskey SDK
-        const keyInfo = {
-          credentialId: nosskeyManager.constructor.bytesToHex ?
-            nosskeyManager.constructor.bytesToHex(credentialId) :
-            Array.from(credentialId).map(b => b.toString(16).padStart(2, '0')).join(''),
-          pubkey: pk,
-          salt: '6e6f7374722d70776b' // "nostr-pwk" — standard nosskey PRF eval salt (NIP draft / nosskey-sdk normalizes legacy values)
-        }
 
         // Update manager and storage
         nosskeyManager.setCurrentKeyInfo(keyInfo)
