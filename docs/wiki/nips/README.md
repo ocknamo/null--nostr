@@ -56,7 +56,7 @@ null--nostr は複数の Nostr Implementation Possibilities を扱います。�
 
 | Spec | Level | Status | Main evidence |
 |---|---|---|---|
-| BUD-03 | iOS/settings + upload ecosystem | Blossom user server list kind 10063 and fallback server discovery. | `ImageUploadService.swift`, `AvatarView.swift`, `SettingsView.swift` |
+| BUD-03 | iOS/settings + upload ecosystem | Blossom user server list kind 10063 and fallback server discovery. | `ImageUploadService.swift`, `AvatarView.swift`, `MiniAppsView.swift` |
 
 ## Project-specific / non-NIP protocol support
 

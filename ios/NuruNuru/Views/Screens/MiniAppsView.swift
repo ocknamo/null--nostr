@@ -13,23 +13,20 @@ struct MiniApp: Identifiable, Codable {
 }
 
 /// ミニアプリ / Settings screen.
-/// Mirrors Android SettingsScreen.kt — collapsing header, profile card, security section,
+/// Mirrors Android MiniAppsScreen.kt — Mini Apps hub with collapsing header,
 /// マイミニアプリ horizontal row, 4-category paged tabs, vertical MiniAppRow list.
-struct SettingsView: View {
+struct MiniAppsView: View {
 
     let pubkeyHex:     String
-    let authViewModel: AuthViewModel
     let repository:    NostrRepository
     let prefs:         AppPreferences
     var connectionVM:  ConnectionViewModel? = nil
-    var onLogout:      (() -> Void)? = nil
     var onExternalAppFullscreenChanged: ((Bool) -> Void)? = nil
 
     @Environment(\.nuruTheme) private var theme
     @State private var searchQuery:    String      = ""
     @State private var selectedTab:    Int         = 0
     @State private var selectedApp:    MiniApp?    = nil
-    @State private var showLogout:     Bool        = false
     @State private var profile:        UserProfile? = nil
     @State private var showExternalAdd: Bool       = false
     @State private var editingApp:     MiniApp?    = nil
@@ -41,25 +38,6 @@ struct SettingsView: View {
     @State private var headerHeight:   CGFloat = 0
     @State private var headerOffset:   CGFloat = 0
 
-    // Security
-    @State private var securityExpanded: Bool = false
-    @State private var autoSignEnabled:  Bool = true
-    @State private var showNsec:         Bool = false
-    @State private var exportedNsec:     String? = nil
-    @State private var isExportingNsec:  Bool = false
-
-    // Rust FFI Phase 1/1.1/1.2 read-only diagnostics
-    @State private var rustFfiMlsEncryptionState: Bool? = nil
-    @State private var rustFfiGroupCount:          Int? = nil
-    @State private var rustFfiSelfUpdateCount:     Int? = nil
-    @State private var rustFfiGroupStatus:         String = "unavailable"
-    @State private var rustFfiSelfUpdateStatus:    String = "unavailable"
-    @State private var rustFfiCheckedAt:           Date? = nil
-    @State private var rustFfiDiagnosticLoaded:    Bool = false
-    @State private var rustFfiDiagnosticLoading:   Bool = false
-    @State private var rustFfiKeygenEnabled:       Bool = true
-    @State private var rustFfiSigningEnabled:      Bool = false
-    @State private var rustFfiPublishEnabled:      Bool = false
 
     // MARK: - Mini-apps
 
@@ -139,7 +117,7 @@ struct SettingsView: View {
             .background(theme.bgPrimary)
 
             // ヘッダー + カテゴリタブ + アプリリストを 1 つの ScrollView に統合
-            // (Android SettingsScreen.kt の LazyColumn 相当)
+            // (Android MiniAppsScreen.kt の LazyColumn 相当)
             // カテゴリ横スワイプ対応（Android TabRow + HorizontalPager に対応）
             ScrollView {
                 LazyVStack(spacing: 0) {
@@ -196,22 +174,11 @@ struct SettingsView: View {
         .background(theme.bgPrimary)
         .onAppear {
             favorites = prefs.favoriteApps
-            autoSignEnabled = prefs.autoSignEnabled
-            rustFfiKeygenEnabled = prefs.iosRustFfiKeygenEnabled
-            rustFfiSigningEnabled = prefs.iosRustFfiSigningEnabled
-            rustFfiPublishEnabled = prefs.iosRustFfiPublishEnabled
             loadExternalApps()
         }
         .task {
             let profiles = await repository.fetchProfiles(pubkeys: [pubkeyHex])
             profile = profiles.first
-            await loadRustFfiDiagnostic()
-        }
-        .alert("ログアウト", isPresented: $showLogout) {
-            Button("ログアウト", role: .destructive) { onLogout?() ?? authViewModel.logout() }
-            Button("キャンセル", role: .cancel) {}
-        } message: {
-            Text("ログアウトします。秘密鍵はこのデバイスから削除されます。")
         }
         .sheet(item: $editingApp) { target in
             ExternalAppEditSheet(
@@ -247,14 +214,6 @@ struct SettingsView: View {
 
     private var collapsingHeader: some View {
         VStack(spacing: NuruSpacing.space4) {
-            // Profile card
-            profileCard
-
-            // Security settings (only for non-external signer)
-            if !prefs.isExternalSigner {
-                securitySection
-            }
-
             // Search bar
             searchBar
 
@@ -266,361 +225,6 @@ struct SettingsView: View {
         .padding(.horizontal, NuruSpacing.space4)
         .padding(.vertical, NuruSpacing.space3)
         .background(theme.bgPrimary)
-    }
-
-    // MARK: - Profile Card
-
-    private var profileCard: some View {
-        HStack(spacing: NuruSpacing.space3) {
-            // Lock icon: 40pt circle, lineGreen bg, white lock 20pt
-            ZStack {
-                Circle()
-                    .fill(NuruColors.lineGreen)
-                    .frame(width: 40, height: 40)
-                Image(systemName: NuruIcons.lock)
-                    .font(.system(size: 20))
-                    .foregroundStyle(.white)
-            }
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(prefs.isExternalSigner ? "外部署名でログイン中" : "ログイン中")
-                    .font(NuruFont.bodyMedium())
-                    .fontWeight(.bold)
-                    .foregroundStyle(theme.textPrimary)
-                    .lineLimit(1)
-                Text(npub)
-                    .font(NuruFont.bodySmall())
-                    .foregroundStyle(theme.textTertiary)
-                    .lineLimit(1)
-            }
-
-            Spacer()
-
-
-            Button { showLogout = true } label: {
-                Text("ログアウト")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Color.red)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(Color.red.opacity(0.1))
-                    .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(NuruSpacing.space4)
-        .background(
-            RoundedRectangle(cornerRadius: NuruSpacing.radiusXl)
-                .fill(theme.bgSecondary)
-        )
-    }
-
-    // MARK: - Rust FFI Diagnostic
-
-    private var rustFfiDiagnosticSection: some View {
-        HStack(spacing: NuruSpacing.space3) {
-            Image(systemName: "checkmark.shield")
-                .font(.system(size: 20))
-                .foregroundStyle(rustFfiDiagnosticColor)
-                .frame(width: 32, height: 32)
-                .background(rustFfiDiagnosticColor.opacity(0.12))
-                .clipShape(Circle())
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Rust FFI診断")
-                    .font(NuruFont.bodyMedium())
-                    .fontWeight(.semibold)
-                    .foregroundStyle(theme.textPrimary)
-                Text(rustFfiDiagnosticMessage)
-                    .font(NuruFont.bodySmall())
-                    .foregroundStyle(theme.textTertiary)
-                    .lineLimit(4)
-            }
-
-            Spacer()
-
-            Button {
-                Task { await loadRustFfiDiagnostic() }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(theme.textTertiary)
-                    .frame(width: 32, height: 32)
-            }
-            .buttonStyle(.plain)
-            .disabled(rustFfiDiagnosticLoading)
-            .opacity(rustFfiDiagnosticLoading ? 0.4 : 1.0)
-        }
-        .padding(NuruSpacing.space4)
-        .background(
-            RoundedRectangle(cornerRadius: NuruSpacing.radiusXl)
-                .fill(theme.bgSecondary)
-        )
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Rust FFI診断")
-        .accessibilityValue(rustFfiDiagnosticMessage)
-    }
-
-    private var rustFfiDiagnosticMessage: String {
-        if rustFfiDiagnosticLoading { return "確認中…" }
-        guard rustFfiDiagnosticLoaded else { return "確認中…" }
-        switch rustFfiMlsEncryptionState {
-        case .some(true):
-            let groupText = rustFfiCountText(label: "グループ", count: rustFfiGroupCount, status: rustFfiGroupStatus)
-            let updateText = rustFfiCountText(label: "更新待ち", count: rustFfiSelfUpdateCount, status: rustFfiSelfUpdateStatus)
-            let checkedText = rustFfiCheckedAt.map { " / \(Self.rustFfiTimeFormatter.string(from: $0))確認" } ?? ""
-            return "MLS DB: 暗号化済み / \(groupText) / \(updateText)\(checkedText)"
-        case .some(false):
-            return "MLS DB: 未暗号化 — Talkを停止中"
-        case .none:
-            return "Rust FFI: 未接続"
-        }
-    }
-
-    private var rustFfiDiagnosticColor: Color {
-        guard rustFfiDiagnosticLoaded else { return theme.textTertiary }
-        switch rustFfiMlsEncryptionState {
-        case .some(true): return NuruColors.lineGreen
-        case .some(false): return Color.red
-        case .none: return theme.textTertiary
-        }
-    }
-
-    private static let rustFfiTimeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "ja_JP")
-        formatter.dateFormat = "HH:mm"
-        return formatter
-    }()
-
-    private func rustFfiCountText(label: String, count: Int?, status: String) -> String {
-        if let count { return "\(label) \(count)件" }
-        switch status {
-        case "unavailable": return "\(label) 未接続"
-        case "failed":      return "\(label) 確認失敗"
-        default:            return "\(label) 未確認"
-        }
-    }
-
-    private func loadRustFfiDiagnostic() async {
-        rustFfiDiagnosticLoading = true
-        let snapshot = await repository.mlsReadOnlyDiagnosticSnapshot()
-        rustFfiMlsEncryptionState = snapshot.encryptionState
-        rustFfiGroupCount = snapshot.groupCount
-        rustFfiSelfUpdateCount = snapshot.groupsNeedingSelfUpdateCount
-        rustFfiGroupStatus = snapshot.groupCountStatus
-        rustFfiSelfUpdateStatus = snapshot.selfUpdateStatus
-        rustFfiCheckedAt = snapshot.checkedAt
-        rustFfiDiagnosticLoaded = true
-        rustFfiDiagnosticLoading = false
-        let label = snapshot.encryptionState.map { $0 ? "encrypted" : "plaintext" } ?? "unavailable"
-        let groupLabel = snapshot.groupCount.map(String.init) ?? snapshot.groupCountStatus
-        let updateLabel = snapshot.groupsNeedingSelfUpdateCount.map(String.init) ?? snapshot.selfUpdateStatus
-        AppLogger.log("FFI", "Phase 1.2 MLS read-only diagnostic: state=\(label), groups=\(groupLabel), selfUpdate=\(updateLabel)")
-    }
-
-    // MARK: - Rust FFI Write Path Flags
-
-    private var rustFfiWritePathSection: some View {
-        VStack(spacing: NuruSpacing.space3) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Rust FFI書き込み")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(theme.textPrimary)
-                    Text("keygenは既定ON。署名/投稿はQA用の段階ロールアウトです。")
-                        .font(.system(size: 12))
-                        .foregroundStyle(theme.textTertiary)
-                        .lineLimit(2)
-                }
-                Spacer()
-            }
-            rustFfiToggleRow(title: "Rust keygen", subtitle: "新規nsec作成をRust優先", isOn: $rustFfiKeygenEnabled) { value in
-                prefs.iosRustFfiKeygenEnabled = value
-            }
-            rustFfiToggleRow(title: "Rust signing", subtitle: "nsec投稿/NIP-98/NIP-44をRust signerへ", isOn: $rustFfiSigningEnabled) { value in
-                prefs.iosRustFfiSigningEnabled = value
-            }
-            rustFfiToggleRow(title: "Rust publish", subtitle: "署名済みJSONをRust経由で送信", isOn: $rustFfiPublishEnabled) { value in
-                prefs.iosRustFfiPublishEnabled = value
-            }
-        }
-        .padding(NuruSpacing.space3)
-        .background(
-            RoundedRectangle(cornerRadius: NuruSpacing.radiusLg)
-                .fill(theme.bgTertiary)
-        )
-    }
-
-    private func rustFfiToggleRow(title: String, subtitle: String, isOn: Binding<Bool>, onChange: @escaping (Bool) -> Void) -> some View {
-        HStack(spacing: NuruSpacing.space3) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(theme.textPrimary)
-                Text(subtitle)
-                    .font(.system(size: 11))
-                    .foregroundStyle(theme.textTertiary)
-                    .lineLimit(2)
-            }
-            Spacer()
-            Toggle("", isOn: isOn)
-                .tint(NuruColors.lineGreen)
-                .labelsHidden()
-                .onChange(of: isOn.wrappedValue) { _, value in onChange(value) }
-        }
-    }
-
-    // MARK: - Security Settings Section
-
-    private var securitySection: some View {
-        VStack(spacing: 0) {
-            // Header row
-            Button {
-                withAnimation(.easeInOut(duration: NuruSpacing.durationFast)) {
-                    securityExpanded.toggle()
-                }
-            } label: {
-                HStack(spacing: NuruSpacing.space3) {
-                    Image(systemName: NuruIcons.lock)
-                        .font(.system(size: 20))
-                        .foregroundStyle(theme.textSecondary)
-                    Text("セキュリティ設定")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(theme.textPrimary)
-                    Spacer()
-                    Image(systemName: securityExpanded ? "chevron.up" : "chevron.down")
-                        .foregroundStyle(theme.textTertiary)
-                }
-                .padding(NuruSpacing.space4)
-            }
-            .buttonStyle(.plain)
-
-            if securityExpanded {
-                VStack(spacing: NuruSpacing.space4) {
-                    rustFfiDiagnosticSection
-
-                    rustFfiToggleRow(
-                        title: "Rust Talk MLS",
-                        subtitle: prefs.iosRustFfiTalkMlsEnabled ? "MLS publish/subscriptionをRust経由" : "Talk MLSは従来経路",
-                        isOn: Binding(
-                            get: { prefs.iosRustFfiTalkMlsEnabled },
-                            set: { prefs.iosRustFfiTalkMlsEnabled = $0 }
-                        ),
-                        onChange: { prefs.iosRustFfiTalkMlsEnabled = $0 }
-                    )
-
-                    rustFfiWritePathSection
-
-                    // Auto Sign Toggle
-                    HStack(spacing: NuruSpacing.space3) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("自動署名")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(theme.textPrimary)
-                            Text(autoSignEnabled ? "投稿時に認証なし" : "毎回認証を要求")
-                                .font(.system(size: 12))
-                                .foregroundStyle(theme.textTertiary)
-                        }
-                        Spacer()
-                        Toggle("", isOn: $autoSignEnabled)
-                            .tint(NuruColors.lineGreen)
-                            .labelsHidden()
-                            .onChange(of: autoSignEnabled) { _, val in
-                                prefs.autoSignEnabled = val
-                            }
-                    }
-                    .padding(NuruSpacing.space3)
-                    .background(
-                        RoundedRectangle(cornerRadius: NuruSpacing.radiusLg)
-                            .fill(theme.bgTertiary)
-                    )
-
-                    // Show Nsec Button
-                    Button {
-                        if showNsec {
-                            showNsec = false
-                            exportedNsec = nil
-                        } else {
-                            showNsec = true
-                            isExportingNsec = true
-                            Task {
-                                let nsec = await authViewModel.getNsecForCurrentAccount()
-                                await MainActor.run {
-                                    exportedNsec = nsec
-                                    isExportingNsec = false
-                                }
-                            }
-                        }
-                    } label: {
-                        Text(showNsec ? "秘密鍵を隠す" : "秘密鍵を表示")
-                            .font(.system(size: 14))
-                            .foregroundStyle(theme.textPrimary)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, NuruSpacing.space3)
-                            .background(
-                                RoundedRectangle(cornerRadius: NuruSpacing.radiusLg)
-                                    .fill(theme.bgTertiary)
-                            )
-                    }
-                    .buttonStyle(.plain)
-
-                    if showNsec {
-                        nsecDisplay
-                    }
-                }
-                .padding(.horizontal, NuruSpacing.space4)
-                .padding(.bottom, NuruSpacing.space4)
-            }
-        }
-        .background(
-            RoundedRectangle(cornerRadius: NuruSpacing.radiusXl)
-                .fill(theme.bgSecondary)
-        )
-    }
-
-    private var nsecDisplay: some View {
-        let nsec = isExportingNsec ? "取得中…" : (exportedNsec ?? "取得できません")
-        return VStack(spacing: NuruSpacing.space2) {
-            // Warning
-            VStack(alignment: .leading, spacing: 4) {
-                Text("⚠️ 警告: 秘密鍵の取り扱い")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(Color.red)
-                Text("この鍵はあなたの身元を証明する唯一の手段です。他人に教えたり、安全でない場所に保存したりしないでください。")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color.red.opacity(0.8))
-                    .lineSpacing(2)
-            }
-            .padding(NuruSpacing.space3)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: NuruSpacing.radiusLg)
-                    .fill(Color.red.opacity(0.1))
-            )
-
-            // Nsec value + copy
-            HStack(spacing: NuruSpacing.space2) {
-                Text(nsec)
-                    .font(.system(size: 12))
-                    .foregroundStyle(theme.textPrimary)
-                    .lineLimit(1)
-                Spacer()
-                Button {
-                    UIPasteboard.general.string = nsec
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                        .font(.system(size: 16))
-                        .foregroundStyle(theme.textSecondary)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(NuruSpacing.space3)
-            .background(
-                RoundedRectangle(cornerRadius: NuruSpacing.radiusLg)
-                    .fill(theme.bgTertiary)
-            )
-        }
     }
 
     // MARK: - Search Bar
@@ -937,7 +541,7 @@ struct SettingsView: View {
                 case "badge":      BadgeSettingsView(repository: repository, pubkeyHex: pubkeyHex)
                 case "zap":        ZapSettingsView(prefs: prefs)
                 case "relay":      RelaySettingsView(repository: repository, prefs: prefs, pubkeyHex: pubkeyHex, connectionVM: connectionVM)
-                case "upload":     UploadSettingsView(prefs: prefs, repository: repository, pubkeyHex: pubkeyHex)
+                case "upload":     UploadMiniAppsView(prefs: prefs, repository: repository, pubkeyHex: pubkeyHex)
                 case "mute":       MuteListView(repository: repository, pubkeyHex: pubkeyHex)
                 case "backup":     EventBackupView(repository: repository, pubkeyHex: pubkeyHex)
                 case "cache":      CacheSettingsView(repository: repository, prefs: prefs)
@@ -1106,7 +710,7 @@ private struct MiniAppRow: View {
 
 // MARK: - Upload Settings View
 
-private struct UploadSettingsView: View {
+private struct UploadMiniAppsView: View {
     let prefs: AppPreferences
     let repository: NostrRepository
     let pubkeyHex: String

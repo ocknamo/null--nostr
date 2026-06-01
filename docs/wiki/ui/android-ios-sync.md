@@ -21,6 +21,15 @@ Android と iOS は LINE 風 UI を platform native に実装しつつ、見た�
 - Home icon に `person.crop.circle` を使わない。
 
 
+
+### Home settings and Mini Apps responsibility split
+
+- Home tab gear settings own account/security UI across platforms: login status card, short pubkey/npub display, logout confirmation, auto-sign controls, and explicit nsec export warnings.
+- Mini Apps tab must stay focused on app discovery/launch: search, favorites, category tabs, built-in mini-app rows, and external mini-app management. Do not render login status, logout, auto-sign, or private-key export controls inside Mini Apps.
+- iOS Home settings is presented with fullScreenCover so private-key export never appears in a partially exposed sheet. Android uses a full-screen Dialog; Web uses a full-screen portal modal.
+- iOS has extra Rust FFI diagnostic/write-path controls inside the Home settings security section. This is an intentional platform-specific section, not an Android/Web parity requirement.
+- Android must enable FLAG_SECURE only while the nsec value is visible and clear it when the section closes/disposes. iOS marks the nsec text privacySensitive and clears exported nsec on disappear/background.
+
 ### Talk chat screen
 
 - Native Talk chat should visually follow LINE dark chat: black header/background, compact 56dp/pt header, right-side search / call / calendar / menu affordances, green outgoing bubbles, dark-gray incoming bubbles, and small outside timestamps for both sides. Read-status labels (e.g. 「既読」) are not rendered because real read-receipts cannot yet be verified end-to-end over MLS.
@@ -76,9 +85,22 @@ Android と iOS は LINE 風 UI を platform native に実装しつつ、見た�
 
 - `ios/NuruNuru/Views/Sheets/GroupInfoSheet.swift`
 
+- components/SettingsModal.js
+- components/AccountSecuritySettings.js
+- components/MiniAppTab.js
+- android/app/src/main/kotlin/io/nurunuru/app/ui/components/AccountSecuritySettings.kt
+- android/app/src/main/kotlin/io/nurunuru/app/ui/screens/MiniAppsScreen.kt
+- ios/NuruNuru/Views/Screens/AppSettingsView.swift
+- ios/NuruNuru/Views/Components/AccountSecuritySettingsView.swift
+- ios/NuruNuru/Views/Screens/MiniAppsView.swift
 ## Related pages
 
 - [[platforms/android]]
 - [[platforms/ios]]
 - [[features/timeline]]
 - [[features/post-composer]]
+
+
+## QA
+
+- Home settings / Mini Apps split verification: [[quality/qa-2026-06-02]].

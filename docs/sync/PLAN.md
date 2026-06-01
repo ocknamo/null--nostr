@@ -81,7 +81,7 @@ graph LR
 - Web `components/MiniAppTab.js`: **S6 → S10D** の順
 - Web `components/SignUpModal.js`: 単独 (S7)
 - Web `components/TimelineTab.js`: **S4 → S5** の順
-- Native 側 `SettingsScreen.kt` / `SettingsView.swift` (STT 設定追加時): **S6 → S10D**
+- Native 側 `MiniAppsScreen.kt` / `MiniAppsView.swift` (STT 設定追加時): **S6 → S10D**
 - Native 側 `AppPreferences.kt` / `AppPreferences.swift` (STT 設定追加時): **S10D 単独**
 
 ---

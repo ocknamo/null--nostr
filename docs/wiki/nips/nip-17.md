@@ -19,7 +19,7 @@ null--nostr has code-backed NIP-17 support, but native Talk is currently **Marmo
 
 - `NostrKind.DIRECT_MESSAGE = 14`, `FILE_MESSAGE = 15`, and `DM_RELAY_LIST = 10050` exist.
 - `DmConversation` and `DmMessage` are documented as legacy migration types.
-- `SettingsScreen.kt` copy says Talk is Marmot MLS-only and does not display NIP-17 messages.
+- `MiniAppsScreen.kt` copy says Talk is Marmot MLS-only and does not display NIP-17 messages.
 - `NostrRepositoryTalk.kt` publishes/uses `DM_RELAY_LIST` for inbox relay discovery in MLS flows.
 
 ### iOS
@@ -47,7 +47,7 @@ null--nostr has code-backed NIP-17 support, but native Talk is currently **Marmo
 
 - `android/app/src/main/kotlin/io/nurunuru/app/data/models/NostrModels.kt`
 - `android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepositoryTalk.kt`
-- `android/app/src/main/kotlin/io/nurunuru/app/ui/screens/SettingsScreen.kt`
+- `android/app/src/main/kotlin/io/nurunuru/app/ui/screens/MiniAppsScreen.kt`
 - `ios/NuruNuru/Models/NostrKind.swift`
 - `ios/NuruNuru/Data/NostrRepository+Talk.swift`
 - `ios/NuruNuru/Data/AppPreferences.swift`

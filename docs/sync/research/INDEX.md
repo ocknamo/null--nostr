@@ -26,7 +26,7 @@
 | F-05a | 通知: 誕生日 (フォロー先 metadata.birthday) | `AuthViewModel`, `NotificationModal.kt` | ✅ | ❓ | Native → Web | S5 | ⬜ |
 | F-05b | 通知: 相互フォロー Zap バッジ | `NotificationModal.kt` | ✅ | ❓ | Native → Web | S5 | ⬜ |
 | F-05c | 通知: カスタム絵文字反応 | `NotifStyle` (Android) | 部分 (iOS 要確認) | ❓ | Native → Web | S5 (extension) | ⬜ |
-| F-06 | MiniApp タブ: カテゴリ + 順序統一 + フルスクリーン | `SettingsScreen.kt` + `SettingsView.swift` | ✅ | ❓ | Native → Web | S6 | ⬜ |
+| F-06 | MiniApp タブ: カテゴリ + 順序統一 + フルスクリーン | `MiniAppsScreen.kt` + `MiniAppsView.swift` | ✅ | ❓ | Native → Web | S6 | ⬜ |
 | F-07a | SignUp: 手動リージョン選択 | `SignUpModal.kt` | ✅ | ❓ | Native → Web | S7 | ⬜ |
 | F-07b | SignUp: relay 自動推奨 + geohash | `GeohashUtils.kt` | ✅ (Android) / 未確認 (iOS) | ❓ | Native → Web | S7 | ⬜ |
 | F-08 | connection-manager 修正 (もし Native/Rust に同等修正があれば) | (要調査) | ❓ | (Web v1.4.8 で実装済) | 双方向 (調査結果次第) | S8 | ⬜ |

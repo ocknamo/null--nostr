@@ -34,7 +34,7 @@ Relay management combines local selected relays, NIP-65 relay list metadata, out
 
 - `android/app/src/main/kotlin/io/nurunuru/app/data/OutboxModel.kt`
 - `android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepositoryActions.kt`
-- `android/app/src/main/kotlin/io/nurunuru/app/ui/screens/SettingsScreen.kt`
+- `android/app/src/main/kotlin/io/nurunuru/app/ui/screens/MiniAppsScreen.kt`
 - `ios/NuruNuru/Views/MiniApps/RelaySettingsView.swift`
 - `ios/NuruNuru/Data/NostrRepository+Actions.swift`
 - `lib/outbox.js`

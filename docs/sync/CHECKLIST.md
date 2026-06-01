@@ -51,10 +51,10 @@
 | ファイル | 触るセッション | 推奨順序 |
 |---|---|---|
 | `android/app/.../ui/components/PostModal.kt` | S10B (STT マイク), S10D (UX) | **S10B → S10D** |
-| `android/app/.../ui/screens/SettingsScreen.kt` | S10D (STT 設定誘導) | 単独 |
+| `android/app/.../ui/screens/MiniAppsScreen.kt` | S10D (STT 設定誘導) | 単独 |
 | `android/app/.../data/prefs/AppPreferences.kt` | S10B (STT API キー) | 単独 |
 | `ios/NuruNuru/Views/Sheets/PostSheet.swift` | S10C (STT マイク), S10D (UX) | **S10C → S10D** |
-| `ios/NuruNuru/Views/Screens/SettingsView.swift` | S10D | 単独 |
+| `ios/NuruNuru/Views/Screens/MiniAppsView.swift` | S10D | 単独 |
 | `ios/NuruNuru/Data/AppPreferences.swift` | S10C (STT API キー) | 単独 |
 | iOS 新設 `Views/Screens/SignUpView.swift` | S7 (もし新設するなら) | 単独 |
 

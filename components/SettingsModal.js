@@ -2,17 +2,16 @@
 
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { getLoginMethod } from '@/lib/nostr'
+import { AccountStatusCard, NosskeySecuritySection } from './AccountSecuritySettings'
 
 /**
  * App settings sheet opened from the Home header gear button.
- * Mirrors iOS AppSettingsView (MainTabView.swift) — 3 rows:
- *   1. プライバシーポリシー → 外部URL
- *   2. 利用規約             → 外部URL
- *   3. ログアウト           → 確認ダイアログ
+ * Mirrors iOS AppSettingsView — Home-owned account/security settings plus links.
  *
  * Intentionally separate from the Mini Apps tab so the gear does not switch tabs.
  */
-export default function SettingsModal({ onClose, onLogout }) {
+export default function SettingsModal({ pubkey, onClose, onLogout }) {
   const [mounted, setMounted] = useState(false)
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
 
@@ -82,6 +81,14 @@ export default function SettingsModal({ onClose, onLogout }) {
       {/* Body */}
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-2xl mx-auto p-4 space-y-3">
+          {pubkey && (
+            <AccountStatusCard pubkey={pubkey} onLogout={() => setShowLogoutConfirm(true)} />
+          )}
+
+          {pubkey && getLoginMethod() === 'nosskey' && (
+            <NosskeySecuritySection pubkey={pubkey} />
+          )}
+
           <SettingsRow
             icon={
               <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -108,21 +115,6 @@ export default function SettingsModal({ onClose, onLogout }) {
             subtitle="禁止事項、通報、ブロックについて確認"
             trailing="chevron"
             onClick={() => openExternal(TERMS_URL)}
-          />
-
-          <SettingsRow
-            icon={
-              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/>
-                <polyline points="16 17 21 12 16 7"/>
-                <line x1="21" y1="12" x2="9" y2="12"/>
-              </svg>
-            }
-            title="ログアウト"
-            subtitle="このデバイスから秘密鍵を削除します"
-            titleClass="text-red-500"
-            iconClass="text-red-500"
-            onClick={() => setShowLogoutConfirm(true)}
           />
         </div>
       </div>

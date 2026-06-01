@@ -182,7 +182,7 @@ ios/NuruNuru/
                     # ImageUploadService (nostr.build/yabu.me/Blossom, NIP-98)
                     # NuruNuruFFIBridge (protocol + stub), NuruNuruFFILiveClient (XCFramework bridge)
   ViewModels/       # AuthViewModel, TimelineViewModel, HomeViewModel, TalkViewModel, ConnectionViewModel
-  Views/Screens/    # LoginView, MainTabView, HomeView, TimelineView, TalkView, SettingsView
+  Views/Screens/    # LoginView, MainTabView, HomeView, TimelineView, TalkView, MiniAppsView, AppSettingsView
   Views/Components/ # PostRow, PostActions, PostContent, VideoPlayer, ImageViewerView, AvatarView 等
   Views/Sheets/     # PostSheet, SearchSheet, ZapSheet, NotificationSheet, CreateGroupSheet,
                     # GroupInfoSheet, BookmarkListSheet, QuoteRepostSheet, UserProfileSheet 等
@@ -235,7 +235,7 @@ android/app/src/main/kotlin/io/nurunuru/app/
 | `ui/components/NotificationModal.kt` | Notification list. `NotifStyle` per type. 30s background polling. Animated new-item pill (`Column > AnimatedVisibility`). |
 | `ui/components/EmojiPicker.kt` | Custom emoji picker. Defines `EmojiPickerCache` (5-min TTL, duplicate-fetch guard via `fetching` map) and `fetchAndCacheEmojis()` shared suspend function. `individualOnly=true` hides emoji sets. |
 | `ui/components/ReactionEmojiPicker.kt` | Reaction picker (NIP-25). Uses shared `EmojiPickerCache` + `fetchAndCacheEmojis` from `EmojiPicker.kt`. |
-| `ui/screens/SettingsScreen.kt` | Mini-app hub (エンタメ / ツール / その他 categories). |
+| `ui/screens/MiniAppsScreen.kt` | Mini Apps hub (search, favorites, categories, built-in/external mini apps). Account/security settings live in Home settings. |
 | `data/NostrRepository.kt` | All Nostr I/O. Notifications include Kind 6 (repost) and Kind 1 #p (reply/mention). `enrichPosts()` tracks `myLikeEventId`/`myRepostEventId` for toggle-undo. |
 | `ui/screens/MainScreen.kt` | Root navigation. Current sync target is 5 tabs: ホーム / トーク / ろくなな / タイムライン / ミニアプリ. |
 

@@ -18,7 +18,7 @@ NIP-65 relay list metadata (`kind 10002`) is used for read/write relay preferenc
 
 - `OutboxModel.kt` documents and implements outbox-model helpers around kind 10002.
 - `NostrRepositoryActions.kt` has `fetchNip65WriteRelays()`, `fetchNip65ReadRelays()`, `syncLoggedInUserRelayList()`, and `syncNip65Relays()`.
-- `SettingsScreen.kt` contains relay setting UI and explanatory copy.
+- `MiniAppsScreen.kt` contains relay setting UI and explanatory copy.
 - `AppPreferences.kt` stores `nip65Relays`.
 
 ### iOS
@@ -37,7 +37,7 @@ NIP-65 relay list metadata (`kind 10002`) is used for read/write relay preferenc
 - `android/app/src/main/kotlin/io/nurunuru/app/data/OutboxModel.kt`
 - `android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepositoryActions.kt`
 - `android/app/src/main/kotlin/io/nurunuru/app/data/prefs/AppPreferences.kt`
-- `android/app/src/main/kotlin/io/nurunuru/app/ui/screens/SettingsScreen.kt`
+- `android/app/src/main/kotlin/io/nurunuru/app/ui/screens/MiniAppsScreen.kt`
 - `ios/NuruNuru/Views/MiniApps/RelaySettingsView.swift`
 - `ios/NuruNuru/Data/NostrRepository+Actions.swift`
 - `lib/outbox.js`

@@ -33,6 +33,8 @@ import io.nurunuru.app.data.prefs.AppPreferences
 import io.nurunuru.app.data.models.ScoredPost
 import io.nurunuru.app.ui.components.ConnectionStatusBanner
 import io.nurunuru.app.ui.components.UserProfileModal
+import io.nurunuru.app.ui.components.AccountStatusCard
+import io.nurunuru.app.ui.components.AccountSecuritySection
 import io.nurunuru.app.ui.theme.LineGreen
 import io.nurunuru.app.ui.theme.LocalNuruColors
 import io.nurunuru.app.viewmodel.*
@@ -322,6 +324,9 @@ fun MainScreen(
 
             if (showAppSettings) {
                 AppSettingsDialog(
+                    authViewModel = authViewModel,
+                    prefs = app.prefs,
+                    pubkeyHex = pubkeyHex,
                     onDismiss = { showAppSettings = false },
                     onLogout = { performLogout() }
                 )
@@ -339,15 +344,13 @@ fun MainScreen(
 
             // ── MINIAPP (Settings) — 軽量なため都度レンダリングで問題なし ────
             if (activeTab == BottomTab.MINIAPP) {
-                SettingsScreen(
-                    authViewModel = authViewModel,
+                MiniAppsScreen(
                     repository = repository,
                     prefs = app.prefs,
                     pubkeyHex = pubkeyHex,
                     pictureUrl = myProfile?.picture,
                     onExternalAppOpenChanged = { isExternalAppOpen = it },
-                    onMlsCacheCleared = { talkVM.clearStateAfterCacheClear() },
-                    onLogout = { performLogout() }
+                    onMlsCacheCleared = { talkVM.clearStateAfterCacheClear() }
                 )
             }
 
@@ -396,6 +399,9 @@ fun MainScreen(
 
 @Composable
 private fun AppSettingsDialog(
+    authViewModel: AuthViewModel,
+    prefs: AppPreferences,
+    pubkeyHex: String,
     onDismiss: () -> Unit,
     onLogout: () -> Unit
 ) {
@@ -433,9 +439,12 @@ private fun AppSettingsDialog(
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    AccountStatusCard(prefs = prefs, pubkeyHex = pubkeyHex, onLogoutClick = { showLogoutConfirm = true })
+                    if (!prefs.isExternalSigner) {
+                        AccountSecuritySection(authViewModel = authViewModel, prefs = prefs)
+                    }
                     AppSettingsRow(Icons.Default.PanTool, "プライバシーポリシー", "個人情報とデータの取り扱いを確認") { uriHandler.openUri("https://tami1A84.github.io/null--nostr/privacy.html") }
                     AppSettingsRow(Icons.Default.Description, "利用規約", "禁止事項、通報、ブロックについて確認") { uriHandler.openUri("https://tami1A84.github.io/null--nostr/terms.html") }
-                    AppSettingsRow(Icons.Default.Logout, "ログアウト", "このデバイスから秘密鍵を削除します", Color.Red) { showLogoutConfirm = true }
                 }
             }
         }

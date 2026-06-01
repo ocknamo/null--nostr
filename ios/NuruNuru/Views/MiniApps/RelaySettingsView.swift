@@ -5,7 +5,7 @@ import CoreLocation
 
 /// NIP-65 リレーリスト管理ミニアプリ。
 /// 地域選択・GPS自動検出・最寄りリレー推薦を含む。
-/// Android `SettingsScreen.kt` の `RelaySettingsViewContent` に対応。
+/// Android `MiniAppsScreen.kt` の `RelaySettingsViewContent` に対応。
 struct RelaySettingsView: View {
 
     let repository:   NostrRepository

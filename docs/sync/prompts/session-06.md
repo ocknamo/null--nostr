@@ -25,13 +25,13 @@ git checkout -b sync/native-to-web-20260516/s06-<topic>
 
 ## 目的
 
-Native (Android `SettingsScreen.kt` / iOS `SettingsView.swift` + `Views/MiniApps/`) で確立されている MiniApp タブのカテゴリ・順序・フルスクリーンモーダル方式を Web の `components/MiniAppTab.js` に反映する。
+Native (Android `MiniAppsScreen.kt` / iOS `MiniAppsView.swift` + `Views/MiniApps/`) で確立されている MiniApp タブのカテゴリ・順序・フルスクリーンモーダル方式を Web の `components/MiniAppTab.js` に反映する。
 
 ## 前提読み物
 
 - `docs/sync/research/r06-miniapp-tab.md` (Session 2)
-- Native (Android): `ui/screens/SettingsScreen.kt` (ミニアプリハブ。エンタメ/ツール/その他カテゴリ)
-- Native (iOS): `Views/Screens/SettingsView.swift` + `Views/MiniApps/*`
+- Native (Android): `ui/screens/MiniAppsScreen.kt` (ミニアプリハブ。エンタメ/ツール/その他カテゴリ)
+- Native (iOS): `Views/Screens/MiniAppsView.swift` + `Views/MiniApps/*`
 - Web: `components/MiniAppTab.js`, `components/miniapps/*`
 
 ## Native 仕様 (要点)

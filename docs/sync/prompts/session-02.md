@@ -34,7 +34,7 @@ Session 3〜10 の前提となる **Native (Android/iOS) 側の最終仕様** �
 | R-03 | `research/r03-reaction-picker.md` | Native の Reaction picker 仕様 (Unicode quick row 削除済) と Web 現状の差 |
 | R-04 | `research/r04-recommendation.md` | Native の `RecommendationEngine.kt` / iOS `NostrRepository+Recommendation` の "アイコン無し除外" + "Following 優先 → Recommended 後追い" と Web 現状 |
 | R-05 | `research/r05-birthday-notif.md` | Native の誕生日 / 相互フォロー Zap 通知ロジックと Web 現状 |
-| R-06 | `research/r06-miniapp-tab.md` | Native の `SettingsScreen.kt` / `SettingsView.swift` のカテゴリ・順序・各 mini-app への遷移と Web 現状 |
+| R-06 | `research/r06-miniapp-tab.md` | Native の `MiniAppsScreen.kt` / `MiniAppsView.swift` のカテゴリ・順序・各 mini-app への遷移と Web 現状 |
 | R-07 | `research/r07-signup.md` | Native の `SignUpModal.kt` / iOS SignUp 動線、`GeohashUtils.kt` の利用と Web 現状 |
 | R-08 | `research/r08-connection-manager.md` | Web の `lib/connection-manager.js` v1.4.8 修正内容と、Rust core / Native 側に同等修正が必要かの判定 |
 | R-09 | `research/r09-divine-proofmode.md` | Android の `DivineVideoRecorder.kt` + `ProofModeManager.kt` 仕様 (iOS は対象外)、Web に同等実装があるかの確認 |

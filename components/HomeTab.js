@@ -2023,6 +2023,7 @@ const HomeTab = forwardRef(function HomeTab({ pubkey, onLogout, onStartDM, onHas
       {/* Settings Modal (iOS AppSettingsView parity: プライバシー / 利用規約 / ログアウト) */}
       {showSettings && (
         <SettingsModal
+          pubkey={pubkey}
           onClose={() => setShowSettings(false)}
           onLogout={onLogout}
         />

@@ -1,4 +1,20 @@
+## [2026-06-02] change | Rename Mini Apps screens and record Home settings migration QA
+
+- Renamed native Mini Apps hub files to match their post-migration responsibility: Android SettingsScreen.kt to MiniAppsScreen.kt, iOS SettingsView.swift to MiniAppsView.swift.
+- Updated call sites, AGENTS references, wiki source references, and sync docs that previously treated SettingsScreen/SettingsView as the Mini Apps hub names.
+- Added QA evidence for the Home settings / Mini Apps responsibility split, including Web build/wiki lint, Android real-device passkey export, iOS build, and security behavior.
+- Source: android/app/src/main/kotlin/io/nurunuru/app/ui/screens/MiniAppsScreen.kt, ios/NuruNuru/Views/Screens/MiniAppsView.swift, docs/wiki/quality/qa-2026-06-02.md.
+
 # null--nostr LLM Wiki Log
+
+## [2026-06-02] change | Move account and security settings to Home settings
+
+- Web / Android / iOS now route login status and security controls through the Home tab gear settings instead of the Mini Apps tab.
+- Mini Apps surfaces no longer render login status, logout, auto-sign, or nsec export controls; they remain focused on app search/favorites/categories/details.
+- Added shared account/security components for Web (AccountSecuritySettings.js), Android (AccountSecuritySettings.kt), and iOS (AccountSecuritySettingsView.swift).
+- iOS AppSettingsView is now its own screen file and is presented with fullScreenCover; nsec text is privacySensitive and cleared on disappear/background.
+- Android Home settings uses the shared account/security Compose section and applies dynamic FLAG_SECURE while nsec is visible.
+- Source: components/SettingsModal.js, components/MiniAppTab.js, components/AccountSecuritySettings.js, android/app/src/main/kotlin/io/nurunuru/app/ui/screens/MainScreen.kt, android/app/src/main/kotlin/io/nurunuru/app/ui/screens/MiniAppsScreen.kt, android/app/src/main/kotlin/io/nurunuru/app/ui/components/AccountSecuritySettings.kt, ios/NuruNuru/Views/Screens/MainTabView.swift, ios/NuruNuru/Views/Screens/AppSettingsView.swift, ios/NuruNuru/Views/Screens/MiniAppsView.swift, ios/NuruNuru/Views/Components/AccountSecuritySettingsView.swift.
 
 ## [2026-06-01] fix | Account-scoped iOS Rust FFI MLS DB paths
 
@@ -74,7 +90,7 @@
 - Added sanitized per-helper statuses for the iOS Rust FFI read-only diagnostics so group-count and self-update-count failures show safe UI states instead of raw Rust/UniFFI errors.
 - Added a manual refresh button and local check time inside the expanded セキュリティ設定 diagnostic row.
 - Scope remains read-only only: no signing, publishing, key generation, private-key export, pubkey display, DB path display, or raw error display.
-- Source: `ios/NuruNuru/Data/NostrRepository.swift`, `ios/NuruNuru/Views/Screens/SettingsView.swift`, `ios/GUARDRAILS.md`, `docs/wiki/architecture.md`.
+- Source: `ios/NuruNuru/Data/NostrRepository.swift`, `ios/NuruNuru/Views/Screens/MiniAppsView.swift`, `ios/GUARDRAILS.md`, `docs/wiki/architecture.md`.
 
 ## [2026-06-01] qa | iOS Rust FFI Phase 1.1 read-only diagnostics PASS
 
@@ -87,21 +103,21 @@
 
 - Extended the iOS Rust FFI Settings diagnostic with two additional read-only MLS checks: mlsListGroups() count and mlsGroupsNeedingSelfUpdate(thresholdSecs:) count.
 - The diagnostic remains inside expanded セキュリティ設定 and still does not add signing, publishing, key generation, private-key export, pubkey display, or DB path display.
-- Source: ios/NuruNuru/Data/NostrRepository.swift, ios/NuruNuru/Views/Screens/SettingsView.swift, ios/GUARDRAILS.md, docs/wiki/architecture.md.
+- Source: ios/NuruNuru/Data/NostrRepository.swift, ios/NuruNuru/Views/Screens/MiniAppsView.swift, ios/GUARDRAILS.md, docs/wiki/architecture.md.
 
 ## [2026-06-01] implementation | iOS Rust FFI Phase 1 diagnostic confirmed
 
 - Confirmed iOS Rust FFI Phase 1 live path from Settings: mlsIsEncrypted() -> Bool? reports MLS DB: 暗号化済み.
 - Moved the Rust FFI diagnostic row into the expanded セキュリティ設定 section so the Mini Apps header stays user-facing and less technical.
 - Scope remains read-only only: no signing, publishing, key generation, private-key export, pubkey display, or DB path display.
-- Source: ios/NuruNuru/Data/NostrRepository.swift, ios/NuruNuru/Views/Screens/SettingsView.swift, ios/GUARDRAILS.md, docs/wiki/architecture.md.
+- Source: ios/NuruNuru/Data/NostrRepository.swift, ios/NuruNuru/Views/Screens/MiniAppsView.swift, ios/GUARDRAILS.md, docs/wiki/architecture.md.
 
 ## [2026-06-01] implementation | iOS Rust FFI Phase 1 read-only diagnostic
 
 - Added a minimal iOS Settings diagnostic that calls mlsIsEncrypted() -> Bool? through NostrRepository and MlsFFIBridge.
 - The diagnostic reports only encrypted / plaintext / unavailable state and does not add signing, publishing, key generation, or private-key export.
 - Documented Phase 1 guardrails in ios/GUARDRAILS.md and the architecture wiki.
-- Source: ios/NuruNuru/Data/NostrRepository.swift, ios/NuruNuru/Views/Screens/SettingsView.swift, ios/GUARDRAILS.md, docs/wiki/architecture.md.
+- Source: ios/NuruNuru/Data/NostrRepository.swift, ios/NuruNuru/Views/Screens/MiniAppsView.swift, ios/GUARDRAILS.md, docs/wiki/architecture.md.
 
 ## [2026-06-01] strategy-decision | ThemaDAY management meeting confirms onboarding-first June plan
 
@@ -589,7 +605,7 @@ LLM Wiki の時系列ログです。追記専用として扱います。
   - `LoginView` の初期ボタン群に「パスキーでログイン」を追加し、`AuthViewModel.loginWithPasskey()` に接続。
 - ミニアプリタブ > セキュリティ設定で nosskey ユーザーの秘密鍵取得ができない問題を修正。
   - `AuthViewModel.getNsecForCurrentAccount() async` を追加。`loginMethod == "nosskey"` の場合は Passkey 認証で PRF secret を導出し、nsec encode 後に secret を zeroize。
-  - `SettingsView` の秘密鍵表示を async 化し、「取得中…」表示を追加。
+  - `MiniAppsView` の秘密鍵表示を async 化し、「取得中…」表示を追加。
 - 検証: iOS Simulator build OK (`xcodebuild ... build`, exit 0)。
 
 ## [2026-05-24] fix | Android Passkey RP ID and debug assetlinks for real-device test
@@ -635,7 +651,7 @@ LLM Wiki の時系列ログです。追記専用として扱います。
 - ログアウト後の passkey login を維持するため、`logout()` で `NosskeyKeyInfo` を削除しないよう変更。
 - ミニアプリ > セキュリティ設定の nsec export を nosskey 対応。
   - `AuthViewModel.getNsecForCurrentAccount(activity)` を追加。nosskey 時は CredentialManager/PRF 認証で secret を導出し、nsec encode 後に zeroize。
-  - `SettingsScreen.SecuritySettingsSection` を async export に変更し、「取得中…」表示を追加。
+  - `MiniAppsScreen.SecuritySettingsSection` を async export に変更し、「取得中…」表示を追加。
 - Amber ログイン後クラッシュの原因になり得る `prefs.loginMethod == null` を修正。`loginWithAmber()` で `prefs.loginMethod = "amber"` を保存し、`buildSigner()` が `ExternalSigner` を選べるようにした。
 - 検証: `cd android && ./gradlew assembleDebug` 成功。実機はこの時点で adb 接続が切れていたため再インストールは未実施。
 
@@ -645,7 +661,7 @@ LLM Wiki の時系列ログです。追記専用として扱います。
 - iOS:
   - `NostrRepository.clearSessionCachesForLogout()` を追加し、NostrCache、quote/bookmark cache、in-flight tasks を明示的に破棄。
   - `MainTabView.performLogout()` を追加し、ログアウト前に repository cache clear + relay disconnect を実行してから `AuthViewModel.logout()` に遷移。
-  - `SettingsView` のログアウト操作も `MainTabView` から渡された cleanup-aware logout closure を使うよう変更。
+  - `MiniAppsView` のログアウト操作も `MainTabView` から渡された cleanup-aware logout closure を使うよう変更。
 - Android:
   - `MainScreen` に `DisposableEffect(nostrClient)` を追加し、MainScreen が composition から外れる logout 時に relay socket を即時 disconnect。
   - `AuthViewModel.logout()` 既存の NostrCache/Rust DB clear と合わせて、再起動なしでも旧セッションが残りにくくした。
@@ -663,7 +679,7 @@ LLM Wiki の時系列ログです。追記専用として扱います。
   - `app.nostrCache.clearAll()`
   - `app.clearPrewarmedClient()`
 - `TimelineViewModel` / `HomeViewModel` / `TalkViewModel` / `ConnectionViewModel` の Compose `viewModel()` に `pubkeyHex + loginMethod` key を付与し、アカウント切替時に旧 ViewModel instance を再利用しないようにした。
-- MiniApp `SettingsScreen` のログアウトも `MainScreen` から渡された cleanup-aware logout closure を使うよう変更。
+- MiniApp `MiniAppsScreen` のログアウトも `MainScreen` から渡された cleanup-aware logout closure を使うよう変更。
 - `NuruNuruApp.clearPrewarmedClient()` を追加し、Amber/external signer 用 prewarmed client を logout 時に明示 disconnect + null reset。
 - 検証: `cd android && ./gradlew assembleDebug` 成功。接続済み Android 実機 `9DNBNF45Y9AQFEY9` に install + launch 済み、起動直後 crash なし。
 

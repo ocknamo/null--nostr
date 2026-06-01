@@ -1,9 +1,6 @@
 package io.nurunuru.app.ui.screens
 
 import android.Manifest
-import android.app.Activity
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -59,7 +56,6 @@ import android.location.Location
 import kotlin.math.roundToInt
 import android.location.LocationManager
 import io.nurunuru.app.data.*
-import io.nurunuru.app.data.NostrKeyUtils
 import io.nurunuru.app.data.RelayDiscovery
 import io.nurunuru.app.data.models.DEFAULT_RELAYS
 import io.nurunuru.app.data.models.Nip65Relay
@@ -79,7 +75,6 @@ import io.nurunuru.app.ui.miniapps.ScrollsApp
 import io.nurunuru.app.ui.miniapps.VanishRequest
 import io.nurunuru.app.ui.theme.LineGreen
 import io.nurunuru.app.ui.theme.LocalNuruColors
-import io.nurunuru.app.viewmodel.AuthViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -118,18 +113,15 @@ fun MiniAppData.getIcon(): ImageVector {
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun SettingsScreen(
-    authViewModel: AuthViewModel,
+fun MiniAppsScreen(
     repository: NostrRepository,
     prefs: AppPreferences,
     pubkeyHex: String,
     pictureUrl: String?,
     onExternalAppOpenChanged: (Boolean) -> Unit = {},
-    onMlsCacheCleared: () -> Unit = {},
-    onLogout: (() -> Unit)? = null
+    onMlsCacheCleared: () -> Unit = {}
 ) {
     val nuruColors = LocalNuruColors.current
-    var showLogoutDialog by remember { mutableStateOf(false) }
     val categoryList = listOf("all" to "すべて", "entertainment" to "エンタメ", "tools" to "ツール", "others" to "その他")
     val pagerState = rememberPagerState { categoryList.size }
     val coroutineScope = rememberCoroutineScope()
@@ -144,7 +136,6 @@ fun SettingsScreen(
     }
     var editingApp by remember { mutableStateOf<MiniAppData?>(null) }
 
-    val npub = remember(pubkeyHex) { NostrKeyUtils.encodeNpub(pubkeyHex) ?: pubkeyHex }
     val favorites = remember { mutableStateListOf<String>().apply { addAll(prefs.favoriteApps) } }
 
     val allApps = remember {
@@ -382,56 +373,6 @@ fun SettingsScreen(
                     .offset { IntOffset(0, headerOffsetPx.floatValue.roundToInt()) }
                     .background(MaterialTheme.colorScheme.background)
             ) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Surface(
-                        color = nuruColors.bgSecondary,
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Surface(color = LineGreen, shape = CircleShape, modifier = Modifier.size(40.dp)) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(NuruIcons.Lock, null, tint = Color.White, modifier = Modifier.size(20.dp))
-                                }
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    if (prefs.isExternalSigner) "外部署名でログイン中" else "ログイン中",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    npub.take(8) + "..." + npub.takeLast(8),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = nuruColors.textTertiary
-                                )
-                            }
-                            Surface(
-                                color = Color.Red.copy(alpha = 0.1f),
-                                shape = CircleShape,
-                                modifier = Modifier.clickable { showLogoutDialog = true }
-                            ) {
-                                Text(
-                                    "ログアウト",
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                    fontSize = 12.sp,
-                                    color = Color.Red,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
-                    }
-                    if (!prefs.isExternalSigner) {
-                        SecuritySettingsSection(authViewModel = authViewModel, prefs = prefs, pubkeyHex = pubkeyHex)
-                    }
-                }
                 Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
                     OutlinedTextField(
                         value = searchQuery,
@@ -538,164 +479,8 @@ fun SettingsScreen(
         }
     }
 
-    // Logout confirmation dialog
-    if (showLogoutDialog) {
-        AlertDialog(
-            onDismissRequest = { showLogoutDialog = false },
-            title = { Text("ログアウト") },
-            text = { Text("ログアウトします。秘密鍵はこのデバイスから削除されます。") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showLogoutDialog = false
-                        onLogout?.invoke() ?: run {
-                            repository.clearAllCache()
-                            authViewModel.logout()
-                        }
-                    },
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error
-                    )
-                ) { Text("ログアウト") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showLogoutDialog = false }) { Text("キャンセル") }
-            },
-            containerColor = MaterialTheme.colorScheme.surface
-        )
-    }
+
 }
-}
-
-@Composable
-private fun SecuritySettingsSection(authViewModel: AuthViewModel, prefs: AppPreferences, pubkeyHex: String) {
-    val nuruColors = LocalNuruColors.current
-    val context = LocalContext.current
-    var isExpanded by remember { mutableStateOf(false) }
-    var showNsec by remember { mutableStateOf(false) }
-    var exportedNsec by remember { mutableStateOf<String?>(null) }
-    var isExportingNsec by remember { mutableStateOf(false) }
-    var autoSignEnabled by remember { mutableStateOf(prefs.autoSignEnabled) }
-    val coroutineScope = rememberCoroutineScope()
-
-    Surface(
-        color = nuruColors.bgSecondary,
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth().clickable { isExpanded = !isExpanded },
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Icon(Icons.Outlined.Lock, null, tint = nuruColors.textSecondary, modifier = Modifier.size(20.dp))
-                Text("セキュリティ設定", modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                Icon(
-                    if (isExpanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
-                    null,
-                    tint = nuruColors.textTertiary
-                )
-            }
-
-            AnimatedVisibility(visible = isExpanded) {
-                Column(modifier = Modifier.padding(top = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    // Auto Sign Toggle
-                    Surface(
-                        color = nuruColors.bgTertiary,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("自動署名", fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                                Text(
-                                    if (autoSignEnabled) "投稿時に認証なし" else "毎回認証を要求",
-                                    fontSize = 12.sp,
-                                    color = nuruColors.textTertiary
-                                )
-                            }
-                            Switch(
-                                checked = autoSignEnabled,
-                                onCheckedChange = {
-                                    autoSignEnabled = it
-                                    prefs.autoSignEnabled = it
-                                },
-                                colors = SwitchDefaults.colors(checkedTrackColor = LineGreen)
-                            )
-                        }
-                    }
-
-                    // Show Nsec Button
-                    Button(
-                        onClick = {
-                            if (showNsec) {
-                                showNsec = false
-                                exportedNsec = null
-                            } else {
-                                showNsec = true
-                                isExportingNsec = true
-                                coroutineScope.launch {
-                                    val nsec = authViewModel.getNsecForCurrentAccount(context as? Activity)
-                                    exportedNsec = nsec
-                                    isExportingNsec = false
-                                }
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = nuruColors.bgTertiary, contentColor = MaterialTheme.colorScheme.onSurface),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text(if (showNsec) "秘密鍵を隠す" else "秘密鍵を表示", fontSize = 14.sp)
-                    }
-
-                    if (showNsec) {
-                        val nsec = if (isExportingNsec) "取得中…" else (exportedNsec ?: "取得できません")
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Surface(
-                                color = Color.Red.copy(alpha = 0.1f),
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Column(modifier = Modifier.padding(12.dp)) {
-                                    Text("⚠️ 警告: 秘密鍵の取り扱い", color = Color.Red, fontWeight = FontWeight.Bold, fontSize = 10.sp)
-                                    Text(
-                                        "この鍵はあなたの身元を証明する唯一の手段です。他人に教えたり、安全でない場所に保存したりしないでください。",
-                                        color = Color.Red.copy(alpha = 0.8f),
-                                        fontSize = 10.sp,
-                                        lineHeight = 14.sp
-                                    )
-                                }
-                            }
-                            Surface(
-                                color = nuruColors.bgTertiary,
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Text(text = nsec, modifier = Modifier.weight(1f), fontSize = 12.sp, color = nuruColors.textPrimary)
-                                    IconButton(onClick = {
-                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                        clipboard.setPrimaryClip(ClipData.newPlainText("nsec", nsec))
-                                    }) {
-                                        Icon(Icons.Outlined.ContentCopy, null, modifier = Modifier.size(16.dp), tint = nuruColors.textSecondary)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -845,8 +630,8 @@ private fun MiniAppDetailView(
         Box(modifier = Modifier.padding(padding).fillMaxSize()) {
             when (app.id) {
                 "zap" -> ZapSettings(prefs = prefs)
-                "relay" -> RelaySettingsViewContent(prefs = prefs, repository = repository)
-                "upload" -> UploadSettingsView(prefs = prefs)
+                "relay" -> RelayMiniAppsViewContent(prefs = prefs, repository = repository)
+                "upload" -> UploadMiniAppsView(prefs = prefs)
                 "badge" -> BadgeSettings(pubkey = pubkeyHex, repository = repository)
                 "emoji" -> EmojiSettings(pubkey = pubkeyHex, repository = repository)
                 "mute" -> MuteList(pubkey = pubkeyHex, repository = repository)
@@ -871,7 +656,7 @@ private fun MiniAppDetailView(
 }
 
 @Composable
-private fun UploadSettingsView(prefs: AppPreferences) {
+private fun UploadMiniAppsView(prefs: AppPreferences) {
     val nuruColors = LocalNuruColors.current
     var uploadServer by remember { mutableStateOf(prefs.uploadServer) }
     var customBlossomUrl by remember { mutableStateOf("") }
@@ -1005,7 +790,7 @@ private fun UploadSettingsView(prefs: AppPreferences) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun RelaySettingsViewContent(prefs: AppPreferences, repository: NostrRepository) {
+private fun RelayMiniAppsViewContent(prefs: AppPreferences, repository: NostrRepository) {
     val context = LocalContext.current
     val nuruColors = LocalNuruColors.current
     val coroutineScope = rememberCoroutineScope()

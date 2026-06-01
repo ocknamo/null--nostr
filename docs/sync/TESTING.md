@@ -100,8 +100,8 @@
 | プラットフォーム | テスト | 場所 |
 |---|---|---|
 | Web | `vitest`: MiniAppTab.js が export する order 配列が fixture と一致 | `src/__tests__/miniapps.test.ts` |
-| Android | (既存維持) JUnit: `SettingsScreen` 内の order 定数が fixture と一致 | `androidTest/.../SettingsScreenOrderTest.kt` |
-| iOS | (既存維持) XCTest: `SettingsView` 内の同等定数 | `NuruNuruTests/SettingsOrderTests.swift` |
+| Android | (既存維持) JUnit: `MiniAppsScreen` 内の order 定数が fixture と一致 | `androidTest/.../MiniAppsScreenOrderTest.kt` |
+| iOS | (既存維持) XCTest: `MiniAppsView` 内の同等定数 | `NuruNuruTests/SettingsOrderTests.swift` |
 
 ### S7 — SignUp UX (リージョン選択 + geohash)
 

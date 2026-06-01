@@ -90,7 +90,7 @@ null--nostr は Web (Next.js PWA) / Android (Kotlin + Rust FFI) / iOS (Swift + U
 | **Recommendation: Following 優先 + 背景ロード** | ✅ `TimelineViewModel` | ✅ `TimelineViewModel` | ❓ |
 | **誕生日通知 (kind 0 birthday)** | ✅ `AuthViewModel`, `NotificationModal` | 部分 (`HomeViewModel` のみ) → S5 で完成 | ❓ Web は実装あり/なし要確認 |
 | **相互フォロー Zap 通知バッジ** | ✅ | ✅ | ❓ |
-| **MiniApp タブ: カテゴリ + フルスクリーン** | ✅ `SettingsScreen.kt` (エンタメ/ツール/その他) | ✅ `SettingsView.swift` + `Views/MiniApps/` | ❓ Web 順序が一致しているか要確認 |
+| **MiniApp タブ: カテゴリ + フルスクリーン** | ✅ `MiniAppsScreen.kt` (エンタメ/ツール/その他) | ✅ `MiniAppsView.swift` + `Views/MiniApps/` | ❓ Web 順序が一致しているか要確認 |
 | **SignUp: 手動リージョン + relay 推奨** | ✅ `SignUpModal.kt` + `GeohashUtils.kt` | 部分 (要 `SignUpView.swift` 新設) | ❓ |
 | **NIP-EE (MLS) Talk** | ✅ `TalkViewModel` 経由 `nurunuru-ffi` | ✅ 同様 | ❌ Web 未対応 (調査して優先度判定) |
 | **ProofMode (OpenPGP) + Divine 6.3s ループ** | ✅ `ProofModeManager.kt` + `DivineVideoRecorder.kt` | **対象外** (App Store 審査) | ❓ Web に類似があるか要確認 |
@@ -184,7 +184,7 @@ null--nostr は Web (Next.js PWA) / Android (Kotlin + Rust FFI) / iOS (Swift + U
 | `ui/screens/HomeScreen.kt` + `viewmodel/HomeViewModel.kt` | `Views/Screens/HomeView.swift` + `ViewModels/HomeViewModel.swift` | `components/HomeTab.js` |
 | `ui/components/PostModal.kt` | `Views/Sheets/PostSheet.swift` | `components/PostModal.js` |
 | `ui/components/NotificationModal.kt` | `Views/Sheets/NotificationSheet.swift` | `components/NotificationModal.js` |
-| `ui/screens/SettingsScreen.kt` + `ui/miniapps/*` | `Views/Screens/SettingsView.swift` + `Views/MiniApps/*` | `components/MiniAppTab.js` + `miniapps/*` |
+| `ui/screens/MiniAppsScreen.kt` + `ui/miniapps/*` | `Views/Screens/MiniAppsView.swift` + `Views/MiniApps/*` | `components/MiniAppTab.js` + `miniapps/*` |
 | `ui/components/ReactionEmojiPicker.kt` | (該当 picker) | `components/ReactionEmojiPicker.js` |
 | `ui/components/SignUpModal.kt` | `Views/Screens/LoginView.swift` (or 新設 SignUpView) | `components/SignUpModal.js` |
 

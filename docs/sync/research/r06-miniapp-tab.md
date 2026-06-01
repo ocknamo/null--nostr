@@ -4,7 +4,7 @@
 > 同期方向: Native → Web
 
 ## 1. ファイル
-- Native (Android): ui/screens/SettingsScreen.kt, ui/miniapps/*
+- Native (Android): ui/screens/MiniAppsScreen.kt, ui/miniapps/*
 - Native (iOS): (該当ファイルを記入)
 - Web 現状: (該当ファイルを記入)
 - 関連 commit/version: Android v1.4.X / iOS 1.0.4 / Web v1.0.0

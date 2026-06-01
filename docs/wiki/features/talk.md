@@ -44,7 +44,7 @@ Talk is the messaging area. Current native direction is Marmot MLS / NIP-EE-styl
 
 - `android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepositoryTalk.kt`
 - `android/app/src/main/kotlin/io/nurunuru/app/data/models/NostrModels.kt`
-- `android/app/src/main/kotlin/io/nurunuru/app/ui/screens/SettingsScreen.kt`
+- `android/app/src/main/kotlin/io/nurunuru/app/ui/screens/MiniAppsScreen.kt`
 - `ios/NuruNuru/Data/NostrRepository+Talk.swift`
 - `ios/NuruNuru/ViewModels/TalkViewModel.swift`
 - `rust-engine/nurunuru-core/src/mls.rs`

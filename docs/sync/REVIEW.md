@@ -68,8 +68,8 @@ connection-manager の修正は Web 固有の可能性があり、Rust/nostr-sdk
 競合しやすいファイル例:
 
 - Web: `components/TimelineTab.js`, `components/NotificationModal.js`, `components/MiniAppTab.js`, `components/PostModal.js`
-- Android: `ui/components/PostModal.kt` (S10B/D), `SettingsScreen.kt` (S10D)
-- iOS: `Views/Sheets/PostSheet.swift` (S10C/D), `SettingsView.swift` (S10D)
+- Android: `ui/components/PostModal.kt` (S10B/D), `MiniAppsScreen.kt` (S10D)
+- iOS: `Views/Sheets/PostSheet.swift` (S10C/D), `MiniAppsView.swift` (S10D)
 
 推奨: PLAN に「同一ファイルを触るセッションは直列化する」注意を追加する。
 
