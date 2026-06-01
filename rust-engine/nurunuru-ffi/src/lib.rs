@@ -63,6 +63,39 @@ fn get_db_path() -> Result<String, NuruNuruFfiError> {
     })
 }
 
+/// Build a generic unsigned Nostr event from FFI-safe parts.
+fn build_unsigned_event(
+    creator_pubkey_hex: String,
+    kind: u32,
+    content: String,
+    tags: Vec<Vec<String>>,
+    created_at: Option<u64>,
+) -> Result<nostr::UnsignedEvent, NuruNuruFfiError> {
+    let creator = nostr::PublicKey::from_hex(&creator_pubkey_hex)
+        .map_err(|e| NuruNuruFfiError::KeyError(e.to_string()))?;
+    let parsed_tags = parse_ffi_tags(tags)?;
+    let event_kind = nostr::Kind::from(kind as u16);
+    let mut builder = nostr::EventBuilder::new(event_kind, &content).tags(parsed_tags);
+    if let Some(ts) = created_at {
+        builder = builder.custom_created_at(nostr::Timestamp::from(ts));
+    }
+    Ok(builder.build(creator))
+}
+
+fn sign_event_with_keys(
+    keys: &nostr::Keys,
+    kind: u32,
+    content: String,
+    tags: Vec<Vec<String>>,
+    created_at: Option<u64>,
+) -> Result<nostr::Event, NuruNuruFfiError> {
+    let unsigned =
+        build_unsigned_event(keys.public_key().to_hex(), kind, content, tags, created_at)?;
+    unsigned
+        .sign_with_keys(keys)
+        .map_err(|e| NuruNuruFfiError::EngineError(format!("sign event: {e}")))
+}
+
 // ─── Client ────────────────────────────────────────────────────────────────
 
 /// FFI-safe wrapper around the NuruNuru engine.
@@ -454,6 +487,39 @@ impl NuruNuruClient {
             .block_on(self.engine.publish_raw_event(event))
             .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))?;
         Ok(eid.to_hex())
+    }
+
+    /// Publish an already-signed Nostr event JSON to specific relays only.
+    pub fn publish_raw_event_to_relays(
+        &self,
+        event_json: String,
+        relay_urls: Vec<String>,
+    ) -> Result<String, NuruNuruFfiError> {
+        let event: nostr::Event = serde_json::from_str(&event_json)
+            .map_err(|e| NuruNuruFfiError::EngineError(format!("Invalid event JSON: {e}")))?;
+        let eid = self
+            .runtime
+            .block_on(self.engine.publish_raw_event_to_relays(event, relay_urls))
+            .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))?;
+        Ok(eid.to_hex())
+    }
+
+    /// Sign a Nostr event with this client's internal key and return signed JSON.
+    pub fn sign_event(
+        &self,
+        kind: u32,
+        content: String,
+        tags: Vec<Vec<String>>,
+        created_at: Option<u64>,
+    ) -> Result<String, NuruNuruFfiError> {
+        let sk = self.secret_key.as_ref().ok_or_else(|| {
+            NuruNuruFfiError::EngineError(
+                "sign_event requires an internal signer client".to_string(),
+            )
+        })?;
+        let keys = nostr::Keys::new(sk.clone());
+        let event = sign_event_with_keys(&keys, kind, content, tags, created_at)?;
+        serde_json::to_string(&event).map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
     }
 
     // ─── Timeline fetch ────────────────────────────────────────────────────
@@ -1231,10 +1297,7 @@ impl NuruNuruClient {
     }
 
     /// Issue #183 diagnostic: number of cached Kind-445 wrappers for a group.
-    pub fn mls_replay_cache_size(
-        &self,
-        group_id_hex: String,
-    ) -> Result<u64, NuruNuruFfiError> {
+    pub fn mls_replay_cache_size(&self, group_id_hex: String) -> Result<u64, NuruNuruFfiError> {
         self.runtime
             .block_on(self.engine.mls_replay_cache_size(&group_id_hex))
             .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
@@ -1694,6 +1757,14 @@ fn core_profile_to_ffi(p: nurunuru_core::types::UserProfile) -> FfiUserProfile {
 // ─── FFI-safe types ────────────────────────────────────────────────────────
 
 #[derive(uniffi::Record)]
+pub struct FfiGeneratedKeypair {
+    pub private_key_hex: String,
+    pub nsec: String,
+    pub public_key_hex: String,
+    pub npub: String,
+}
+
+#[derive(uniffi::Record)]
 pub struct FfiUserProfile {
     pub name: String,
     pub display_name: String,
@@ -1886,9 +1957,7 @@ fn core_encrypted_msg_to_ffi(
     }
 }
 
-fn core_catch_up_report_to_ffi(
-    r: nurunuru_core::types::MlsCatchUpReport,
-) -> FfiMlsCatchUpReport {
+fn core_catch_up_report_to_ffi(r: nurunuru_core::types::MlsCatchUpReport) -> FfiMlsCatchUpReport {
     FfiMlsCatchUpReport {
         group_id_hex: r.group_id_hex,
         epoch_before: r.epoch_before,
@@ -1924,6 +1993,54 @@ fn core_pending_welcome_to_ffi(p: nurunuru_core::types::PendingWelcome) -> FfiPe
         member_count: p.member_count,
         is_dm: p.is_dm,
     }
+}
+
+/// Generate a fresh Nostr keypair for platform onboarding flows.
+#[uniffi::export]
+pub fn generate_keypair() -> Result<FfiGeneratedKeypair, NuruNuruFfiError> {
+    use nostr::nips::nip19::ToBech32;
+
+    let keys = nostr::Keys::generate();
+    let secret_key = keys.secret_key();
+    let public_key = keys.public_key();
+    let private_key_hex = secret_key.to_secret_hex();
+    let nsec = secret_key
+        .to_bech32()
+        .map_err(|e| NuruNuruFfiError::KeyError(e.to_string()))?;
+    let public_key_hex = public_key.to_hex();
+    let npub = public_key
+        .to_bech32()
+        .map_err(|e| NuruNuruFfiError::KeyError(e.to_string()))?;
+
+    Ok(FfiGeneratedKeypair {
+        private_key_hex,
+        nsec,
+        public_key_hex,
+        npub,
+    })
+}
+
+/// Derive an x-only public key hex from a secret key (hex or nsec).
+#[uniffi::export]
+pub fn derive_public_key_from_secret(secret_key_hex: String) -> Result<String, NuruNuruFfiError> {
+    let keys = nostr::Keys::parse(&secret_key_hex)
+        .map_err(|e| NuruNuruFfiError::KeyError(e.to_string()))?;
+    Ok(keys.public_key().to_hex())
+}
+
+/// Sign a generic Nostr event with a supplied secret key and return signed JSON.
+#[uniffi::export]
+pub fn sign_event_json(
+    secret_key_hex: String,
+    kind: u32,
+    content: String,
+    tags: Vec<Vec<String>>,
+    created_at: Option<u64>,
+) -> Result<String, NuruNuruFfiError> {
+    let keys = nostr::Keys::parse(&secret_key_hex)
+        .map_err(|e| NuruNuruFfiError::KeyError(e.to_string()))?;
+    let event = sign_event_with_keys(&keys, kind, content, tags, created_at)?;
+    serde_json::to_string(&event).map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
 }
 
 /// HKDF-SHA256 over the secret key (hex or nsec) → 32-byte key for

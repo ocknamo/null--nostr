@@ -254,12 +254,11 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tmpdir");
         let db_base = tmp.path().join("nostrdb_ndb");
         let mls_path = mls_db_path_for(db_base.to_str().unwrap());
-        let dummy_pubkey =
-            "0000000000000000000000000000000000000000000000000000000000000001";
+        let dummy_pubkey = "0000000000000000000000000000000000000000000000000000000000000001";
 
         let key = [0x42u8; 32];
-        let mgr = MlsManager::new_with_key(&mls_path, dummy_pubkey, key)
-            .expect("encrypted MLS open");
+        let mgr =
+            MlsManager::new_with_key(&mls_path, dummy_pubkey, key).expect("encrypted MLS open");
         assert!(mgr.is_encrypted());
         drop(mgr); // close handle so we can re-read the file bytes
 
@@ -1299,18 +1298,17 @@ impl MlsManager {
     /// log a diagnostic, but callers that just want best-effort caching
     /// should treat them as recoverable.
     fn ensure_replay_cache(&self) -> Result<()> {
-        let mut guard = self.replay_cache.lock().map_err(|_| {
-            NuruNuruError::MlsError("replay_cache mutex poisoned".to_string())
-        })?;
+        let mut guard = self
+            .replay_cache
+            .lock()
+            .map_err(|_| NuruNuruError::MlsError("replay_cache mutex poisoned".to_string()))?;
         if guard.is_some() {
             return Ok(());
         }
-        let conn = rusqlite::Connection::open(&self.replay_cache_path).map_err(|e| {
-            NuruNuruError::MlsError(format!("replay_cache open: {e}"))
-        })?;
-        conn.execute_batch(REPLAY_CACHE_SCHEMA).map_err(|e| {
-            NuruNuruError::MlsError(format!("replay_cache schema: {e}"))
-        })?;
+        let conn = rusqlite::Connection::open(&self.replay_cache_path)
+            .map_err(|e| NuruNuruError::MlsError(format!("replay_cache open: {e}")))?;
+        conn.execute_batch(REPLAY_CACHE_SCHEMA)
+            .map_err(|e| NuruNuruError::MlsError(format!("replay_cache schema: {e}")))?;
         *guard = Some(conn);
         Ok(())
     }
@@ -1334,9 +1332,10 @@ impl MlsManager {
         let created_at = event.created_at.as_secs() as i64;
         let group = group_id_hex.to_string();
 
-        let guard = self.replay_cache.lock().map_err(|_| {
-            NuruNuruError::MlsError("replay_cache mutex poisoned".to_string())
-        })?;
+        let guard = self
+            .replay_cache
+            .lock()
+            .map_err(|_| NuruNuruError::MlsError("replay_cache mutex poisoned".to_string()))?;
         let conn = guard
             .as_ref()
             .ok_or_else(|| NuruNuruError::MlsError("replay_cache not initialised".to_string()))?;
@@ -1387,12 +1386,13 @@ impl MlsManager {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
         let cutoff = now - MLS_REPLAY_CACHE_TTL_SECS as i64;
-        let guard = self.replay_cache.lock().map_err(|_| {
-            NuruNuruError::MlsError("replay_cache mutex poisoned".to_string())
-        })?;
-        let conn = guard.as_ref().ok_or_else(|| {
-            NuruNuruError::MlsError("replay_cache not initialised".to_string())
-        })?;
+        let guard = self
+            .replay_cache
+            .lock()
+            .map_err(|_| NuruNuruError::MlsError("replay_cache mutex poisoned".to_string()))?;
+        let conn = guard
+            .as_ref()
+            .ok_or_else(|| NuruNuruError::MlsError("replay_cache not initialised".to_string()))?;
         let removed = conn
             .execute(
                 "DELETE FROM replay_cache WHERE cached_at < ?1",
@@ -1412,12 +1412,13 @@ impl MlsManager {
             return Ok(Vec::new());
         }
         self.ensure_replay_cache()?;
-        let guard = self.replay_cache.lock().map_err(|_| {
-            NuruNuruError::MlsError("replay_cache mutex poisoned".to_string())
-        })?;
-        let conn = guard.as_ref().ok_or_else(|| {
-            NuruNuruError::MlsError("replay_cache not initialised".to_string())
-        })?;
+        let guard = self
+            .replay_cache
+            .lock()
+            .map_err(|_| NuruNuruError::MlsError("replay_cache mutex poisoned".to_string()))?;
+        let conn = guard
+            .as_ref()
+            .ok_or_else(|| NuruNuruError::MlsError("replay_cache not initialised".to_string()))?;
         let mut stmt = conn
             .prepare(
                 "SELECT event_json FROM replay_cache \
@@ -1426,7 +1427,9 @@ impl MlsManager {
             )
             .map_err(|e| NuruNuruError::MlsError(format!("replay_cache prepare: {e}")))?;
         let rows = stmt
-            .query_map(rusqlite::params![group_id_hex], |row| row.get::<_, String>(0))
+            .query_map(rusqlite::params![group_id_hex], |row| {
+                row.get::<_, String>(0)
+            })
             .map_err(|e| NuruNuruError::MlsError(format!("replay_cache query: {e}")))?;
         let mut out = Vec::new();
         for row in rows {
@@ -1449,12 +1452,13 @@ impl MlsManager {
             return Ok(0);
         }
         self.ensure_replay_cache()?;
-        let guard = self.replay_cache.lock().map_err(|_| {
-            NuruNuruError::MlsError("replay_cache mutex poisoned".to_string())
-        })?;
-        let conn = guard.as_ref().ok_or_else(|| {
-            NuruNuruError::MlsError("replay_cache not initialised".to_string())
-        })?;
+        let guard = self
+            .replay_cache
+            .lock()
+            .map_err(|_| NuruNuruError::MlsError("replay_cache mutex poisoned".to_string()))?;
+        let conn = guard
+            .as_ref()
+            .ok_or_else(|| NuruNuruError::MlsError("replay_cache not initialised".to_string()))?;
         let count: u64 = conn
             .query_row(
                 "SELECT COUNT(1) FROM replay_cache WHERE group_id = ?1",
@@ -1623,7 +1627,8 @@ impl MlsManager {
                         // / proposal / commit-shape) stays in the pool until
                         // a later pass; another event may advance MDK enough
                         // to make it decryptable.
-                        let is_permanent = kind.starts_with("unhandled:Unprocessable:missing_h_tag")
+                        let is_permanent = kind
+                            .starts_with("unhandled:Unprocessable:missing_h_tag")
                             || kind.starts_with("unhandled:Unprocessable:group_id_mismatch")
                             || kind.starts_with("unhandled:Unprocessable:invalid_kind");
                         if is_permanent {
@@ -1677,7 +1682,8 @@ impl MlsManager {
 
         let status = if epoch_after > epoch_before && still_unprocessable == 0 {
             MlsCatchUpStatus::Recovered
-        } else if (epoch_after > epoch_before || commits_applied > 0
+        } else if (epoch_after > epoch_before
+            || commits_applied > 0
             || application_messages_applied > 0)
             && still_unprocessable > 0
         {

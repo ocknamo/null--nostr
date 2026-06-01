@@ -30,6 +30,15 @@ Android and iOS native Talk should remain compatible at the Marmot MLS protocol 
 | KeyPackage relay list | `10051` | `10051` | Marmot relay discovery. |
 | Legacy NIP-17 display | Deprecated/legacy | Not native Talk display | Do not confuse with Web helpers. |
 
+## iOS Phase 6 Rust FFI expansion
+
+The iOS Talk path now has Phase 6 wiring behind iosRustFfiTalkMlsEnabled: Rust engine-side Welcome and KeyPackage rotation subscriptions can be created and drained, signed raw MLS events can publish via Rust FFI, and disconnect cleans up Rust live subscription IDs. This supplements, rather than replaces, existing broad relay polling and repair/catch-up logic until Android to iOS interop QA passes with the flag enabled.
+
+
+## Phase 6 interop result
+
+Android ↔ iOS MLS interop passed with the iOS Rust Talk MLS path enabled. Phase 6 is complete from a milestone perspective. Keep the Swift relay polling / repair fallback paths until Phase 7 rollout has completed at least one release cycle.
+
 ## Source references
 
 - `android/app/src/main/kotlin/io/nurunuru/app/data/models/NostrModels.kt`

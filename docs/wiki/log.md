@@ -1,5 +1,108 @@
 # null--nostr LLM Wiki Log
 
+## [2026-06-01] fix | Account-scoped iOS Rust FFI MLS DB paths
+
+- User confirmed the post-account-switch Rust FFI issue is resolved.
+- Root cause: multiple nsec accounts used the same MLS SQLCipher DB base path while each account derives a different SQLCipher key from its nsec. Opening another account's encrypted DB with the active account key failed and surfaced as Rust FFI unavailable.
+- Fix: iOS Rust FFI DB base paths are now account-scoped as nurunuru_ndb_<pubkey>, so Rust derives an account-specific _mls.sqlite3 path.
+- ensureMlsClient() and ensureRustNostrClient() both use the active account's scoped DB path, including read-only fallback paths.
+
+## [2026-06-01] fix | iOS Rust FFI unavailable after Passkey/Nosskey account switch
+
+- Root cause: `ensureMlsClient()` treated all non-external sessions as nsec-backed internal signer sessions. Passkey/Nosskey sessions have `isExternalSigner=false` but intentionally keep no nsec in Keychain, so MLS FFI init returned nil and Settings showed `Rust FFI: 未接続`.
+- Fix: Passkey/Nosskey sessions now use the read-only encrypted MLS FFI constructor with a pubkey-scoped SQLCipher key, matching the NIP-46 external signer path. nsec sessions without an unlocked key also try this read-only fallback when `publicKeyHex` is available.
+- Logout clears pubkey-scoped MLS DB keys for both NIP-46 and Nosskey sessions.
+
+## [2026-06-01] fix | Rust FFI account-switch lifecycle reset and Phase 7 defaults
+
+- Fixed an iOS Rust FFI lifecycle issue where switching accounts could leave Settings diagnostics showing Rust FFI unavailable and reconnection attempts ineffective.
+- Added NostrRepository.resetSharedRustFfiForAccountSwitch() and call it on nsec login, external-signer login, registration completion, and logout.
+- ensureMlsClient() now reconnects same-account cached/shared clients before returning them; ensureRustNostrClient() tracks the account pubkey and discards stale write-path clients across account boundaries.
+- disconnect() now clears local and matching process-wide MLS FFI references, stops Rust MLS live subscriptions, and clears write-path client/account state.
+- Phase 7 rollout defaults are now ON for Rust signing, Rust publish, and Rust Talk MLS while retaining Settings fallback switches.
+- Verified iOS simulator build succeeds and Rust FFI contract tests/check pass.
+
+## [2026-06-01] qa | Phase 6 Talk MLS Android-iOS interop passed
+
+- User confirmed the Phase 6 Talk MLS QA checklist succeeded after enabling the Rust Talk MLS path.
+- Phase 6 is now considered complete: KeyPackage / Welcome / Kind 445 / repair-oriented fallback paths are wired, and Android ↔ iOS MLS interop passed.
+- Next milestone is Phase 7 rollout: default-on policy, fallback retention window, release gating, and documentation cleanup.
+
+## [2026-06-01] implementation | Phase 6 Talk MLS Rust FFI expansion started
+
+- Marked Phase 5 QA checklist complete based on user confirmation.
+- Added iosRustFfiTalkMlsEnabled rollout switch for Talk MLS Rust FFI expansion.
+- Extended MlsFFIBridge / live client with pollLiveEvents and stopLiveSubscription wrappers around existing Rust UniFFI live subscription APIs.
+- Added bounded Rust live subscription drain for Welcome and KeyPackage rotation events; existing relay polling remains the safety-net path.
+- Routed MLS discovery / kind:445 / Welcome signed raw JSON publishing through the Rust-aware raw publish helper when the Talk MLS flag is enabled, with existing Swift relay publish fallback otherwise.
+- Verified iOS simulator build succeeds after the Phase 6 wiring.
+
+## [2026-06-01] implementation | iOS Rust FFI Phase 4/5 signing and publish wiring
+
+- Added Settings security toggles for Rust keygen/signing/publish rollout.
+- Updated RustInternalSigner to prefer Rust client signing plus Rust NIP-04/NIP-44 helpers, keeping Swift fallback if the encrypted Rust client cannot initialize.
+- Kept NIP-46 and Passkey/Nosskey as platform signer paths while allowing Rust unsigned-event creation and signed raw publish.
+- Verified iOS simulator build succeeds and Rust FFI contract tests/check pass.
+- Phase 5 implementation wiring is complete; product completion still requires real-device QA with Rust signing/publish toggles enabled across major write paths.
+
+## [2026-06-01] implementation | iOS Rust FFI write-path wiring
+
+- Added Swift RustInternalSigner backed by Rust signEventJson for NIP-01 signing; NIP-04/NIP-44 remain Swift fallback methods.
+- Added feature flags in AppPreferences: Rust keygen default-on with fallback, Rust signing/publish default-off for staged rollout.
+- Wired NostrRepository.publishEventAndReturnSigned to optionally create unsigned events through Rust for platform signers, publish signed raw JSON through Rust FFI, and fall back to Swift NostrClient publishing.
+- Migrated nsec onboarding key generation to prefer Rust generateKeypair and fall back to Swift NostrKeyUtils.generateKeys.
+- Kept NIP-46 and Passkey/Nosskey authorization as platform-owned signer paths.
+- Verified iOS simulator build succeeds.
+
+## [2026-06-01] implementation | iOS Rust FFI Phase 2 keygen/sign/publish contracts
+
+- Added Rust FFI write-path contract APIs for the next Full iOS Rust FFI phase: generate_keypair, derive_public_key_from_secret, standalone sign_event_json, NuruNuruClient.sign_event, and NuruNuruClient.publish_raw_event_to_relays.
+- Added NuruNuruEngine.publish_raw_event_to_relays so a signed event JSON can be reused and targeted to selected relays without re-signing.
+- Added FfiGeneratedKeypair, generated Swift/Kotlin bindings, rebuilt the iOS XCFramework, and added a Rust integration contract test for keygen/derive/sign JSON.
+- iOS UI flows are not yet switched to these APIs; NIP-46 and Passkey/Nosskey remain platform signer paths.
+- Source: rust-engine/nurunuru-ffi/src/lib.rs, rust-engine/nurunuru-core/src/engine.rs, rust-engine/nurunuru-ffi/tests/phase2_contract.rs, rust-engine/nurunuru-ffi/ios/Sources/NuruNuru/nurunuru_ffi.swift, rust-engine/nurunuru-ffi/bindgen/kotlin-out/uniffi/nurunuru/nurunuru.kt.
+
+## [2026-06-01] qa | iOS Rust FFI Phase 1.2 diagnostic polish PASS
+
+- Manually confirmed Phase 1.2 iOS Settings diagnostic polish: sanitized read-only counts, local check time, and refresh behavior work inside expanded セキュリティ設定.
+- Confirmed no private key, pubkey, DB path, relay auth challenge, or raw Rust/UniFFI error is displayed.
+- Phase 1.2 is closed. Signing, publishing, key generation, private-key export, and broader Talk/MLS live-path migration remain out of scope.
+- QA record: docs/wiki/quality/qa-2026-06-01.md.
+
+## [2026-06-01] implementation | iOS Rust FFI Phase 1.2 diagnostic polish
+
+- Added sanitized per-helper statuses for the iOS Rust FFI read-only diagnostics so group-count and self-update-count failures show safe UI states instead of raw Rust/UniFFI errors.
+- Added a manual refresh button and local check time inside the expanded セキュリティ設定 diagnostic row.
+- Scope remains read-only only: no signing, publishing, key generation, private-key export, pubkey display, DB path display, or raw error display.
+- Source: `ios/NuruNuru/Data/NostrRepository.swift`, `ios/NuruNuru/Views/Screens/SettingsView.swift`, `ios/GUARDRAILS.md`, `docs/wiki/architecture.md`.
+
+## [2026-06-01] qa | iOS Rust FFI Phase 1.1 read-only diagnostics PASS
+
+- Manually confirmed the iOS Settings diagnostic inside expanded セキュリティ設定: `MLS DB: 暗号化済み / グループ 0件 / 更新待ち 0件`.
+- This confirms the Phase 1.1 read-only live FFI path for `mlsIsEncrypted()`, `mlsListGroups()` count, and `mlsGroupsNeedingSelfUpdate(thresholdSecs:)` count.
+- Phase 1.1 is closed. Signing, publishing, key generation, private-key export, and broader Talk/MLS live-path migration remain out of scope.
+- QA record: `docs/wiki/quality/qa-2026-06-01.md`.
+
+## [2026-06-01] implementation | iOS Rust FFI Phase 1.1 read-only diagnostics
+
+- Extended the iOS Rust FFI Settings diagnostic with two additional read-only MLS checks: mlsListGroups() count and mlsGroupsNeedingSelfUpdate(thresholdSecs:) count.
+- The diagnostic remains inside expanded セキュリティ設定 and still does not add signing, publishing, key generation, private-key export, pubkey display, or DB path display.
+- Source: ios/NuruNuru/Data/NostrRepository.swift, ios/NuruNuru/Views/Screens/SettingsView.swift, ios/GUARDRAILS.md, docs/wiki/architecture.md.
+
+## [2026-06-01] implementation | iOS Rust FFI Phase 1 diagnostic confirmed
+
+- Confirmed iOS Rust FFI Phase 1 live path from Settings: mlsIsEncrypted() -> Bool? reports MLS DB: 暗号化済み.
+- Moved the Rust FFI diagnostic row into the expanded セキュリティ設定 section so the Mini Apps header stays user-facing and less technical.
+- Scope remains read-only only: no signing, publishing, key generation, private-key export, pubkey display, or DB path display.
+- Source: ios/NuruNuru/Data/NostrRepository.swift, ios/NuruNuru/Views/Screens/SettingsView.swift, ios/GUARDRAILS.md, docs/wiki/architecture.md.
+
+## [2026-06-01] implementation | iOS Rust FFI Phase 1 read-only diagnostic
+
+- Added a minimal iOS Settings diagnostic that calls mlsIsEncrypted() -> Bool? through NostrRepository and MlsFFIBridge.
+- The diagnostic reports only encrypted / plaintext / unavailable state and does not add signing, publishing, key generation, or private-key export.
+- Documented Phase 1 guardrails in ios/GUARDRAILS.md and the architecture wiki.
+- Source: ios/NuruNuru/Data/NostrRepository.swift, ios/NuruNuru/Views/Screens/SettingsView.swift, ios/GUARDRAILS.md, docs/wiki/architecture.md.
+
 ## [2026-06-01] strategy-decision | ThemaDAY management meeting confirms onboarding-first June plan
 
 - Added `docs/wiki/strategy/themaday-2026-06-01-management.md` for the management meeting and leader-hat alignment.

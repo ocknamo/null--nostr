@@ -233,11 +233,7 @@ impl NuruNuruEngine {
     /// inject the SQLCipher key before the first `bind_mls_for_pubkey`
     /// invocation. The legacy `set_mls_db_key` setter cannot retrofit a
     /// client whose ctor already called `login()` internally.
-    pub async fn login_with_mls_db_key(
-        &self,
-        pubkey: PublicKey,
-        key: [u8; 32],
-    ) -> Result<()> {
+    pub async fn login_with_mls_db_key(&self, pubkey: PublicKey, key: [u8; 32]) -> Result<()> {
         *self.mls_db_key.write().await = Some(key);
         *self.mls.write().await = None;
         self.login(pubkey).await
@@ -1186,6 +1182,18 @@ impl NuruNuruEngine {
         Ok(output.val)
     }
 
+    /// Publish an already-signed Nostr event to specific relays only.
+    pub async fn publish_raw_event_to_relays(
+        &self,
+        event: Event,
+        relay_urls: Vec<String>,
+    ) -> Result<EventId> {
+        let urls: Vec<nostr::types::Url> =
+            relay_urls.iter().filter_map(|u| u.parse().ok()).collect();
+        let output = self.client.send_event_to(urls, &event).await?;
+        Ok(output.val)
+    }
+
     /// Publish a note to specific relays only (NIP-70 relay selection).
     pub async fn publish_note_to_relays(
         &self,
@@ -1812,9 +1820,7 @@ impl NuruNuruEngine {
 
     /// Issue #183 (diagnostic): number of cached Kind-445 wrappers for a group.
     pub async fn mls_replay_cache_size(&self, group_id_hex: &str) -> Result<u64> {
-        self.require_mls()
-            .await?
-            .replay_cache_size(group_id_hex)
+        self.require_mls().await?.replay_cache_size(group_id_hex)
     }
 
     // ─── MLS subscription helpers (issue #178 #9, #10) ────────────────────

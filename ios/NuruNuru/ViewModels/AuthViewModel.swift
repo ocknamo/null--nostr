@@ -1,5 +1,8 @@
 import Foundation
 import Observation
+#if NURUNURU_FFI_AVAILABLE
+import NuruNuruFFILib
+#endif
 
 struct ReferralInvitePreview {
     let pubkeyHex: String
@@ -111,6 +114,7 @@ final class AuthViewModel {
     // MARK: - Login with nsec
 
     func login(nsecOrHex: String) {
+        NostrRepository.resetSharedRustFfiForAccountSwitch()
         state = .checking
 
         Task {
@@ -152,6 +156,26 @@ final class AuthViewModel {
     }
 
     func generateNewAccount() async -> GeneratedAccount? {
+#if NURUNURU_FFI_AVAILABLE
+        if prefs.iosRustFfiKeygenEnabled {
+            do {
+                let generated = try generateKeypair()
+                guard var privBytes = NostrKeyUtils.hexToBytes(generated.privateKeyHex),
+                      privBytes.count == 32 else { throw SecureKeyManager.KeyError.invalidKeySize }
+                defer {
+                    let count = privBytes.count
+                    privBytes.withUnsafeMutableBufferPointer {
+                        $0.baseAddress?.initialize(repeating: 0, count: count)
+                    }
+                }
+                try keyManager.storeKey(privateKeyBytes: privBytes, publicKeyHex: generated.publicKeyHex)
+                AppLogger.log("FFI", "Rust keygen account created pubkey=\(String(generated.publicKeyHex.prefix(8)))…")
+                return GeneratedAccount(pubkeyHex: generated.publicKeyHex, nsec: generated.nsec, npub: generated.npub)
+            } catch {
+                AppLogger.log("FFI", "Rust keygen failed; falling back to Swift keygen: \(error)")
+            }
+        }
+#endif
         do {
             let (privBytes, pubBytes) = try NostrKeyUtils.generateKeys()
             let pubkeyHex = NostrKeyUtils.bytesToHex(pubBytes)
@@ -172,6 +196,7 @@ final class AuthViewModel {
     }
 
     func completeRegistration(pubkeyHex: String) {
+        NostrRepository.resetSharedRustFfiForAccountSwitch()
         prefs.publicKeyHex = pubkeyHex
         prefs.isExternalSigner = false
         // If the active sign-up path was nsec, normalise loginMethod accordingly.
@@ -225,7 +250,11 @@ final class AuthViewModel {
             tempPrefs.publicKeyHex = pubkeyHex
             tempPrefs.selectedRelays = prefs.selectedRelays.isEmpty ? defaultRelays : prefs.selectedRelays
             tempPrefs.mainRelay = tempPrefs.selectedRelays.first ?? "wss://yabu.me"
-            let repo = NostrRepository(keyManager: keyManager, prefs: tempPrefs)
+            let repo = NostrRepository(
+                keyManager: keyManager,
+                prefs: tempPrefs,
+                externalSigner: prefs.isExternalSigner ? externalSigner : nil
+            )
             await repo.client.connect(relayUrls: tempPrefs.selectedRelays)
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             let profile = await repo.fetchProfile(pubkey: pubkeyHex)
@@ -242,7 +271,12 @@ final class AuthViewModel {
             tempPrefs.publicKeyHex = myPubkeyHex
             tempPrefs.selectedRelays = prefs.selectedRelays.isEmpty ? defaultRelays : prefs.selectedRelays
             tempPrefs.mainRelay = tempPrefs.selectedRelays.first ?? "wss://yabu.me"
-            let repo = NostrRepository(keyManager: keyManager, prefs: tempPrefs, signer: await currentSessionSigner())
+            let repo = NostrRepository(
+                keyManager: keyManager,
+                prefs: tempPrefs,
+                signer: await currentSessionSigner(),
+                externalSigner: prefs.isExternalSigner ? externalSigner : nil
+            )
             await repo.client.connect(relayUrls: tempPrefs.selectedRelays)
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             try await repo.followUser(targetPubkeyHex: targetPubkeyHex)
@@ -400,6 +434,7 @@ final class AuthViewModel {
 
     /// Complete login after successful NIP-46 connection.
     func loginWithExternalSigner(pubkeyHex: String) {
+        NostrRepository.resetSharedRustFfiForAccountSwitch()
         prefs.publicKeyHex = pubkeyHex
         prefs.isExternalSigner = true
         state = .loggedIn(pubkeyHex: pubkeyHex)
@@ -454,9 +489,10 @@ final class AuthViewModel {
         // Internal-signer path is deterministic (HKDF over nsec) so no
         // explicit key removal is needed there — `keyManager.deleteAll()`
         // already drops the nsec, which is the root secret.
-        if let pubkey = prefs.publicKeyHex, prefs.isExternalSigner {
+        if let pubkey = prefs.publicKeyHex, prefs.isExternalSigner || prefs.loginMethod == "nosskey" {
             MlsDbKeyStore.clearExternalKey(pubkeyHex: pubkey)
         }
+        NostrRepository.resetSharedRustFfiForAccountSwitch()
         keyManager.deleteAll()
         // Do NOT clear NosskeyKeyInfo on logout. It is non-secret metadata
         // (credentialId/pubkey/salt) required for "パスキーでログイン" after logout.
@@ -509,7 +545,8 @@ final class AuthViewModel {
             let repo = NostrRepository(
                 keyManager: tempKeyManager,
                 prefs: tempPrefs,
-                signer: sessionSigner
+                signer: sessionSigner,
+                externalSigner: prefs.isExternalSigner ? externalSigner : nil
             )
 
             // 接続 — 一時リポジトリの client に直接接続
@@ -616,7 +653,8 @@ final class AuthViewModel {
             let repo = NostrRepository(
                 keyManager: keyManager,
                 prefs: tempPrefs,
-                signer: sessionSigner
+                signer: sessionSigner,
+                externalSigner: prefs.isExternalSigner ? externalSigner : nil
             )
 
             await repo.client.connect(relayUrls: targetRelayUrls)

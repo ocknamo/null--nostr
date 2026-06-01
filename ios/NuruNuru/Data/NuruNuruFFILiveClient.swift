@@ -161,6 +161,14 @@ final class MlsFFILiveClient: MlsFFIBridge, @unchecked Sendable {
         try client.mlsSubscribeKeypackageRotations(contactPubkeys: contactPubkeys)
     }
 
+    func pollLiveEvents(subId: String, maxCount: UInt32) -> [String] {
+        client.pollLiveEvents(subId: subId, maxCount: maxCount)
+    }
+
+    func stopLiveSubscription(subId: String) throws {
+        try client.stopLiveSubscription(subId: subId)
+    }
+
     // Issue #178 #1, #11 — identity / encryption.
     func setMlsDbKey(key: [UInt8]) throws {
         try client.setMlsDbKey(key: Data(key))
@@ -319,4 +327,163 @@ enum MlsFFILiveClientError: Error, LocalizedError {
         }
     }
 }
+
+// MARK: - Phase 3: Nostr write-path FFI helpers
+
+/// Internal nsec-backed EventSigner that delegates NIP-01 signing to Rust FFI.
+/// NIP-04/44 remain delegated to the Swift signer until the encryption paths are
+/// separately migrated, keeping the rollout small and reversible.
+final class RustInternalSigner: EventSigner {
+    private let keyManager: SecureKeyManager
+    private let fallback: InternalSigner
+    private let client: NuruNuruClient?
+
+    init(keyManager: SecureKeyManager) {
+        self.keyManager = keyManager
+        self.fallback = InternalSigner(keyManager: keyManager)
+        self.client = Self.makeClient(keyManager: keyManager)
+    }
+
+    private static func makeClient(keyManager: SecureKeyManager) -> NuruNuruClient? {
+        guard let keyHex = keyManager.getKeyHexTemporary() else { return nil }
+        do {
+            let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            let dbPathURL = appSupport.appendingPathComponent("nurunuru_ndb", isDirectory: true)
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: dbPathURL.path, isDirectory: &isDir), !isDir.boolValue {
+                try? FileManager.default.removeItem(at: dbPathURL)
+            }
+            try? FileManager.default.createDirectory(at: dbPathURL, withIntermediateDirectories: true)
+            let dbPath = dbPathURL.path
+            MlsLegacyMigration.purgePlaintextDbIfDetected(dbDirectoryPath: dbPath)
+            try initEngine(dbPath: dbPath)
+            var dbKey = try MlsDbKeyStore.deriveInternalKey(secretKeyHex: keyHex)
+            defer { dbKey.resetBytes(in: 0..<dbKey.count) }
+            let c = try NuruNuruClient.newWithMlsDbKey(secretKeyHex: keyHex, mlsDbKey: dbKey)
+            guard c.mlsIsEncrypted() == true else {
+                try? c.disconnect()
+                return nil
+            }
+            MlsLegacyMigration.excludeMlsDbFromBackup(dbDirectoryPath: dbPath)
+            return c
+        } catch {
+            AppLogger.log("FFI", "RustInternalSigner client init failed; crypto fallback available: (error)")
+            return nil
+        }
+    }
+
+    func getPublicKeyHex() -> String? {
+        keyManager.getStoredPublicKeyHex()
+    }
+
+    func signEvent(kind: Int, tags: [[String]], content: String, createdAt: Int64) throws -> NostrEvent {
+        guard kind >= 0, kind <= Int(UInt32.max), createdAt >= 0 else {
+            throw InternalSigner.SignerError.invalidPublicKey
+        }
+        if let client {
+            let raw = try client.signEvent(kind: UInt32(kind), content: content, tags: tags, createdAt: UInt64(createdAt))
+            guard let data = raw.data(using: .utf8) else { throw InternalSigner.SignerError.keyNotUnlocked }
+            return try JSONDecoder().decode(NostrEvent.self, from: data)
+        }
+        guard let keyHex = keyManager.getKeyHexTemporary() else {
+            throw InternalSigner.SignerError.keyNotUnlocked
+        }
+        let raw = try signEventJson(
+            secretKeyHex: keyHex,
+            kind: UInt32(kind),
+            content: content,
+            tags: tags,
+            createdAt: UInt64(createdAt)
+        )
+        guard let data = raw.data(using: .utf8) else { throw InternalSigner.SignerError.keyNotUnlocked }
+        return try JSONDecoder().decode(NostrEvent.self, from: data)
+    }
+
+    func nip04Encrypt(receiverPubkeyHex: String, plaintext: String) -> String? {
+        if let client, let encrypted = try? client.nip04Encrypt(recipientPubkeyHex: receiverPubkeyHex, plaintext: plaintext) {
+            return encrypted
+        }
+        return fallback.nip04Encrypt(receiverPubkeyHex: receiverPubkeyHex, plaintext: plaintext)
+    }
+
+    func nip04Decrypt(senderPubkeyHex: String, ciphertext: String) -> String? {
+        if let client, let decrypted = try? client.nip04Decrypt(senderPubkeyHex: senderPubkeyHex, ciphertext: ciphertext) {
+            return decrypted
+        }
+        return fallback.nip04Decrypt(senderPubkeyHex: senderPubkeyHex, ciphertext: ciphertext)
+    }
+
+    func nip44Encrypt(recipientPubkeyHex: String, plaintext: String) -> String? {
+        if let client, let encrypted = try? client.nip44Encrypt(recipientPubkeyHex: recipientPubkeyHex, plaintext: plaintext) {
+            return encrypted
+        }
+        return fallback.nip44Encrypt(recipientPubkeyHex: recipientPubkeyHex, plaintext: plaintext)
+    }
+
+    func nip44Decrypt(senderPubkeyHex: String, ciphertext: String) -> String? {
+        if let client, let decrypted = try? client.nip44Decrypt(senderPubkeyHex: senderPubkeyHex, ciphertext: ciphertext) {
+            return decrypted
+        }
+        return fallback.nip44Decrypt(senderPubkeyHex: senderPubkeyHex, ciphertext: ciphertext)
+    }
+}
+
+/// Thin Swift wrapper for Rust raw-event publishing and unsigned-event creation.
+/// Uses the encrypted MLS constructors only, matching the issue #181 guardrails.
+final class RustNostrFFIClient: @unchecked Sendable {
+    private let client: NuruNuruClient
+
+    init(secretKeyHex: String, dbPath: String, mlsDbKey: inout Data) throws {
+        try initEngine(dbPath: dbPath)
+        defer { mlsDbKey.resetBytes(in: 0..<mlsDbKey.count) }
+        self.client = try NuruNuruClient.newWithMlsDbKey(secretKeyHex: secretKeyHex, mlsDbKey: mlsDbKey)
+        try Self.assertEncrypted(client: client)
+    }
+
+    init(pubkeyHex: String, dbPath: String, mlsDbKey: inout Data) throws {
+        try initEngine(dbPath: dbPath)
+        defer { mlsDbKey.resetBytes(in: 0..<mlsDbKey.count) }
+        self.client = try NuruNuruClient.newReadOnlyWithMlsDbKey(pubkeyHex: pubkeyHex, mlsDbKey: mlsDbKey)
+        try Self.assertEncrypted(client: client)
+    }
+
+    private static func assertEncrypted(client: NuruNuruClient) throws {
+        guard client.mlsIsEncrypted() == true else {
+            try? client.disconnect()
+            throw MlsFFILiveClientError.encryptionRequired
+        }
+    }
+
+    func connect(relayUrls: [String]) {
+        for relay in relayUrls { try? client.addRelay(url: relay) }
+        client.connect()
+    }
+
+    func disconnect() throws { try client.disconnect() }
+
+    func createUnsignedEvent(kind: Int, content: String, tags: [[String]], creatorPubkeyHex: String) throws -> String {
+        guard kind >= 0, kind <= Int(UInt32.max) else { throw InternalSigner.SignerError.invalidPublicKey }
+        return try client.createUnsignedEvent(
+            kind: UInt32(kind),
+            content: content,
+            tags: tags,
+            creatorPubkeyHex: creatorPubkeyHex
+        )
+    }
+
+    func signEvent(kind: Int, content: String, tags: [[String]], createdAt: Int64?) throws -> String {
+        guard kind >= 0, kind <= Int(UInt32.max) else { throw InternalSigner.SignerError.invalidPublicKey }
+        let ts = createdAt.flatMap { $0 >= 0 ? UInt64($0) : nil }
+        return try client.signEvent(kind: UInt32(kind), content: content, tags: tags, createdAt: ts)
+    }
+
+    @discardableResult
+    func publishRawEvent(_ eventJSON: String, relayUrls: [String]?) throws -> String {
+        if let relayUrls, !relayUrls.isEmpty {
+            return try client.publishRawEventToRelays(eventJson: eventJSON, relayUrls: relayUrls)
+        }
+        return try client.publishRawEvent(eventJson: eventJSON)
+    }
+}
+
 #endif

@@ -43,9 +43,10 @@ struct MainTabView: View {
         let mlsClient: MlsFFIBridge? = nil
 
         let repo = NostrRepository(
-            keyManager: authViewModel.keyManager,
-            prefs:      authViewModel.prefs,
-            mlsClient:  mlsClient
+            keyManager:     authViewModel.keyManager,
+            prefs:          authViewModel.prefs,
+            mlsClient:      mlsClient,
+            externalSigner: authViewModel.externalSigner
         )
         _repository     = State(initialValue: repo)
         _timelineVM     = State(initialValue: TimelineViewModel(repository: repo, pubkeyHex: pubkeyHex))

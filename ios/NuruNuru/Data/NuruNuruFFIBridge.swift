@@ -294,6 +294,10 @@ protocol MlsFFIBridge: AnyObject, Sendable {
     func mlsSubscribeWelcomes(sinceSecs: UInt64) throws -> String
     /// Subscribe to KeyPackage rotations (kind:30443) from given contacts.
     func mlsSubscribeKeypackageRotations(contactPubkeys: [String]) throws -> String
+    /// Drain buffered events for an engine-side live subscription. Returns raw signed event JSON.
+    func pollLiveEvents(subId: String, maxCount: UInt32) -> [String]
+    /// Cancel an engine-side live subscription.
+    func stopLiveSubscription(subId: String) throws
 
     // ── Identity / encryption (Issue #178 #1, #11) ──
     /// Provide a 32-byte SQLCipher key. Must be called before `login()`.
@@ -424,6 +428,8 @@ final class MlsFFIStub: MlsFFIBridge, @unchecked Sendable {
     // Issue #178 #9, #10 subscription stubs
     func mlsSubscribeWelcomes(sinceSecs: UInt64) throws -> String { "" }
     func mlsSubscribeKeypackageRotations(contactPubkeys: [String]) throws -> String { "" }
+    func pollLiveEvents(subId: String, maxCount: UInt32) -> [String] { [] }
+    func stopLiveSubscription(subId: String) throws {}
 
     // Issue #178 #1, #11 identity/encryption stubs
     func setMlsDbKey(key: [UInt8]) throws {}

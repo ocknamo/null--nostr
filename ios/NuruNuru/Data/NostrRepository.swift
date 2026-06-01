@@ -5,6 +5,20 @@ import Foundation
 ///
 /// Phase 1: Connection and basic event subscription.
 /// Phase 2+: Timeline, profiles, reactions, notifications, talk.
+
+/// Read-only iOS Rust FFI diagnostic snapshot used by Settings.
+/// No secrets, pubkeys, relay auth data, or DB paths are exposed.
+struct MlsReadOnlyDiagnosticSnapshot: Sendable {
+    let encryptionState: Bool?
+    let groupCount: Int?
+    let groupsNeedingSelfUpdateCount: Int?
+    /// Sanitized status only. Never contains secrets, pubkeys, relay challenges, DB paths, or raw Rust error text.
+    let groupCountStatus: String
+    /// Sanitized status only. Never contains secrets, pubkeys, relay challenges, DB paths, or raw Rust error text.
+    let selfUpdateStatus: String
+    let checkedAt: Date
+}
+
 actor NostrRepository {
 
     // Process-wide shared MLS-FFI client to avoid repeatedly reopening the same DB.
@@ -14,6 +28,19 @@ actor NostrRepository {
     nonisolated(unsafe) private static var sharedMlsClient: MlsFFIBridge?
     nonisolated(unsafe) private static var sharedMlsAccountPubkey: String?
     nonisolated(unsafe) private static let sharedFfiLock = NSLock()
+
+    /// Hard reset process-wide Rust FFI clients when the account boundary changes.
+    /// This prevents Settings diagnostics from reusing a disconnected/account-bound
+    /// MDK client after logout/login or account switching in the same process.
+    nonisolated static func resetSharedRustFfiForAccountSwitch() {
+        sharedFfiLock.lock()
+        let old = sharedMlsClient
+        sharedMlsClient = nil
+        sharedMlsAccountPubkey = nil
+        sharedFfiLock.unlock()
+        try? old?.disconnect()
+        AppLogger.log("FFI", "resetSharedRustFfiForAccountSwitch: cleared shared MLS client")
+    }
 
     // MARK: - Dependencies
 
@@ -25,8 +52,16 @@ actor NostrRepository {
     /// different code path — they bypass this property and use `externalSigner`
     /// in `NostrRepository+ExternalSign.swift`.
     let signer: EventSigner
+    /// Optional NIP-46 platform signer. External signing remains async and platform-owned;
+    /// Rust FFI may create unsigned events / publish signed raw JSON around it.
+    let externalSigner: ExternalSigner?
     /// Optional Rust FFI engine (Phase 5). Lazily initialized for Talk/MLS.
     var mlsClient: MlsFFIBridge?
+#if NURUNURU_FFI_AVAILABLE
+    /// Optional Rust FFI write-path client for keygen/sign/publish rollout.
+    var rustNostrClient: RustNostrFFIClient?
+    var rustNostrAccountPubkey: String?
+#endif
     /// Two-layer cache: in-memory LRU + UserDefaults persistence.
     let cache = NostrCache()
     /// Persistent retry metadata for Marmot self-update / message / KeyPackage rotation.
@@ -107,6 +142,9 @@ actor NostrRepository {
     var mlsRepairFailureCount: [String: Int] = [:]
     /// True if the user's MLS KeyPackage (Kind 30443) has been published this session.
     var keyPackagePublished:  Bool = false
+    /// Rust engine-side live subscription IDs for Phase 6 Talk MLS incremental drains.
+    var mlsWelcomeSubscriptionId: String?
+    var mlsKeyPackageRotationSubscriptionId: String?
 
 
     // MARK: - Init
@@ -115,7 +153,8 @@ actor NostrRepository {
         keyManager: SecureKeyManager,
         prefs: AppPreferences,
         mlsClient: MlsFFIBridge? = nil,
-        signer: EventSigner? = nil
+        signer: EventSigner? = nil,
+        externalSigner: ExternalSigner? = nil
     ) {
         self.keyManager = keyManager
         self.prefs = prefs
@@ -142,11 +181,27 @@ actor NostrRepository {
                 resolvedSigner = InternalSigner(keyManager: keyManager)
             }
         } else {
+#if NURUNURU_FFI_AVAILABLE
+            if prefs.iosRustFfiSigningEnabled {
+                resolvedSigner = RustInternalSigner(keyManager: keyManager)
+            } else {
+                resolvedSigner = InternalSigner(keyManager: keyManager)
+            }
+#else
             resolvedSigner = InternalSigner(keyManager: keyManager)
+#endif
         }
         self.signer = resolvedSigner
+        self.externalSigner = externalSigner
         self.client = NostrClient(authEventSigner: { relayUrl, challenge in
-            try resolvedSigner.signEvent(
+            if prefs.isExternalSigner, let externalSigner {
+                return try await externalSigner.signEvent(
+                    kind: 22242,
+                    content: "",
+                    tags: [["relay", relayUrl], ["challenge", challenge]]
+                )
+            }
+            return try resolvedSigner.signEvent(
                 kind: 22242,
                 tags: [["relay", relayUrl], ["challenge", challenge]],
                 content: ""
@@ -157,6 +212,21 @@ actor NostrRepository {
 
     // MARK: - FFI (lazy init)
 
+#if NURUNURU_FFI_AVAILABLE
+    private func rustFfiDbBasePath(forAccountPubkey pubkey: String) -> String {
+        let safe = pubkey.lowercased().filter { $0.isHexDigit }
+        let suffix = safe.isEmpty ? "unknown" : safe
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let dbPathURL = appSupport.appendingPathComponent("nurunuru_ndb_\(suffix)", isDirectory: true)
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: dbPathURL.path, isDirectory: &isDir), !isDir.boolValue {
+            try? FileManager.default.removeItem(at: dbPathURL)
+        }
+        try? FileManager.default.createDirectory(at: dbPathURL, withIntermediateDirectories: true)
+        return dbPathURL.path
+    }
+#endif
+
     /// Lazily initialize Rust FFI client when needed (Talk/MLS path).
     /// Returns nil when FFI is unavailable or key material is not unlocked.
     @discardableResult
@@ -166,6 +236,7 @@ actor NostrRepository {
         if let mlsClient,
            let requestedPubkey,
            Self.sharedMlsAccountPubkey?.lowercased() == requestedPubkey {
+            mlsClient.connect()
             return mlsClient
         }
         if let mlsClient {
@@ -178,6 +249,7 @@ actor NostrRepository {
            let requestedPubkey,
            Self.sharedMlsAccountPubkey?.lowercased() == requestedPubkey {
             Self.sharedFfiLock.unlock()
+            shared.connect()
             self.mlsClient = shared
             return shared
         }
@@ -199,48 +271,49 @@ actor NostrRepository {
             return nil
         }
 
-        let appSupport = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let dbPathURL = appSupport.appendingPathComponent("nurunuru_ndb", isDirectory: true)
-        var isDir: ObjCBool = false
-        if FileManager.default.fileExists(atPath: dbPathURL.path, isDirectory: &isDir), !isDir.boolValue {
-            try? FileManager.default.removeItem(at: dbPathURL)
-        }
-        try? FileManager.default.createDirectory(at: dbPathURL, withIntermediateDirectories: true)
-        let dbPath = dbPathURL.path
-        AppLogger.log("FFI", "ensureMlsClient: dbPath=\(dbPath)")
-
-        // Issue #181 M5: purge any pre-#181 plaintext MLS DB *before* we let
-        // Rust open a handle to it. Content-based detection (B2) — runs every
-        // launch so future regressions can't lock users out permanently.
-        MlsLegacyMigration.purgePlaintextDbIfDetected(dbDirectoryPath: dbPath)
-
         do {
             let ffi: MlsFFILiveClient
             let accountPubkey: String
+            guard let activePubkey = prefs.publicKeyHex ?? keyManager.getStoredPublicKeyHex() else {
+                AppLogger.log("FFI", "ensureMlsClient: missing active pubkey")
+                return nil
+            }
+            let dbPath = rustFfiDbBasePath(forAccountPubkey: activePubkey)
+            AppLogger.log("FFI", "ensureMlsClient: account-scoped dbPath=\(dbPath)")
 
-            if prefs.isExternalSigner {
-                guard let pubkey = prefs.publicKeyHex else {
-                    AppLogger.log("FFI", "ensureMlsClient: missing publicKeyHex for external signer")
-                    return nil
-                }
-                // Issue #181: random 32-byte key, scoped to pubkey, stored in
-                // Keychain (kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly).
-                // Lock-guarded inside MlsDbKeyStore (B4 race).
+            MlsLegacyMigration.purgePlaintextDbIfDetected(dbDirectoryPath: dbPath)
+
+            if prefs.isExternalSigner || prefs.loginMethod == "nosskey" {
+                let pubkey = activePubkey
+                // External signer and Passkey/Nosskey sessions do not keep an nsec
+                // in Keychain. Bind the MLS DB in read-only identity mode using a
+                // pubkey-scoped SQLCipher key so Settings diagnostics can recover
+                // after account switches instead of reporting permanent unavailable.
                 var dbKey = try MlsDbKeyStore.getOrCreateExternalKey(pubkeyHex: pubkey)
-                // MlsFFILiveClient zeroizes `dbKey` via `inout` after FFI hand-off (B3).
                 ffi = try MlsFFILiveClient(pubkeyHex: pubkey, dbPath: dbPath, mlsDbKey: &dbKey)
                 accountPubkey = pubkey
             } else {
                 guard let keyHex = keyManager.getKeyHexTemporary() else {
-                    AppLogger.log("FFI", "ensureMlsClient: secret key is not unlocked")
-                    return nil
+                    let pubkey = activePubkey
+                    AppLogger.log("FFI", "ensureMlsClient: nsec unavailable; using read-only fallback")
+                    var dbKey = try MlsDbKeyStore.getOrCreateExternalKey(pubkeyHex: pubkey)
+                    ffi = try MlsFFILiveClient(pubkeyHex: pubkey, dbPath: dbPath, mlsDbKey: &dbKey)
+                    accountPubkey = pubkey
+                    MlsLegacyMigration.excludeMlsDbFromBackup(dbDirectoryPath: dbPath)
+                    ffi.connect()
+                    self.mlsClient = ffi
+                    Self.sharedFfiLock.lock()
+                    Self.sharedMlsClient = ffi
+                    Self.sharedMlsAccountPubkey = accountPubkey.lowercased()
+                    Self.sharedFfiLock.unlock()
+                    AppLogger.log("FFI", "ensureMlsClient: initialized read-only fallback FFI + connected")
+                    return ffi
                 }
                 // Deterministic HKDF-SHA256 over the nsec — no persistence
                 // required, regenerable as long as the user has their nsec.
                 var dbKey = try MlsDbKeyStore.deriveInternalKey(secretKeyHex: keyHex)
                 ffi = try MlsFFILiveClient(secretKeyHex: keyHex, dbPath: dbPath, mlsDbKey: &dbKey)
-                accountPubkey = keyManager.getStoredPublicKeyHex() ?? requestedPubkey ?? ""
+                accountPubkey = activePubkey
             }
 
             // Issue #181 M6: exclude DB + WAL/SHM from iCloud/iTunes backup.
@@ -262,6 +335,168 @@ actor NostrRepository {
 #else
         return nil
 #endif
+    }
+
+
+
+#if NURUNURU_FFI_AVAILABLE
+    /// Lazily initialize the Rust FFI write-path client. This intentionally uses
+    /// the encrypted constructors only. NIP-46 / Passkey sessions use the
+    /// read-only constructor: signing remains platform-owned, Rust only creates
+    /// unsigned events and publishes signed raw JSON.
+    @discardableResult
+    func ensureRustNostrClient() -> RustNostrFFIClient? {
+        if UserDefaults.standard.bool(forKey: "disable_rust_ffi") { return nil }
+        let requestedPubkey = prefs.publicKeyHex?.lowercased()
+        if let rustNostrClient,
+           let requestedPubkey,
+           rustNostrAccountPubkey?.lowercased() == requestedPubkey {
+            rustNostrClient.connect(relayUrls: buildRelayConnectionUrls())
+            return rustNostrClient
+        }
+        if let rustNostrClient {
+            try? rustNostrClient.disconnect()
+            self.rustNostrClient = nil
+            self.rustNostrAccountPubkey = nil
+        }
+
+        do {
+            let rust: RustNostrFFIClient
+            guard let activePubkey = prefs.publicKeyHex ?? keyManager.getStoredPublicKeyHex() else { return nil }
+            let dbPath = rustFfiDbBasePath(forAccountPubkey: activePubkey)
+            MlsLegacyMigration.purgePlaintextDbIfDetected(dbDirectoryPath: dbPath)
+            if prefs.isExternalSigner || prefs.loginMethod == "nosskey" {
+                var dbKey = try MlsDbKeyStore.getOrCreateExternalKey(pubkeyHex: activePubkey)
+                rust = try RustNostrFFIClient(pubkeyHex: activePubkey, dbPath: dbPath, mlsDbKey: &dbKey)
+            } else {
+                guard let keyHex = keyManager.getKeyHexTemporary() else {
+                    var dbKey = try MlsDbKeyStore.getOrCreateExternalKey(pubkeyHex: activePubkey)
+                    rust = try RustNostrFFIClient(pubkeyHex: activePubkey, dbPath: dbPath, mlsDbKey: &dbKey)
+                    MlsLegacyMigration.excludeMlsDbFromBackup(dbDirectoryPath: dbPath)
+                    rust.connect(relayUrls: buildRelayConnectionUrls())
+                    self.rustNostrClient = rust
+                    self.rustNostrAccountPubkey = activePubkey.lowercased()
+                    return rust
+                }
+                var dbKey = try MlsDbKeyStore.deriveInternalKey(secretKeyHex: keyHex)
+                rust = try RustNostrFFIClient(secretKeyHex: keyHex, dbPath: dbPath, mlsDbKey: &dbKey)
+            }
+            MlsLegacyMigration.excludeMlsDbFromBackup(dbDirectoryPath: dbPath)
+            rust.connect(relayUrls: buildRelayConnectionUrls())
+            self.rustNostrClient = rust
+            self.rustNostrAccountPubkey = activePubkey.lowercased()
+            AppLogger.log("FFI", "ensureRustNostrClient: initialized write-path client account=\(String((self.rustNostrAccountPubkey ?? "").prefix(8)))…")
+            return rust
+        } catch {
+            AppLogger.log("FFI", "ensureRustNostrClient failed: \(error)")
+            return nil
+        }
+    }
+
+    private func rawEventJSON(_ event: NostrEvent) -> String? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return (try? encoder.encode(event)).flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    private func publishSignedEventViaRustIfEnabled(
+        _ event: NostrEvent,
+        rawJSON: String,
+        relayUrls: [String]? = nil
+    ) async -> Bool {
+        guard prefs.iosRustFfiPublishEnabled, let rust = ensureRustNostrClient() else { return false }
+        let targets = relayUrls ?? buildRelayConnectionUrls()
+        rust.connect(relayUrls: targets)
+        do {
+            _ = try await Task.detached(priority: .userInitiated) {
+                try rust.publishRawEvent(rawJSON, relayUrls: relayUrls)
+            }.value
+            AppLogger.log("FFI", "Rust publish ok event=\(event.id) targeted=\(relayUrls?.count ?? 0)")
+            return true
+        } catch {
+            AppLogger.log("FFI", "Rust publish failed; falling back event=\(event.id) err=\(error)")
+            return false
+        }
+    }
+
+    func publishSignedRawEventJSON(_ rawJSON: String, to relays: [String]) async throws {
+        if prefs.iosRustFfiPublishEnabled,
+           let data = rawJSON.data(using: .utf8),
+           let event = try? JSONDecoder().decode(NostrEvent.self, from: data),
+           await publishSignedEventViaRustIfEnabled(event, rawJSON: rawJSON, relayUrls: relays) {
+            return
+        }
+        try await client.publishRawEventJSON(rawJSON, to: relays)
+    }
+#endif
+
+
+    /// Phase 1 iOS Rust FFI diagnostic. Returns the live MLS DB encryption
+    /// state when the UniFFI client can be initialized; nil means FFI is
+    /// unavailable, disabled, key material is locked, or stub/fallback is active.
+    /// This method is read-only from the app's perspective and must not expose
+    /// secrets, DB paths, or pubkeys to UI/logs.
+    func mlsEncryptionDiagnostic() -> Bool? {
+        ensureMlsClient()?.mlsIsEncrypted()
+    }
+
+    /// Phase 1.1/1.2 read-only iOS Rust FFI diagnostics. Exercises a small
+    /// number of existing non-mutating MLS helpers after the Phase 1 encryption
+    /// smoke test, without signing, publishing, key generation, or secret export.
+    ///
+    /// Phase 1.2 intentionally stores only sanitized per-helper status strings:
+    /// raw Rust errors may contain implementation details and must not be shown
+    /// in user-facing UI or copied into normal logs.
+    func mlsReadOnlyDiagnosticSnapshot() -> MlsReadOnlyDiagnosticSnapshot {
+        let checkedAt = Date()
+        guard let ffi = ensureMlsClient() else {
+            return MlsReadOnlyDiagnosticSnapshot(
+                encryptionState: nil,
+                groupCount: nil,
+                groupsNeedingSelfUpdateCount: nil,
+                groupCountStatus: "unavailable",
+                selfUpdateStatus: "unavailable",
+                checkedAt: checkedAt
+            )
+        }
+
+        let encryptionState = ffi.mlsIsEncrypted()
+
+        let groupCount: Int?
+        let groupCountStatus: String
+        do {
+            groupCount = try ffi.mlsListGroups().count
+            groupCountStatus = "ok"
+        } catch {
+            groupCount = nil
+            groupCountStatus = sanitizedFfiDiagnosticError(error)
+        }
+
+        let groupsNeedingSelfUpdateCount: Int?
+        let selfUpdateStatus: String
+        do {
+            groupsNeedingSelfUpdateCount = try ffi.mlsGroupsNeedingSelfUpdate(thresholdSecs: 86_400).count
+            selfUpdateStatus = "ok"
+        } catch {
+            groupsNeedingSelfUpdateCount = nil
+            selfUpdateStatus = sanitizedFfiDiagnosticError(error)
+        }
+
+        return MlsReadOnlyDiagnosticSnapshot(
+            encryptionState: encryptionState,
+            groupCount: groupCount,
+            groupsNeedingSelfUpdateCount: groupsNeedingSelfUpdateCount,
+            groupCountStatus: groupCountStatus,
+            selfUpdateStatus: selfUpdateStatus,
+            checkedAt: checkedAt
+        )
+    }
+
+    /// Sanitize FFI diagnostic failures for Settings display/logging. Keep this
+    /// deliberately coarse; do not include raw error text because it may contain
+    /// paths or protocol details.
+    private func sanitizedFfiDiagnosticError(_ error: Error) -> String {
+        "failed"
     }
 
     // MARK: - Connection
@@ -326,7 +561,30 @@ actor NostrRepository {
     /// Disconnect all relays and clean up.
     func disconnect() async {
         isConnected = false
-        try? mlsClient?.disconnect()
+        let localMlsClient = mlsClient
+        if let id = mlsWelcomeSubscriptionId { try? localMlsClient?.stopLiveSubscription(subId: id) }
+        if let id = mlsKeyPackageRotationSubscriptionId { try? localMlsClient?.stopLiveSubscription(subId: id) }
+        mlsWelcomeSubscriptionId = nil
+        mlsKeyPackageRotationSubscriptionId = nil
+        mlsClient = nil
+#if NURUNURU_FFI_AVAILABLE
+        let requestedPubkey = prefs.publicKeyHex?.lowercased()
+        Self.sharedFfiLock.lock()
+        let shouldClearShared = Self.sharedMlsClient != nil && (
+            requestedPubkey == nil ||
+            Self.sharedMlsAccountPubkey?.lowercased() == requestedPubkey ||
+            (localMlsClient != nil && Self.sharedMlsClient === localMlsClient)
+        )
+        if shouldClearShared {
+            Self.sharedMlsClient = nil
+            Self.sharedMlsAccountPubkey = nil
+        }
+        Self.sharedFfiLock.unlock()
+        try? rustNostrClient?.disconnect()
+        rustNostrClient = nil
+        rustNostrAccountPubkey = nil
+#endif
+        try? localMlsClient?.disconnect()
         await client.disconnect()
     }
 
@@ -403,10 +661,52 @@ actor NostrRepository {
             isConnected = true
         }
 
+        let createdAt = Int64(Date().timeIntervalSince1970)
+        if prefs.isExternalSigner, let externalSigner {
+#if NURUNURU_FFI_AVAILABLE
+            if prefs.iosRustFfiPublishEnabled,
+               let pubkey = prefs.publicKeyHex,
+               let rust = ensureRustNostrClient() {
+                _ = try? rust.createUnsignedEvent(kind: kind, content: content, tags: tags, creatorPubkeyHex: pubkey)
+            }
+#endif
+            let event = try await externalSigner.signEvent(
+                kind: kind,
+                content: content,
+                tags: tags,
+                createdAt: createdAt
+            )
+#if NURUNURU_FFI_AVAILABLE
+            if let raw = rawEventJSON(event),
+               await publishSignedEventViaRustIfEnabled(event, rawJSON: raw) {
+                return event
+            }
+#endif
+            try await client.publish(event: event, waitForAllRelays: waitForAllRelays)
+            return event
+        }
+
         if let passkeySigner = signer as? NosskeySigner {
             try await passkeySigner.warmCache()
         }
-        let event = try signer.signEvent(kind: kind, tags: tags, content: content)
+#if NURUNURU_FFI_AVAILABLE
+        // For Passkey/NIP-46-style platform signer paths, exercise Rust unsigned
+        // event construction when the write-path rollout flag is enabled, but
+        // keep the actual authorization/signature in the platform signer.
+        if prefs.iosRustFfiPublishEnabled,
+           !(signer is RustInternalSigner),
+           let pubkey = prefs.publicKeyHex,
+           let rust = ensureRustNostrClient() {
+            _ = try? rust.createUnsignedEvent(kind: kind, content: content, tags: tags, creatorPubkeyHex: pubkey)
+        }
+#endif
+        let event = try signer.signEvent(kind: kind, tags: tags, content: content, createdAt: createdAt)
+#if NURUNURU_FFI_AVAILABLE
+        if let raw = rawEventJSON(event),
+           await publishSignedEventViaRustIfEnabled(event, rawJSON: raw) {
+            return event
+        }
+#endif
         try await client.publish(event: event, waitForAllRelays: waitForAllRelays)
         return event
     }

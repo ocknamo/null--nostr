@@ -205,6 +205,41 @@ extension NostrRepository {
         return groups
     }
 
+
+
+    /// Phase 6: bounded drain of Rust engine-side MLS live subscriptions.
+    private func drainMlsLiveSubscriptionEvents(ffi: MlsFFIBridge, myPubkeyHex: String) async -> (welcomes: [NostrEvent], keyPackages: [NostrEvent]) {
+        guard prefs.iosRustFfiTalkMlsEnabled else { return ([], []) }
+        do {
+            if mlsWelcomeSubscriptionId == nil {
+                let since = UInt64(max(0, Int64(Date().timeIntervalSince1970) - 300))
+                mlsWelcomeSubscriptionId = try ffi.mlsSubscribeWelcomes(sinceSecs: since)
+                AppLogger.log("MLS", "Rust live: subscribed welcomes id=\(mlsWelcomeSubscriptionId ?? "")")
+            }
+            if mlsKeyPackageRotationSubscriptionId == nil {
+                let contacts = await fetchFollowList(pubkey: myPubkeyHex)
+                mlsKeyPackageRotationSubscriptionId = try ffi.mlsSubscribeKeypackageRotations(contactPubkeys: contacts)
+                AppLogger.log("MLS", "Rust live: subscribed keypackage rotations id=\(mlsKeyPackageRotationSubscriptionId ?? "") contacts=\(contacts.count)")
+            }
+        } catch {
+            AppLogger.log("MLS", "Rust live subscription setup failed: \(mlsRedactedError(error))")
+            return ([], [])
+        }
+        func decodeEvents(_ raws: [String]) -> [NostrEvent] {
+            raws.compactMap { raw in
+                guard let data = raw.data(using: .utf8) else { return nil }
+                return try? JSONDecoder().decode(NostrEvent.self, from: data)
+            }
+        }
+        let welcomeEvents = mlsWelcomeSubscriptionId.map { decodeEvents(ffi.pollLiveEvents(subId: $0, maxCount: 128)) } ?? []
+        let keyPackageEvents = mlsKeyPackageRotationSubscriptionId.map { decodeEvents(ffi.pollLiveEvents(subId: $0, maxCount: 128)) } ?? []
+        if !welcomeEvents.isEmpty || !keyPackageEvents.isEmpty {
+            AppLogger.log("MLS", "Rust live drain: welcomes=\(welcomeEvents.count) keypackages=\(keyPackageEvents.count)")
+        }
+        return (welcomeEvents, keyPackageEvents)
+    }
+
+
     /// MLS グループ一覧をリレー + Rust SQLite から取得する。
     ///
     /// 1. Kind-1059 Welcome (NIP-59 gift-wrapped) を取得し未処理分を process
@@ -223,6 +258,7 @@ extension NostrRepository {
         //    FFI/App boundary の groupIdHex は常に Nostr group id (Kind 445 `h`)。
         //    internal MLS group id は Rust 内部に閉じ込める。
         var joinedGroupsById: [String: FfiMlsGroupInfo] = [:]
+        let liveDrain = await drainMlsLiveSubscriptionEvents(ffi: ffi, myPubkeyHex: myPubkeyHex)
         do {
             let welcomeRelays = mlsRelayUrls()
             await client.connect(relayUrls: welcomeRelays)
@@ -257,6 +293,12 @@ extension NostrRepository {
             let welcomeKinds = [NostrKind.mlsWelcome, NostrKind.mlsWelcomeInner, NostrKind.mlsWelcomeInnerMarmot]
             let f = NostrFilter(ids: nil, authors: nil, kinds: welcomeKinds, since: nil, until: nil, limit: 500, tags: ["#p": [myPubkeyHex]], search: nil)
             var welcomeEvents = await fetchEvents(filters: [f], timeoutSeconds: 8.0)
+            for ev in liveDrain.welcomes where welcomeKinds.contains(ev.kind) && ev.getTagValues("p").contains(myPubkeyHex) {
+                welcomeEvents.append(ev)
+            }
+            if !liveDrain.keyPackages.isEmpty {
+                AppLogger.log("MLS", "fetchMlsGroups: Rust live keypackage rotations drained=\(liveDrain.keyPackages.count)")
+            }
             if welcomeEvents.isEmpty {
                 let broad = NostrFilter(ids: nil, authors: nil, kinds: welcomeKinds, since: nil, until: nil, limit: 500, tags: nil, search: nil)
                 let broadEvents = await fetchEvents(filters: [broad], timeoutSeconds: 5.0)
@@ -265,6 +307,7 @@ extension NostrRepository {
                 welcomeEvents = mine
             }
 
+            welcomeEvents = Array(Dictionary(uniqueKeysWithValues: welcomeEvents.map { ($0.id, $0) }).values)
             let welcomeKindCounts = Dictionary(grouping: welcomeEvents, by: { $0.kind }).mapValues { $0.count }
             AppLogger.log("MLS", "fetchMlsGroups: welcome candidates total=\(welcomeEvents.count) byKind=\(welcomeKindCounts)")
 
@@ -1154,8 +1197,16 @@ extension NostrRepository {
 
     private func publishSignedMlsDiscoveryEvent(_ event: NostrEvent, to relays: [String], context: String) async throws {
         guard let json = encodeEventJSON(event) else { throw MlsError.invalidPayload }
+#if NURUNURU_FFI_AVAILABLE
+        if prefs.iosRustFfiTalkMlsEnabled {
+            try await publishSignedRawEventJSON(json, to: relays)
+        } else {
+            try await client.publishRawEventJSON(json, to: relays)
+        }
+#else
         try await client.publishRawEventJSON(json, to: relays)
-        AppLogger.log("MLS", "publishMlsDiscovery: \(context) id=\(event.id) relays=\(relays.count)")
+#endif
+        AppLogger.log("MLS", "publishMlsDiscovery: \(context) id=\(event.id) relays=\(relays.count) rust=\(prefs.iosRustFfiTalkMlsEnabled)")
     }
 
 
@@ -1231,7 +1282,15 @@ extension NostrRepository {
             await client.connect(relayUrls: groupRelays)
         }
         AppLogger.log("MLS", "publishMlsRawEventJSON: targetRelays=\(allRelays.count) reliableFanout=true rawJson=as_mdk_signed")
+#if NURUNURU_FFI_AVAILABLE
+        if prefs.iosRustFfiTalkMlsEnabled {
+            try await publishSignedRawEventJSON(rawEventJSON, to: allRelays)
+        } else {
+            try await client.publishRawEventJSON(rawEventJSON, to: allRelays, waitForAllRelays: true)
+        }
+#else
         try await client.publishRawEventJSON(rawEventJSON, to: allRelays, waitForAllRelays: true)
+#endif
     }
 
     /// Marmot MIP-02: Welcome publish.

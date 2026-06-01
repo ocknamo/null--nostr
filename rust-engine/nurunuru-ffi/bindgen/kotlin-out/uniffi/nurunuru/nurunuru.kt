@@ -882,6 +882,16 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -899,9 +909,15 @@ internal interface IntegrityCheckingUniffiLib : Library {
     // Integrity check functions only
     fun uniffi_uniffi_nurunuru_checksum_func_derive_mls_db_key_from_secret(
 ): Short
+fun uniffi_uniffi_nurunuru_checksum_func_derive_public_key_from_secret(
+): Short
+fun uniffi_uniffi_nurunuru_checksum_func_generate_keypair(
+): Short
 fun uniffi_uniffi_nurunuru_checksum_func_init_engine(
 ): Short
 fun uniffi_uniffi_nurunuru_checksum_func_mls_db_path_for(
+): Short
+fun uniffi_uniffi_nurunuru_checksum_func_sign_event_json(
 ): Short
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_add_relay(
 ): Short
@@ -1033,6 +1049,8 @@ fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_publish_note_with_tags
 ): Short
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_publish_raw_event(
 ): Short
+fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_publish_raw_event_to_relays(
+): Short
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_query_local(
 ): Short
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_query_local_global(
@@ -1048,6 +1066,8 @@ fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_search(
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_send_dm(
 ): Short
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_set_mls_db_key(
+): Short
+fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_sign_event(
 ): Short
 fun uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_start_live_subscription(
 ): Short
@@ -1256,6 +1276,8 @@ fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_publish_note_with_tags_to_re
 ): RustBuffer.ByValue
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_publish_raw_event(`ptr`: Pointer,`eventJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_publish_raw_event_to_relays(`ptr`: Pointer,`eventJson`: RustBuffer.ByValue,`relayUrls`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_query_local(`ptr`: Pointer,`authors`: RustBuffer.ByValue,`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_query_local_global(`ptr`: Pointer,`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
@@ -1272,6 +1294,8 @@ fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_send_dm(`ptr`: Pointer,`reci
 ): Unit
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_set_mls_db_key(`ptr`: Pointer,`key`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
+fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_sign_event(`ptr`: Pointer,`kind`: Int,`content`: RustBuffer.ByValue,`tags`: RustBuffer.ByValue,`createdAt`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_start_live_subscription(`ptr`: Pointer,`authors`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_stop_live_subscription(`ptr`: Pointer,`subId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1282,9 +1306,15 @@ fun uniffi_uniffi_nurunuru_fn_method_nurunuruclient_update_profile(`ptr`: Pointe
 ): RustBuffer.ByValue
 fun uniffi_uniffi_nurunuru_fn_func_derive_mls_db_key_from_secret(`secretKeyHex`: RustBuffer.ByValue,`appSalt`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_uniffi_nurunuru_fn_func_derive_public_key_from_secret(`secretKeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_uniffi_nurunuru_fn_func_generate_keypair(uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_uniffi_nurunuru_fn_func_init_engine(`dbPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_uniffi_nurunuru_fn_func_mls_db_path_for(`dbPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_uniffi_nurunuru_fn_func_sign_event_json(`secretKeyHex`: RustBuffer.ByValue,`kind`: Int,`content`: RustBuffer.ByValue,`tags`: RustBuffer.ByValue,`createdAt`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 fun ffi_uniffi_nurunuru_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1415,10 +1445,19 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_uniffi_nurunuru_checksum_func_derive_mls_db_key_from_secret() != 19985.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_uniffi_nurunuru_checksum_func_derive_public_key_from_secret() != 30870.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_nurunuru_checksum_func_generate_keypair() != 53556.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_uniffi_nurunuru_checksum_func_init_engine() != 52824.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_uniffi_nurunuru_checksum_func_mls_db_path_for() != 4127.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_nurunuru_checksum_func_sign_event_json() != 51079.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_add_relay() != 26516.toShort()) {
@@ -1616,6 +1655,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_publish_raw_event() != 20623.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_publish_raw_event_to_relays() != 5562.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_query_local() != 50993.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1638,6 +1680,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_set_mls_db_key() != 57395.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_sign_event() != 18774.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_start_live_subscription() != 15505.toShort()) {
@@ -2546,6 +2591,11 @@ public interface NuruNuruClientInterface {
     fun `publishRawEvent`(`eventJson`: kotlin.String): kotlin.String
     
     /**
+     * Publish an already-signed Nostr event JSON to specific relays only.
+     */
+    fun `publishRawEventToRelays`(`eventJson`: kotlin.String, `relayUrls`: List<kotlin.String>): kotlin.String
+    
+    /**
      * Query the local nostrdb cache by author pubkeys.
      *
      * Returns serialised JSON strings of matching kind-1 (text note) events,
@@ -2600,6 +2650,11 @@ public interface NuruNuruClientInterface {
      * Issue #178 #1: set the 32-byte SQLCipher key. Call before `login()`.
      */
     fun `setMlsDbKey`(`key`: kotlin.ByteArray)
+    
+    /**
+     * Sign a Nostr event with this client's internal key and return signed JSON.
+     */
+    fun `signEvent`(`kind`: kotlin.UInt, `content`: kotlin.String, `tags`: List<List<kotlin.String>>, `createdAt`: kotlin.ULong?): kotlin.String
     
     /**
      * Start a persistent relay subscription for live events.
@@ -3897,6 +3952,22 @@ open class NuruNuruClient: Disposable, AutoCloseable, NuruNuruClientInterface
 
     
     /**
+     * Publish an already-signed Nostr event JSON to specific relays only.
+     */
+    @Throws(NuruNuruFfiException::class)override fun `publishRawEventToRelays`(`eventJson`: kotlin.String, `relayUrls`: List<kotlin.String>): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NuruNuruFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_nurunuru_fn_method_nurunuruclient_publish_raw_event_to_relays(
+        it, FfiConverterString.lower(`eventJson`),FfiConverterSequenceString.lower(`relayUrls`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Query the local nostrdb cache by author pubkeys.
      *
      * Returns serialised JSON strings of matching kind-1 (text note) events,
@@ -4033,6 +4104,22 @@ open class NuruNuruClient: Disposable, AutoCloseable, NuruNuruClientInterface
 }
     }
     
+    
+
+    
+    /**
+     * Sign a Nostr event with this client's internal key and return signed JSON.
+     */
+    @Throws(NuruNuruFfiException::class)override fun `signEvent`(`kind`: kotlin.UInt, `content`: kotlin.String, `tags`: List<List<kotlin.String>>, `createdAt`: kotlin.ULong?): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NuruNuruFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_nurunuru_fn_method_nurunuruclient_sign_event(
+        it, FfiConverterUInt.lower(`kind`),FfiConverterString.lower(`content`),FfiConverterSequenceSequenceString.lower(`tags`),FfiConverterOptionalULong.lower(`createdAt`),_status)
+}
+    }
+    )
+    }
     
 
     
@@ -4352,6 +4439,46 @@ public object FfiConverterTypeFfiEncryptedMessageData: FfiConverterRustBuffer<Ff
             FfiConverterString.write(value.`content`, buf)
             FfiConverterSequenceSequenceString.write(value.`tags`, buf)
             FfiConverterString.write(value.`ephemeralPubkey`, buf)
+    }
+}
+
+
+
+data class FfiGeneratedKeypair (
+    var `privateKeyHex`: kotlin.String, 
+    var `nsec`: kotlin.String, 
+    var `publicKeyHex`: kotlin.String, 
+    var `npub`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiGeneratedKeypair: FfiConverterRustBuffer<FfiGeneratedKeypair> {
+    override fun read(buf: ByteBuffer): FfiGeneratedKeypair {
+        return FfiGeneratedKeypair(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiGeneratedKeypair) = (
+            FfiConverterString.allocationSize(value.`privateKeyHex`) +
+            FfiConverterString.allocationSize(value.`nsec`) +
+            FfiConverterString.allocationSize(value.`publicKeyHex`) +
+            FfiConverterString.allocationSize(value.`npub`)
+    )
+
+    override fun write(value: FfiGeneratedKeypair, buf: ByteBuffer) {
+            FfiConverterString.write(value.`privateKeyHex`, buf)
+            FfiConverterString.write(value.`nsec`, buf)
+            FfiConverterString.write(value.`publicKeyHex`, buf)
+            FfiConverterString.write(value.`npub`, buf)
     }
 }
 
@@ -5409,6 +5536,32 @@ public object FfiConverterSequenceSequenceString: FfiConverterRustBuffer<List<Li
     
 
         /**
+         * Derive an x-only public key hex from a secret key (hex or nsec).
+         */
+    @Throws(NuruNuruFfiException::class) fun `derivePublicKeyFromSecret`(`secretKeyHex`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(NuruNuruFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_nurunuru_fn_func_derive_public_key_from_secret(
+        FfiConverterString.lower(`secretKeyHex`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Generate a fresh Nostr keypair for platform onboarding flows.
+         */
+    @Throws(NuruNuruFfiException::class) fun `generateKeypair`(): FfiGeneratedKeypair {
+            return FfiConverterTypeFfiGeneratedKeypair.lift(
+    uniffiRustCallWithError(NuruNuruFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_nurunuru_fn_func_generate_keypair(
+        _status)
+}
+    )
+    }
+    
+
+        /**
          * One-time global initialisation. Call this once in `Application.onCreate()`
          * before creating any `NuruNuruClient`.
          *
@@ -5441,6 +5594,19 @@ public object FfiConverterSequenceSequenceString: FfiConverterRustBuffer<List<Li
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_uniffi_nurunuru_fn_func_mls_db_path_for(
         FfiConverterString.lower(`dbPath`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Sign a generic Nostr event with a supplied secret key and return signed JSON.
+         */
+    @Throws(NuruNuruFfiException::class) fun `signEventJson`(`secretKeyHex`: kotlin.String, `kind`: kotlin.UInt, `content`: kotlin.String, `tags`: List<List<kotlin.String>>, `createdAt`: kotlin.ULong?): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(NuruNuruFfiException) { _status ->
+    UniffiLib.INSTANCE.uniffi_uniffi_nurunuru_fn_func_sign_event_json(
+        FfiConverterString.lower(`secretKeyHex`),FfiConverterUInt.lower(`kind`),FfiConverterString.lower(`content`),FfiConverterSequenceSequenceString.lower(`tags`),FfiConverterOptionalULong.lower(`createdAt`),_status)
 }
     )
     }

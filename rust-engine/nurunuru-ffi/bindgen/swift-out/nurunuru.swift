@@ -1003,6 +1003,11 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
     func publishRawEvent(eventJson: String) throws  -> String
     
     /**
+     * Publish an already-signed Nostr event JSON to specific relays only.
+     */
+    func publishRawEventToRelays(eventJson: String, relayUrls: [String]) throws  -> String
+    
+    /**
      * Query the local nostrdb cache by author pubkeys.
      *
      * Returns serialised JSON strings of matching kind-1 (text note) events,
@@ -1057,6 +1062,11 @@ public protocol NuruNuruClientProtocol: AnyObject, Sendable {
      * Issue #178 #1: set the 32-byte SQLCipher key. Call before `login()`.
      */
     func setMlsDbKey(key: Data) throws 
+    
+    /**
+     * Sign a Nostr event with this client's internal key and return signed JSON.
+     */
+    func signEvent(kind: UInt32, content: String, tags: [[String]], createdAt: UInt64?) throws  -> String
     
     /**
      * Start a persistent relay subscription for live events.
@@ -2093,6 +2103,18 @@ open func publishRawEvent(eventJson: String)throws  -> String  {
 }
     
     /**
+     * Publish an already-signed Nostr event JSON to specific relays only.
+     */
+open func publishRawEventToRelays(eventJson: String, relayUrls: [String])throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeNuruNuruFfiError_lift) {
+    uniffi_uniffi_nurunuru_fn_method_nurunuruclient_publish_raw_event_to_relays(self.uniffiClonePointer(),
+        FfiConverterString.lower(eventJson),
+        FfiConverterSequenceString.lower(relayUrls),$0
+    )
+})
+}
+    
+    /**
      * Query the local nostrdb cache by author pubkeys.
      *
      * Returns serialised JSON strings of matching kind-1 (text note) events,
@@ -2197,6 +2219,20 @@ open func setMlsDbKey(key: Data)throws   {try rustCallWithError(FfiConverterType
         FfiConverterData.lower(key),$0
     )
 }
+}
+    
+    /**
+     * Sign a Nostr event with this client's internal key and return signed JSON.
+     */
+open func signEvent(kind: UInt32, content: String, tags: [[String]], createdAt: UInt64?)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeNuruNuruFfiError_lift) {
+    uniffi_uniffi_nurunuru_fn_method_nurunuruclient_sign_event(self.uniffiClonePointer(),
+        FfiConverterUInt32.lower(kind),
+        FfiConverterString.lower(content),
+        FfiConverterSequenceSequenceString.lower(tags),
+        FfiConverterOptionUInt64.lower(createdAt),$0
+    )
+})
 }
     
     /**
@@ -2616,6 +2652,92 @@ public func FfiConverterTypeFfiEncryptedMessageData_lift(_ buf: RustBuffer) thro
 #endif
 public func FfiConverterTypeFfiEncryptedMessageData_lower(_ value: FfiEncryptedMessageData) -> RustBuffer {
     return FfiConverterTypeFfiEncryptedMessageData.lower(value)
+}
+
+
+public struct FfiGeneratedKeypair {
+    public var privateKeyHex: String
+    public var nsec: String
+    public var publicKeyHex: String
+    public var npub: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(privateKeyHex: String, nsec: String, publicKeyHex: String, npub: String) {
+        self.privateKeyHex = privateKeyHex
+        self.nsec = nsec
+        self.publicKeyHex = publicKeyHex
+        self.npub = npub
+    }
+}
+
+#if compiler(>=6)
+extension FfiGeneratedKeypair: Sendable {}
+#endif
+
+
+extension FfiGeneratedKeypair: Equatable, Hashable {
+    public static func ==(lhs: FfiGeneratedKeypair, rhs: FfiGeneratedKeypair) -> Bool {
+        if lhs.privateKeyHex != rhs.privateKeyHex {
+            return false
+        }
+        if lhs.nsec != rhs.nsec {
+            return false
+        }
+        if lhs.publicKeyHex != rhs.publicKeyHex {
+            return false
+        }
+        if lhs.npub != rhs.npub {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(privateKeyHex)
+        hasher.combine(nsec)
+        hasher.combine(publicKeyHex)
+        hasher.combine(npub)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiGeneratedKeypair: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiGeneratedKeypair {
+        return
+            try FfiGeneratedKeypair(
+                privateKeyHex: FfiConverterString.read(from: &buf), 
+                nsec: FfiConverterString.read(from: &buf), 
+                publicKeyHex: FfiConverterString.read(from: &buf), 
+                npub: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiGeneratedKeypair, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.privateKeyHex, into: &buf)
+        FfiConverterString.write(value.nsec, into: &buf)
+        FfiConverterString.write(value.publicKeyHex, into: &buf)
+        FfiConverterString.write(value.npub, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiGeneratedKeypair_lift(_ buf: RustBuffer) throws -> FfiGeneratedKeypair {
+    return try FfiConverterTypeFfiGeneratedKeypair.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiGeneratedKeypair_lower(_ value: FfiGeneratedKeypair) -> RustBuffer {
+    return FfiConverterTypeFfiGeneratedKeypair.lower(value)
 }
 
 
@@ -4078,6 +4200,25 @@ public func deriveMlsDbKeyFromSecret(secretKeyHex: String, appSalt: String)throw
 })
 }
 /**
+ * Derive an x-only public key hex from a secret key (hex or nsec).
+ */
+public func derivePublicKeyFromSecret(secretKeyHex: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeNuruNuruFfiError_lift) {
+    uniffi_uniffi_nurunuru_fn_func_derive_public_key_from_secret(
+        FfiConverterString.lower(secretKeyHex),$0
+    )
+})
+}
+/**
+ * Generate a fresh Nostr keypair for platform onboarding flows.
+ */
+public func generateKeypair()throws  -> FfiGeneratedKeypair  {
+    return try  FfiConverterTypeFfiGeneratedKeypair_lift(try rustCallWithError(FfiConverterTypeNuruNuruFfiError_lift) {
+    uniffi_uniffi_nurunuru_fn_func_generate_keypair($0
+    )
+})
+}
+/**
  * One-time global initialisation. Call this once in `Application.onCreate()`
  * before creating any `NuruNuruClient`.
  *
@@ -4110,6 +4251,20 @@ public func mlsDbPathFor(dbPath: String) -> String  {
     )
 })
 }
+/**
+ * Sign a generic Nostr event with a supplied secret key and return signed JSON.
+ */
+public func signEventJson(secretKeyHex: String, kind: UInt32, content: String, tags: [[String]], createdAt: UInt64?)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeNuruNuruFfiError_lift) {
+    uniffi_uniffi_nurunuru_fn_func_sign_event_json(
+        FfiConverterString.lower(secretKeyHex),
+        FfiConverterUInt32.lower(kind),
+        FfiConverterString.lower(content),
+        FfiConverterSequenceSequenceString.lower(tags),
+        FfiConverterOptionUInt64.lower(createdAt),$0
+    )
+})
+}
 
 private enum InitializationResult {
     case ok
@@ -4129,10 +4284,19 @@ private let initializationResult: InitializationResult = {
     if (uniffi_uniffi_nurunuru_checksum_func_derive_mls_db_key_from_secret() != 19985) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_uniffi_nurunuru_checksum_func_derive_public_key_from_secret() != 30870) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_uniffi_nurunuru_checksum_func_generate_keypair() != 53556) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_uniffi_nurunuru_checksum_func_init_engine() != 52824) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_uniffi_nurunuru_checksum_func_mls_db_path_for() != 4127) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_uniffi_nurunuru_checksum_func_sign_event_json() != 51079) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_add_relay() != 26516) {
@@ -4330,6 +4494,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_publish_raw_event() != 20623) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_publish_raw_event_to_relays() != 5562) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_query_local() != 50993) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -4352,6 +4519,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_set_mls_db_key() != 57395) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_sign_event() != 18774) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_start_live_subscription() != 15505) {

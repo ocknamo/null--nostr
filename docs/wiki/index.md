@@ -132,6 +132,7 @@
 | [[decisions/adr-0014-local-first-product-metrics]] | local-first metrics 実装は6月 Phase 1では見送り。実機 manual QA を一次情報としてオンボーディング改善を回す判断。 |
 | [[decisions/adr-0013-relay-feed-removal]] | スパム・違法コンテンツ流入経路になったリレーフィードを主要UIから削除し、リレー設定/投稿/検索用途は維持する判断。 |
 | [[decisions/adr-0018-rokunana-root-tab-removal]] | ろくななは root tab から外し、6月は UI 移設せずコードだけリポジトリに dead-but-preserved として残す。 |
+| [[decisions/adr-0019-ios-rust-ffi-write-path]] | iOS Rust FFI write-path migration starts from keygen/sign/publish contracts; NIP-46/Passkey remain platform signer paths. |
 | [[decisions/adr-0017-nip-5a-mini-apps]] | NIP-5A ミニアプリを WebView/static-site として安全に起動する manifest / permission 境界。 |
 | [[decisions/adr-0016-news-curation-model]] | ニュースタブは NIP-23 + NIP-32 を 2-hop 信頼グラフで発見・表示する。 |
 
@@ -151,3 +152,7 @@
 - `AGENTS.md`
 - `docs/wiki/log.md`
 - Source references listed in each linked wiki page.
+
+## Quality
+
+| [[quality/qa-2026-06-01]] | iOS Rust FFI Phase 1.1 read-only diagnostics の manual QA PASS 記録。 |

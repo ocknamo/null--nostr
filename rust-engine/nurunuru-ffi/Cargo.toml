@@ -7,7 +7,7 @@ authors.workspace = true
 description = "UniFFI bindings for nurunuru-core (Swift/iOS, Kotlin/Android)"
 
 [lib]
-crate-type = ["cdylib", "staticlib"]
+crate-type = ["cdylib", "staticlib", "rlib"]
 # Name must match what UniFFI's findLibraryName() returns ("uniffi_nurunuru")
 # so that JNA can load the library as "libuniffi_nurunuru.so".
 name = "uniffi_nurunuru"

@@ -70,8 +70,12 @@ extension NostrRepository {
         if !uniqueFanoutRelays.isEmpty,
            let data = try? JSONEncoder().encode(event),
            let rawJson = String(data: data, encoding: .utf8) {
-            Task { [client] in
+            Task {
+#if NURUNURU_FFI_AVAILABLE
+                try? await self.publishSignedRawEventJSON(rawJson, to: uniqueFanoutRelays)
+#else
                 try? await client.publishRawEventJSON(rawJson, to: uniqueFanoutRelays)
+#endif
             }
         }
         return event

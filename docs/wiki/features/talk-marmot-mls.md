@@ -31,6 +31,10 @@ Native Talk uses Marmot / WhiteNoise-compatible MLS instead of displaying legacy
 - `engine.rs` wraps/unpacks Welcomes, creates group messages, validates key packages, and exposes high-level MLS operations to FFI.
 - `nurunuru-ffi/src/lib.rs` exports MLS APIs to Kotlin/Swift.
 
+## iOS Rust FFI Phase 6 note
+
+Phase 6 expands iOS use of the Rust MLS engine beyond read-only diagnostics and crypto calls. The app can now optionally use Rust FFI for MLS raw publish and live Welcome/KeyPackage subscription drains while retaining the established Swift relay fetch / repair fallback paths.
+
 ## Source references
 
 - `android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepositoryTalk.kt`

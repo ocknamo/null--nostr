@@ -20,6 +20,13 @@ This directory stores lightweight Architecture Decision Records (ADRs). Use ADRs
 | [[adr-0010-passkey-prf-direct-method]] | Passkey PRF を直接署名手段として採用する判断。 |
 | [[adr-0011-nuruh-ip-doctrine]] | ぬるる IP 憲章 (四箇条) を起票する判断。 |
 | [[adr-0012-monday-release-nuru-production-system]] | 月曜リリース列車と Nuru Production System を採用する判断。 |
+| [[adr-0013-relay-feed-removal]] | リレーフィードを主要UIから削除し、設定/投稿/検索用途は維持する判断。 |
+| [[adr-0014-local-first-product-metrics]] | 6月 Phase 1 は local-first metrics を見送り、manual QA を一次情報にする判断。 |
+| [[adr-0015-home-tab-renewal]] | ホームを中心タブへ刷新し、フォローフィード/設定を集約する判断。 |
+| [[adr-0016-news-curation-model]] | News は NIP-23 + NIP-32 を 2-hop 信頼グラフで発見・表示する判断。 |
+| [[adr-0017-nip-5a-mini-apps]] | NIP-5A ミニアプリの manifest / permission 境界。 |
+| [[adr-0018-rokunana-root-tab-removal]] | ろくなな root tab removal と code-only retention。 |
+| [[adr-0019-ios-rust-ffi-write-path]] | iOS Rust FFI write-path migration starts from keygen/sign/publish contracts. |
 
 ## ADR convention
 

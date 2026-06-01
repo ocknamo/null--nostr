@@ -69,6 +69,35 @@ final class AppPreferences {
         static let hasAcceptedTerms = "nurunuru_has_accepted_terms"
         static let loginMethod    = "nurunuru_login_method"
         static let pendingReferralPubkeyHex = "nurunuru_pending_referral_pubkey_hex"
+        static let iosRustFfiKeygenEnabled = "nurunuru_ios_rust_ffi_keygen_enabled"
+        static let iosRustFfiSigningEnabled = "nurunuru_ios_rust_ffi_signing_enabled"
+        static let iosRustFfiPublishEnabled = "nurunuru_ios_rust_ffi_publish_enabled"
+        static let iosRustFfiTalkMlsEnabled = "nurunuru_ios_rust_ffi_talk_mls_enabled"
+    }
+
+
+    /// iOS Rust FFI key generation rollout flag. Default ON: falls back to Swift keygen on failure.
+    var iosRustFfiKeygenEnabled: Bool {
+        get { defaults.object(forKey: Keys.iosRustFfiKeygenEnabled) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.iosRustFfiKeygenEnabled) }
+    }
+
+    /// iOS Rust FFI internal signing rollout flag. Phase 7 default ON; toggle remains for fallback.
+    var iosRustFfiSigningEnabled: Bool {
+        get { defaults.object(forKey: Keys.iosRustFfiSigningEnabled) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.iosRustFfiSigningEnabled) }
+    }
+
+    /// iOS Rust FFI raw publish rollout flag. Phase 7 default ON; toggle remains for fallback.
+    var iosRustFfiPublishEnabled: Bool {
+        get { defaults.object(forKey: Keys.iosRustFfiPublishEnabled) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.iosRustFfiPublishEnabled) }
+    }
+
+    /// iOS Rust FFI Talk MLS rollout flag. Phase 7 default ON after Android/iOS interop QA.
+    var iosRustFfiTalkMlsEnabled: Bool {
+        get { defaults.object(forKey: Keys.iosRustFfiTalkMlsEnabled) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.iosRustFfiTalkMlsEnabled) }
     }
 
     /// Active authentication backend for the current session.

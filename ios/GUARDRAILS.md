@@ -59,20 +59,32 @@ These rules are non-negotiable. Every PR and code review must verify compliance.
 - **No SwiftUI `.task` for pagination**: use `.onAppear` on sentinel item.
 - **Async/await everywhere**: no completion handlers, no Combine for new code.
 
-## 8. Navigation Rules
+## 8. Rust FFI Phase 1
+
+- iOS Rust FFI Phase 1 starts with read-only diagnostics only.
+- Live helper: mlsIsEncrypted() -> Bool? via MlsFFIBridge / MlsFFILiveClient.
+- Phase 1.1 may additionally call read-only MLS diagnostics: mlsListGroups() count and mlsGroupsNeedingSelfUpdate(thresholdSecs:) count.
+- Phase 1.2 diagnostic polish may show only sanitized per-helper statuses such as ok / unavailable / failed and a local check time; raw Rust errors must not be displayed.
+- true means the live UniFFI client reports the MLS DB is encrypted.
+- false means the live UniFFI client reports plaintext; Talk must stay stopped/safe.
+- nil means FFI unavailable, disabled, key material locked, MLS manager not bound, or stub/fallback active.
+- Do not add signing, publishing, key generation, or private-key export to Phase 1.
+- Do not log private keys, public keys, relay auth challenges, or DB paths from diagnostic UI code.
+
+## 9. Navigation Rules
 
 - 5-tab bottom navigation at root. Tab order: ホーム / トーク / ろくなな / タイムライン / ミニアプリ.
 - Modals as `.sheet` (half/full). Image viewer as `.fullScreenCover`.
 - No `NavigationLink` for modals — use `@State` booleans + `.sheet`.
 - Deep link scheme: `nurunuru://`
 
-## 9. NIP Compliance
+## 10. NIP Compliance
 
 - Same NIP support as Android: 01, 02, 05, 07, 09, 11, 17, 19, 25, 27, 30, 32, 42, 44, 46, 50, 51, 57, 58, 59, 62, 65, 70, 71, 98.
 - NIP-46 (Nostr Connect) replaces NIP-55 (Amber) on iOS.
 - Verify NIP-05 with 5-second timeout.
 
-## 10. Code Quality
+## 11. Code Quality
 
 - No force unwraps (`!`) except in tests or previews.
 - No `Any` or `AnyObject` in public APIs — use generics or protocols.
@@ -80,7 +92,7 @@ These rules are non-negotiable. Every PR and code review must verify compliance.
 - Naming: match Android model names exactly (`ScoredPost`, `MlsGroup`, `NotificationItem`, etc.) for cross-platform consistency.
 - Minimum iOS deployment target: 17.0.
 
-## 11. Dependencies — Minimal
+## 12. Dependencies — Minimal
 
 - Prefer Apple frameworks over third-party:
   - URLSession over Alamofire
@@ -90,20 +102,20 @@ These rules are non-negotiable. Every PR and code review must verify compliance.
 - SPM only. No CocoaPods, no Carthage.
 - Every new dependency must be justified and approved.
 
-## 12. Build & CI
+## 13. Build & CI
 
 - Xcode project must build with `xcodebuild` from CLI (no manual Xcode-only steps).
 - All tests runnable via `xcodebuild test`.
 - No warnings in release builds (`SWIFT_TREAT_WARNINGS_AS_ERRORS = YES`).
 - Scheme: NuruNuru (debug) and NuruNuru (release).
 
-## 13. Localization
+## 14. Localization
 
 - All user-visible strings in `Localizable.strings` (or String Catalogs).
 - Japanese is the primary language. English as fallback.
 - Same string keys as Android where possible.
 
-## 14. Checklist for Every New Screen/Component
+## 15. Checklist for Every New Screen/Component
 
 - [ ] Matches Android equivalent pixel-for-pixel (compare screenshots)
 - [ ] Uses design tokens, not hardcoded values

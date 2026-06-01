@@ -606,6 +606,11 @@ RustBuffer uniffi_uniffi_nurunuru_fn_method_nurunuruclient_publish_note_with_tag
 RustBuffer uniffi_uniffi_nurunuru_fn_method_nurunuruclient_publish_raw_event(void*_Nonnull ptr, RustBuffer event_json, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_FN_METHOD_NURUNURUCLIENT_PUBLISH_RAW_EVENT_TO_RELAYS
+#define UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_FN_METHOD_NURUNURUCLIENT_PUBLISH_RAW_EVENT_TO_RELAYS
+RustBuffer uniffi_uniffi_nurunuru_fn_method_nurunuruclient_publish_raw_event_to_relays(void*_Nonnull ptr, RustBuffer event_json, RustBuffer relay_urls, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_FN_METHOD_NURUNURUCLIENT_QUERY_LOCAL
 #define UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_FN_METHOD_NURUNURUCLIENT_QUERY_LOCAL
 RustBuffer uniffi_uniffi_nurunuru_fn_method_nurunuruclient_query_local(void*_Nonnull ptr, RustBuffer authors, uint32_t limit, RustCallStatus *_Nonnull out_status
@@ -646,6 +651,11 @@ void uniffi_uniffi_nurunuru_fn_method_nurunuruclient_send_dm(void*_Nonnull ptr, 
 void uniffi_uniffi_nurunuru_fn_method_nurunuruclient_set_mls_db_key(void*_Nonnull ptr, RustBuffer key, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_FN_METHOD_NURUNURUCLIENT_SIGN_EVENT
+#define UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_FN_METHOD_NURUNURUCLIENT_SIGN_EVENT
+RustBuffer uniffi_uniffi_nurunuru_fn_method_nurunuruclient_sign_event(void*_Nonnull ptr, uint32_t kind, RustBuffer content, RustBuffer tags, RustBuffer created_at, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_FN_METHOD_NURUNURUCLIENT_START_LIVE_SUBSCRIPTION
 #define UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_FN_METHOD_NURUNURUCLIENT_START_LIVE_SUBSCRIPTION
 RustBuffer uniffi_uniffi_nurunuru_fn_method_nurunuruclient_start_live_subscription(void*_Nonnull ptr, RustBuffer authors, RustCallStatus *_Nonnull out_status
@@ -671,6 +681,17 @@ RustBuffer uniffi_uniffi_nurunuru_fn_method_nurunuruclient_update_profile(void*_
 RustBuffer uniffi_uniffi_nurunuru_fn_func_derive_mls_db_key_from_secret(RustBuffer secret_key_hex, RustBuffer app_salt, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_FN_FUNC_DERIVE_PUBLIC_KEY_FROM_SECRET
+#define UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_FN_FUNC_DERIVE_PUBLIC_KEY_FROM_SECRET
+RustBuffer uniffi_uniffi_nurunuru_fn_func_derive_public_key_from_secret(RustBuffer secret_key_hex, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_FN_FUNC_GENERATE_KEYPAIR
+#define UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_FN_FUNC_GENERATE_KEYPAIR
+RustBuffer uniffi_uniffi_nurunuru_fn_func_generate_keypair(RustCallStatus *_Nonnull out_status
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_FN_FUNC_INIT_ENGINE
 #define UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_FN_FUNC_INIT_ENGINE
 void uniffi_uniffi_nurunuru_fn_func_init_engine(RustBuffer db_path, RustCallStatus *_Nonnull out_status
@@ -679,6 +700,11 @@ void uniffi_uniffi_nurunuru_fn_func_init_engine(RustBuffer db_path, RustCallStat
 #ifndef UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_FN_FUNC_MLS_DB_PATH_FOR
 #define UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_FN_FUNC_MLS_DB_PATH_FOR
 RustBuffer uniffi_uniffi_nurunuru_fn_func_mls_db_path_for(RustBuffer db_path, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_FN_FUNC_SIGN_EVENT_JSON
+#define UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_FN_FUNC_SIGN_EVENT_JSON
+RustBuffer uniffi_uniffi_nurunuru_fn_func_sign_event_json(RustBuffer secret_key_hex, uint32_t kind, RustBuffer content, RustBuffer tags, RustBuffer created_at, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_FFI_UNIFFI_NURUNURU_RUSTBUFFER_ALLOC
@@ -967,6 +993,18 @@ uint16_t uniffi_uniffi_nurunuru_checksum_func_derive_mls_db_key_from_secret(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_CHECKSUM_FUNC_DERIVE_PUBLIC_KEY_FROM_SECRET
+#define UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_CHECKSUM_FUNC_DERIVE_PUBLIC_KEY_FROM_SECRET
+uint16_t uniffi_uniffi_nurunuru_checksum_func_derive_public_key_from_secret(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_CHECKSUM_FUNC_GENERATE_KEYPAIR
+#define UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_CHECKSUM_FUNC_GENERATE_KEYPAIR
+uint16_t uniffi_uniffi_nurunuru_checksum_func_generate_keypair(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_CHECKSUM_FUNC_INIT_ENGINE
 #define UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_CHECKSUM_FUNC_INIT_ENGINE
 uint16_t uniffi_uniffi_nurunuru_checksum_func_init_engine(void
@@ -976,6 +1014,12 @@ uint16_t uniffi_uniffi_nurunuru_checksum_func_init_engine(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_CHECKSUM_FUNC_MLS_DB_PATH_FOR
 #define UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_CHECKSUM_FUNC_MLS_DB_PATH_FOR
 uint16_t uniffi_uniffi_nurunuru_checksum_func_mls_db_path_for(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_CHECKSUM_FUNC_SIGN_EVENT_JSON
+#define UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_CHECKSUM_FUNC_SIGN_EVENT_JSON
+uint16_t uniffi_uniffi_nurunuru_checksum_func_sign_event_json(void
     
 );
 #endif
@@ -1369,6 +1413,12 @@ uint16_t uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_publish_raw_event
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_CHECKSUM_METHOD_NURUNURUCLIENT_PUBLISH_RAW_EVENT_TO_RELAYS
+#define UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_CHECKSUM_METHOD_NURUNURUCLIENT_PUBLISH_RAW_EVENT_TO_RELAYS
+uint16_t uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_publish_raw_event_to_relays(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_CHECKSUM_METHOD_NURUNURUCLIENT_QUERY_LOCAL
 #define UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_CHECKSUM_METHOD_NURUNURUCLIENT_QUERY_LOCAL
 uint16_t uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_query_local(void
@@ -1414,6 +1464,12 @@ uint16_t uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_send_dm(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_CHECKSUM_METHOD_NURUNURUCLIENT_SET_MLS_DB_KEY
 #define UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_CHECKSUM_METHOD_NURUNURUCLIENT_SET_MLS_DB_KEY
 uint16_t uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_set_mls_db_key(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_CHECKSUM_METHOD_NURUNURUCLIENT_SIGN_EVENT
+#define UNIFFI_FFIDEF_UNIFFI_UNIFFI_NURUNURU_CHECKSUM_METHOD_NURUNURUCLIENT_SIGN_EVENT
+uint16_t uniffi_uniffi_nurunuru_checksum_method_nurunuruclient_sign_event(void
     
 );
 #endif
