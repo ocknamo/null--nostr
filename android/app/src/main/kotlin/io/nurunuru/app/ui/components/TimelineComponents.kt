@@ -12,8 +12,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Close
@@ -71,76 +69,7 @@ fun TimelineHeader(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // リレータブ — テキスト + ▼ を同じピル内に収める
-                val relayLabel = selectedRelayUrl
-                    ?.replace("wss://", "")?.trimEnd('/')?.substringBefore("/")
-                    ?: "リレー"
-                val isGlobal = feedType == FeedType.GLOBAL
-                Box(contentAlignment = Alignment.TopEnd) {
-                    Button(
-                        onClick = {
-                            onFeedTypeChange(FeedType.GLOBAL)
-                            if (savedRelayUrls.isNotEmpty()) showRelayDropdown = !showRelayDropdown
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isGlobal) LineGreen else Color.Transparent,
-                            contentColor = if (isGlobal) Color.White else nuruColors.textTertiary
-                        ),
-                        contentPadding = PaddingValues(
-                            start = 16.dp,
-                            end = if (savedRelayUrls.isNotEmpty()) 6.dp else 16.dp,
-                            top = 0.dp, bottom = 0.dp
-                        ),
-                        modifier = Modifier.height(32.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        elevation = null
-                    ) {
-                        Text(relayLabel, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                        if (savedRelayUrls.isNotEmpty()) {
-                            Spacer(Modifier.width(2.dp))
-                            Icon(
-                                Icons.Default.ArrowDropDown,
-                                contentDescription = "リレーを選択",
-                                modifier = Modifier.size(16.dp),
-                                tint = if (isGlobal) Color.White else nuruColors.textTertiary
-                            )
-                        }
-                    }
-                    if (showRecommendedDot) {
-                        Box(
-                            modifier = Modifier
-                                .size(10.dp)
-                                .offset(x = 2.dp, y = (-2).dp)
-                                .background(LineGreen, CircleShape)
-                                .border(2.dp, nuruColors.bgSecondary, CircleShape)
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = showRelayDropdown,
-                        onDismissRequest = { showRelayDropdown = false }
-                    ) {
-                        savedRelayUrls.forEach { url ->
-                            val isSelected = url == selectedRelayUrl
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        url.replace("wss://", "").trimEnd('/'),
-                                        fontSize = 13.sp,
-                                        color = nuruColors.textPrimary
-                                    )
-                                },
-                                onClick = {
-                                    onSelectRelay(if (isSelected) null else url)
-                                    showRelayDropdown = false
-                                },
-                                trailingIcon = if (isSelected) {
-                                    { Icon(Icons.Default.Check, null, tint = nuruColors.textPrimary, modifier = Modifier.size(14.dp)) }
-                                } else null
-                            )
-                        }
-                    }
-                }
-
+                // ADR-0013: リレー生フィードを主要導線から削除。
                 TimelineTabButton(
                     text = "フォロー",
                     selected = feedType == FeedType.FOLLOWING,

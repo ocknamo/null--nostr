@@ -35,8 +35,6 @@ import {
   removeBookmark,
   fetchZapTotals,
   fetchRepostCounts,
-  DEFAULT_RELAY,
-  FALLBACK_RELAYS,
   RELAYS
 } from '@/lib/nostr'
 import { uploadImagesInParallel } from '@/lib/imageUtils'
@@ -130,8 +128,6 @@ function ContentPreview({ content, customEmojis = [] }) {
 }
 
 const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollContainerRef, onPostPublished, isDesktop = false, isActive = true }, ref) {
-  // Separate state for each timeline mode
-  const [globalPosts, setGlobalPosts] = useState([])
   const [followingPosts, setFollowingPosts] = useState([])
   const [profiles, setProfiles] = useState({})
   const [loading, setLoading] = useState(true)
@@ -186,18 +182,6 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
 
   // Birdwatch (NIP-32) state
   const [birdwatchLabels, setBirdwatchLabels] = useState({}) // eventId -> array of label events
-  // Not interested state — kept for compatibility but not displayed in relay feed (アプリ版に合わせ)
-  const [notInterestedPosts, setNotInterestedPosts] = useState(new Set())
-  // Timeline mode — 'global' = リレーフィード (Android TimelineViewModel.FeedType.GLOBAL と同じ)
-  const [timelineMode, setTimelineMode] = useState('following')
-  const [loadingRelay, setLoadingRelay] = useState(false)
-  const [relayReady, setRelayReady] = useState(false)
-  // Relay feed selector (matches Android TimelineHeader savedRelayUrls + selectedRelayUrl)
-  // - savedRelayUrls: localStorage 'nip65Relays' から取得した保存済みリレー
-  // - selectedRelayUrl: null = デフォルト read relays (NIP-65)、URL = その単一リレー
-  const [savedRelayUrls, setSavedRelayUrls] = useState([])
-  const [selectedRelayUrl, setSelectedRelayUrl] = useState(null)
-  const [showRelayDropdown, setShowRelayDropdown] = useState(false)
   const [followList, setFollowList] = useState([])
   const [followListLoading, setFollowListLoading] = useState(false)
   const [followingPrefetched, setFollowingPrefetched] = useState(false)
@@ -206,18 +190,11 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
   const postImageInputRef = useRef(null)
   const postImageAddRef = useRef(null)
   const initialLoadDone = useRef(false)
-  // リレー切替時のレース防止: 最新リクエスト ID のみ反映する
-  const relayRequestIdRef = useRef(0)
-
   // Maximum number of images allowed
   const MAX_IMAGES = 3
-  // Scroll position refs for each timeline
-  const globalScrollRef = useRef(0)
-  const followingScrollRef = useRef(0)
-
   // Get posts for current mode
-  const posts = timelineMode === 'global' ? globalPosts : followingPosts
-  const setPosts = timelineMode === 'global' ? setGlobalPosts : setFollowingPosts
+  const posts = followingPosts
+  const setPosts = setFollowingPosts
 
   // Expose refresh function to parent
   useImperativeHandle(ref, () => ({
@@ -227,36 +204,6 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
     closeSearch: () => { setShowSearch(false); setSearchQuery('') },
     openSearch: (query) => { setSearchQuery(query); setShowSearch(true) }
   }))
-
-  // Save scroll position when switching modes - use scrollContainerRef from parent
-  const handleModeChange = (newMode) => {
-    if (newMode === timelineMode) return
-    
-    // Save current scroll position from container
-    const container = scrollContainerRef?.current
-    const currentScroll = container?.scrollTop || 0
-    
-    if (timelineMode === 'global') {
-      globalScrollRef.current = currentScroll
-    } else {
-      followingScrollRef.current = currentScroll
-    }
-
-    if (newMode === 'global') {
-      // Clear new-post notification when switching to relay feed
-      setRelayReady(false)
-    }
-    
-    setTimelineMode(newMode)
-    
-    // Restore scroll position after state update
-    setTimeout(() => {
-      const targetScroll = newMode === 'global' ? globalScrollRef.current : followingScrollRef.current
-      if (container) {
-        container.scrollTop = targetScroll
-      }
-    }, 0)
-  }
 
   // Lock body scroll when modal is open
   useEffect(() => {
@@ -284,9 +231,6 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
       setProfiles(cachedProfiles)
     }
 
-    // リレーセレクタ用に保存済みリレー一覧を読み込み (Android getSavedRelayUrls 相当)
-    loadSavedRelays()
-
     // Start loading data
     loadTimeline()
 
@@ -296,43 +240,6 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
       }
     }
   }, [])
-
-  // 保存済みリレー URL 一覧を取得する。Android NostrRepository.getSavedRelayUrls() に対応:
-  //   NIP-65 リスト (localStorage 'nip65Relays') があればそれを、無ければデフォルト general relays。
-  // RelaySettings ミニアプリで管理される NIP-65 リレーリストと共有。
-  // フォールバックリスト = [DEFAULT_RELAY, ...FALLBACK_RELAYS] (= AGENTS.md "Default Relays" の 4 件)。
-  // これにより リレー選択ピル のドロップダウンは常に最低 4 件の選択肢を持つ。
-  const computeFallbackRelays = () => {
-    const all = [DEFAULT_RELAY, ...FALLBACK_RELAYS]
-      .filter(u => typeof u === 'string' && u.startsWith('wss://'))
-      .map(u => u.trim().replace(/\/+$/, ''))
-    return all.filter((u, i, arr) => arr.indexOf(u) === i)
-  }
-
-  const loadSavedRelays = () => {
-    if (typeof window === 'undefined') {
-      setSavedRelayUrls(computeFallbackRelays())
-      return
-    }
-    let urls = []
-    try {
-      const raw = localStorage.getItem('nip65Relays')
-      if (raw) {
-        const parsed = JSON.parse(raw)
-        if (Array.isArray(parsed)) {
-          urls = parsed
-            .map(r => (typeof r === 'string' ? r : r?.url))
-            .filter(u => typeof u === 'string' && u.startsWith('wss://'))
-            .map(u => u.trim().replace(/\/+$/, ''))
-            .filter((u, i, arr) => arr.indexOf(u) === i)
-        }
-      }
-    } catch (e) {
-      console.warn('Failed to load saved relays:', e)
-    }
-    // Android getSavedRelayUrls の `nip65.ifEmpty { prefs.relays }` 相当のフォールバック
-    setSavedRelayUrls(urls.length > 0 ? urls : computeFallbackRelays())
-  }
 
   // Load mute list, follow list, and check notifications when pubkey is available
   useEffect(() => {
@@ -424,34 +331,6 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
     }
   }, [followList])
 
-  // Prefetch relay timeline in background (アプリ版 fetchRelayTimeline 相当)
-  useEffect(() => {
-    if (initialLoadDone.current && globalPosts.length === 0 && !loadingRelay && !relayReady) {
-      loadRelayTimeline(selectedRelayUrl)
-    }
-  }, [initialLoadDone.current, globalPosts.length, loadingRelay, relayReady])
-
-  // Reload timeline when mode changes (only if not already loaded)
-  useEffect(() => {
-    if (!loading && initialLoadDone.current) {
-      if (timelineMode === 'following' && followingPosts.length === 0) {
-        loadFollowingTimeline()
-      } else if (timelineMode === 'global' && globalPosts.length === 0) {
-        loadRelayTimeline(selectedRelayUrl)
-      }
-    }
-  }, [timelineMode])
-
-  // Reload relay feed when the selected relay changes
-  // (Android TimelineViewModel.selectRelayFeed と同じ — 旧結果をクリアして再取得)
-  useEffect(() => {
-    if (!initialLoadDone.current) return
-    setGlobalPosts([])
-    setRelayReady(false)
-    loadRelayTimeline(selectedRelayUrl)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedRelayUrl])
-
   const loadFollowList = async () => {
     if (!pubkey) return
     setFollowListLoading(true)
@@ -506,182 +385,6 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
     setMutedPubkeys(new Set())
   }
 
-  // Load relay timeline (アプリ版に合わせたリレーフィード)
-  // iOS fetchGlobalTimelineFromRelay / Android fetchGlobalTimelineFast と同じく、
-  // 通常投稿と長文記事を表示対象にする:
-  //   - 指定リレー単体 (relayUrl !== null) または read relays (NIP-65) から kind:1 / kind:30023 を取得
-  //   - リプライ ("e" タグを含むイベント) を除外
-  //   - 時系列降順でソート
-  //   - 推薦アルゴリズム (2nd-degree network / scoring / diversity) は適用しない
-  const loadRelayTimeline = async (relayUrl = null) => {
-    setLoadingRelay(true)
-    setLoadError(false)
-
-    // Only show main loading spinner if currently in global mode and have no posts
-    const isPrimaryView = timelineMode === 'global' && globalPosts.length === 0
-    if (isPrimaryView) setLoading(true)
-
-    // 並行リクエストのレース対策: 最新リクエスト ID のみ反映
-    const requestId = ++relayRequestIdRef.current
-    // relayUrl 指定時 → そのリレーのみ
-    // "すべて" (relayUrl === null) → 保存済みリレー全件 (Android fetchGlobalTimelineFast と同様、
-    //   複数リレーから集約)。savedRelayUrls はフォールバックで必ず非空。
-    //   保険として fallback リスト or getReadRelays() でガード。
-    const allRelays = savedRelayUrls.length > 0
-      ? savedRelayUrls
-      : (computeFallbackRelays().length > 0 ? computeFallbackRelays() : getReadRelays())
-    const targetRelays = relayUrl ? [relayUrl] : allRelays
-
-    try {
-      // 単一リレー指定時は connection-manager の fetchEventsManaged で
-      // 指定リレーのみに対して REQ を投げる (fallback を抑止)。
-      // 未指定時は通常の fetchEvents (fallback 含む) を使う。
-      // アプリ版 (iOS fetchGlobalTimelineFromRelay / Android fetchGlobalTimelineFast) に合わせて
-      // 通常投稿 (kind:1) と長文記事 (kind:30023) を取得する。
-      // リプライ ("e" タグ持ち) は下の filter で除外される (kind:30023 は通常 e タグを持たないので全件通る)。
-      const noteFilter = { kinds: [1, NOSTR_KINDS.LONG_FORM], limit: 50 }
-
-      const fetchOnce = (filter) =>
-        relayUrl
-          ? fetchEventsManaged(filter, targetRelays, { fast: true, timeoutMs: 8000 })
-          : fetchEvents(filter, targetRelays)
-
-      const notes = await fetchOnce(noteFilter)
-      const reposts = []
-
-      // リクエスト ID が変わっていれば破棄
-      if (requestId !== relayRequestIdRef.current) return
-
-      if (notes.length === 0 && reposts.length === 0) {
-        // 新着投稿が無いリレー (低トラフィック単一リレー等) は接続エラーではなく
-        // 「📭 まだ投稿がありません」表示にフォールバックさせる (アプリ版と同じ挙動)。
-        // 接続エラーは catch ブロックで例外を捕捉した時のみ扱う。
-        console.warn('No events received from relay feed (relay may be quiet, not necessarily an error)')
-      }
-
-      // リポストを展開
-      const repostData = []
-      const originalAuthors = new Set()
-      for (const repost of reposts) {
-        try {
-          if (repost.content) {
-            const originalEvent = JSON.parse(repost.content)
-            originalAuthors.add(originalEvent.pubkey)
-            repostData.push({
-              ...originalEvent,
-              _repostedBy: repost.pubkey,
-              _repostTime: repost.created_at,
-              _isRepost: true,
-              _repostId: repost.id
-            })
-          }
-        } catch (e) {
-          // 不正な JSON はスキップ
-        }
-      }
-
-      let allPosts = [...notes, ...repostData]
-
-      // リプライを除外 (アプリ版 fetchRelayTimeline: rootPosts = events.filter { it.getTagValues("e").isEmpty() })
-      // リポストはオリジナルイベントとして展開済みなので除外対象外
-      allPosts = allPosts.filter(post => {
-        if (post._isRepost) return true
-        const hasReplyTag = Array.isArray(post.tags) && post.tags.some(t => t[0] === 'e')
-        return !hasReplyTag
-      })
-
-      // ID 重複除去
-      const postMap = new Map()
-      for (const post of allPosts) {
-        if (!postMap.has(post.id)) postMap.set(post.id, post)
-      }
-      allPosts = Array.from(postMap.values())
-
-      // 時系列降順 (アプリ版と同じ)
-      allPosts.sort((a, b) => {
-        const timeA = a._repostTime || a.created_at
-        const timeB = b._repostTime || b.created_at
-        return timeB - timeA
-      })
-
-      // 上限 50 件 (Android fetchRelayTimeline のデフォルトと同じ)
-      const finalPosts = allPosts.slice(0, 50)
-
-      if (requestId !== relayRequestIdRef.current) return
-      setGlobalPosts(finalPosts)
-
-      // バックグラウンド中だった場合、新着ピル相当の通知ドットを点灯
-      if (timelineMode !== 'global') setRelayReady(true)
-
-      // プロフィール取得
-      const authors = new Set()
-      finalPosts.forEach(p => {
-        authors.add(p.pubkey)
-        if (p._repostedBy) authors.add(p._repostedBy)
-      })
-      originalAuthors.forEach(a => authors.add(a))
-      let profileMap = {}
-      if (authors.size > 0) {
-        profileMap = await fetchProfilesBatch(Array.from(authors))
-        if (requestId !== relayRequestIdRef.current) return
-        setProfiles(prev => ({ ...prev, ...profileMap }))
-      }
-
-      // リアクション / リポスト / Zap / ブックマークの並列取得
-      // (iOS NostrRepository+Timeline.swift enrichPosts と同じ並列フェッチ)
-      if (pubkey && finalPosts.length > 0) {
-        const eventIds = finalPosts.map(p => p.id)
-        const [reactionEvents, repostAgg, zapTotals, bookmarkIds] = await Promise.all([
-          fetchEvents({ kinds: [7], '#e': eventIds, limit: 500 }, getReadRelays()),
-          fetchRepostCounts(eventIds, pubkey),
-          fetchZapTotals(eventIds),
-          fetchBookmarkEventIds(pubkey)
-        ])
-
-        if (requestId !== relayRequestIdRef.current) return
-
-        const reactionCounts = {}
-        const myReactions = new Set()
-        const myReactionIds = {}
-
-        for (const event of reactionEvents) {
-          const targetId = event.tags.find(t => t[0] === 'e')?.[1]
-          if (targetId) {
-            reactionCounts[targetId] = (reactionCounts[targetId] || 0) + 1
-            if (event.pubkey === pubkey) {
-              myReactions.add(targetId)
-              myReactionIds[targetId] = event.id
-            }
-          }
-        }
-
-        setReactions(reactionCounts)
-        setUserReactions(myReactions)
-        setUserReposts(new Set(Object.keys(repostAgg.myRepostIds)))
-        setUserReactionIds(myReactionIds)
-        setUserRepostIds(repostAgg.myRepostIds)
-        setRepostCounts(repostAgg.counts)
-        setZapAmounts(zapTotals)
-        setUserBookmarks(new Set(bookmarkIds))
-      }
-
-      // Birdwatch ラベル取得
-      if (finalPosts.length > 0) {
-        const ids = finalPosts.map(p => p.id)
-        fetchBirdwatchForPosts(ids)
-      }
-    } catch (e) {
-      console.error('Failed to load relay timeline:', e)
-      if (isPrimaryView) setLoadError(true)
-    } finally {
-      if (requestId === relayRequestIdRef.current) {
-        setLoadingRelay(false)
-        setLoading(false)
-        initialLoadDone.current = true
-      }
-    }
-  }
-
   const handleAvatarClick = (targetPubkey, profile) => {
     if (targetPubkey !== pubkey) {
       setViewingProfile(targetPubkey)
@@ -705,10 +408,6 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
   const handleNotInterested = (eventId, authorPubkey) => {
     // Mark in recommendation system
     markNotInterested(eventId, authorPubkey)
-    // Update local state to hide immediately
-    setNotInterestedPosts(prev => new Set([...prev, eventId]))
-    // Remove from global posts
-    setGlobalPosts(prev => prev.filter(post => post.id !== eventId))
   }
 
   // NIP-56: Report handler
@@ -773,7 +472,7 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
   // Load following timeline (for following mode and desktop dual column)
   const loadFollowingTimeline = async () => {
     setFollowListLoading(true)
-    if (timelineMode === 'following' && followingPosts.length === 0) {
+    if (followingPosts.length === 0) {
       setLoading(true)
     }
 
@@ -888,13 +587,9 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
     }
   }
 
-  // Manual refresh that calls specific load function based on current mode
+  // Manual refresh for the follow-graph timeline.
   const loadTimeline = async () => {
-    if (timelineMode === 'following') {
-      await loadFollowingTimeline()
-    } else {
-      await loadRelayTimeline(selectedRelayUrl)
-    }
+    await loadFollowingTimeline()
   }
 
   // Handle hashtag click - open search with hashtag
@@ -1450,98 +1145,16 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
     return <PostItem {...commonProps} />
   }
 
-  // NIP-65 が未設定でも、アプリ版 getSavedRelayUrls() と同じく
-  // デフォルトリレー群を選択肢として表示する。
-  const relaySelectorUrls = savedRelayUrls.length > 0 ? savedRelayUrls : computeFallbackRelays()
-
   return (
     <div className="min-h-full overflow-x-hidden">
       {/* Header with tabs - fixed position (mobile only) */}
       <header className="fixed top-0 left-0 right-0 lg:left-[240px] xl:left-[280px] z-30 bg-[var(--bg-primary)] border-b border-[var(--border-color)]">
         <div className="flex items-center justify-between px-4 h-14 lg:h-16">
-          {/* Tab Switcher (Mobile only) - Pill Style (アプリ版 TimelineHeader 相当) */}
+          {/* ADR-0013: relay-wide feed removed; mobile shows follow-graph feed only. */}
           <div className="flex items-center gap-2 p-1 bg-[var(--bg-secondary)] rounded-full lg:hidden">
-            {/* リレーピル — 選択中リレーのホスト名を表示。タップでフィード切替、▼で選択ドロップダウン */}
-            <div className="relative">
-              <button
-                onClick={() => {
-                  handleModeChange('global')
-                  if (relaySelectorUrls.length > 0) setShowRelayDropdown(prev => !prev)
-                }}
-                className={`relative inline-flex items-center gap-0.5 pl-3 ${relaySelectorUrls.length > 0 ? 'pr-1.5' : 'pr-3'} py-1.5 rounded-full text-xs font-bold transition-all ${
-                  timelineMode === 'global'
-                    ? 'bg-[var(--line-green)] text-white shadow-sm'
-                    : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]'
-                }`}
-              >
-                <span className="max-w-[120px] truncate">
-                  {selectedRelayUrl
-                    ? selectedRelayUrl.replace(/^wss:\/\//, '').replace(/\/+$/, '').split('/')[0]
-                    : 'リレー'}
-                </span>
-                {relaySelectorUrls.length > 0 && (
-                  <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M7 10l5 5 5-5z"/>
-                  </svg>
-                )}
-                {relayReady && timelineMode !== 'global' && (
-                  <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-[var(--bg-secondary)]" />
-                )}
-              </button>
-
-              {/* リレー選択ドロップダウン (Android DropdownMenu 相当) */}
-              {showRelayDropdown && relaySelectorUrls.length > 0 && (
-                <>
-                  <div
-                    className="fixed inset-0 z-40"
-                    onClick={() => setShowRelayDropdown(false)}
-                  />
-                  <div className="absolute top-full left-0 mt-2 min-w-[200px] max-w-[280px] bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl shadow-lg z-50 overflow-hidden">
-                    {/* すべて (= selectedRelayUrl null) */}
-                    <button
-                      onClick={() => { setSelectedRelayUrl(null); setShowRelayDropdown(false) }}
-                      className="w-full flex items-center justify-between px-3 py-2.5 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] transition-colors"
-                    >
-                      <span>すべて</span>
-                      {selectedRelayUrl === null && (
-                        <svg className="w-4 h-4 text-[var(--line-green)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="20 6 9 17 4 12"/>
-                        </svg>
-                      )}
-                    </button>
-                    {relaySelectorUrls.map(url => {
-                      const display = url.replace(/^wss:\/\//, '').replace(/\/+$/, '')
-                      const isSel = selectedRelayUrl === url
-                      return (
-                        <button
-                          key={url}
-                          onClick={() => {
-                            setSelectedRelayUrl(isSel ? null : url)
-                            setShowRelayDropdown(false)
-                          }}
-                          className="w-full flex items-center justify-between px-3 py-2.5 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] transition-colors"
-                        >
-                          <span className="truncate">{display}</span>
-                          {isSel && (
-                            <svg className="w-4 h-4 text-[var(--line-green)] flex-shrink-0 ml-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                              <polyline points="20 6 9 17 4 12"/>
-                            </svg>
-                          )}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </>
-              )}
-            </div>
-
             <button
-              onClick={() => handleModeChange('following')}
-              className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${
-                timelineMode === 'following'
-                  ? 'bg-[var(--line-green)] text-white shadow-sm'
-                  : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]'
-              }`}
+              onClick={() => loadTimeline()}
+              className="px-4 py-1.5 rounded-full text-xs font-bold transition-all bg-[var(--line-green)] text-white shadow-sm"
             >
               フォロー
             </button>
@@ -2095,7 +1708,7 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
                   再試行
                 </button>
               </>
-            ) : timelineMode === 'following' ? (
+            ) : (
               <div className="empty-friendly">
                 <div className="empty-friendly-icon">📭</div>
                 <p className="empty-friendly-text">
@@ -2113,13 +1726,6 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
                      しばらくお待ちいただくか、更新してみてください
                    </p>
                 )}
-              </div>
-            ) : (
-              <div className="empty-friendly">
-                <div className="empty-friendly-icon">📭</div>
-                <p className="empty-friendly-text">
-                  まだ投稿がありません<br/>新しい投稿がまもなく届くかもしれません
-                </p>
               </div>
             )}
           </div>
@@ -2152,124 +1758,9 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
         )}
       </div>
       
-      {/* Desktop: Dual column (Relay | Following) with independent scroll */}
+      {/* Desktop: following feed only after ADR-0013 relay-feed removal */}
       <div className="hidden lg:flex lg:fixed lg:top-16 lg:bottom-0 lg:left-[240px] xl:left-[280px] lg:right-0">
-        {/* Left column: Relay timeline (アプリ版に合わせたリレーフィード) */}
-        <div className="flex-1 flex flex-col border-r border-[var(--border-color)] overflow-hidden">
-          <div className="flex-shrink-0 bg-[var(--bg-primary)] border-b border-[var(--border-color)] px-4 py-3 flex items-center justify-between">
-            <div className="relative">
-              <button
-                onClick={() => {
-                  if (relaySelectorUrls.length > 0) setShowRelayDropdown(prev => !prev)
-                }}
-                className="flex items-center gap-2 text-left rounded-full px-3 py-1.5 text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                title="リレーを選択"
-              >
-                <span className="font-bold">リレー</span>
-                <span className="text-xs font-normal text-[var(--text-tertiary)] truncate max-w-[200px]">
-                  {selectedRelayUrl
-                    ? selectedRelayUrl.replace(/^wss:\/\//, '').replace(/\/+$/, '')
-                    : 'すべて'}
-                </span>
-                {relaySelectorUrls.length > 0 && (
-                  <svg className="w-3 h-3 text-[var(--text-tertiary)] flex-shrink-0" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M7 10l5 5 5-5z"/>
-                  </svg>
-                )}
-              </button>
-
-              {showRelayDropdown && relaySelectorUrls.length > 0 && (
-                <>
-                  <div
-                    className="fixed inset-0 z-40"
-                    onClick={() => setShowRelayDropdown(false)}
-                  />
-                  <div className="absolute top-full left-0 mt-2 min-w-[220px] max-w-[320px] bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl shadow-lg z-50 overflow-hidden">
-                    <button
-                      onClick={() => { setSelectedRelayUrl(null); setShowRelayDropdown(false) }}
-                      className="w-full flex items-center justify-between px-3 py-2.5 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] transition-colors"
-                    >
-                      <span>すべて</span>
-                      {selectedRelayUrl === null && (
-                        <svg className="w-4 h-4 text-[var(--line-green)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="20 6 9 17 4 12"/>
-                        </svg>
-                      )}
-                    </button>
-                    {relaySelectorUrls.map(url => {
-                      const display = url.replace(/^wss:\/\//, '').replace(/\/+$/, '')
-                      const isSel = selectedRelayUrl === url
-                      return (
-                        <button
-                          key={url}
-                          onClick={() => {
-                            setSelectedRelayUrl(isSel ? null : url)
-                            setShowRelayDropdown(false)
-                          }}
-                          className="w-full flex items-center justify-between px-3 py-2.5 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] transition-colors"
-                        >
-                          <span className="truncate">{display}</span>
-                          {isSel && (
-                            <svg className="w-4 h-4 text-[var(--line-green)] flex-shrink-0 ml-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                              <polyline points="20 6 9 17 4 12"/>
-                            </svg>
-                          )}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </>
-              )}
-            </div>
-            <button
-              onClick={() => loadRelayTimeline(selectedRelayUrl)}
-              disabled={loadingRelay}
-              className="p-2 rounded-full text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-all disabled:opacity-50"
-              title="リレーフィードを更新"
-            >
-              <svg className={`w-4 h-4 ${loadingRelay ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M23 4v6h-6M1 20v-6h6"/>
-                <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
-              </svg>
-            </button>
-          </div>
-          <div className="flex-1 overflow-y-auto">
-            {(loading || loadingRelay) && globalPosts.length === 0 ? (
-              /* Nintendo-style: デスクトップ用やさしいスケルトン */
-              <div className="divide-y divide-[var(--border-color)] animate-fadeIn">
-                {[1, 2, 3, 4].map((i) => (
-                  <div key={i} className="skeleton-post" style={{ animationDelay: `${i * 50}ms` }}>
-                    <div className="skeleton-avatar skeleton-friendly" />
-                    <div className="skeleton-content">
-                      <div className="skeleton-line skeleton-line-short skeleton-friendly" />
-                      <div className="skeleton-line skeleton-line-full skeleton-friendly" />
-                      <div className="skeleton-line skeleton-line-medium skeleton-friendly" />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : globalPosts.length === 0 ? (
-              <div className="empty-friendly">
-                <div className="empty-friendly-icon">📭</div>
-                <p className="empty-friendly-text">まだ投稿がありません<br/>新しい投稿がまもなく届くかもしれません</p>
-              </div>
-            ) : (
-              <div className="divide-y divide-[var(--border-color)]">
-                {globalPosts
-                  .filter(post => !mutedPubkeys.has(post.pubkey))
-                  .map((post, index) => (
-                    <div
-                      key={post._repostId || post.id}
-                      className="animate-fadeIn"
-                      style={{ animationDelay: `${Math.min(index * 30, 300)}ms` }}
-                    >
-                      {renderTimelinePost(post)}
-                    </div>
-                  ))}
-              </div>
-            )}
-          </div>
-        </div>
+        {/* Relay column removed from UI by ADR-0013. */}
 
         {/* Right column: Following timeline */}
         <div className="flex-1 flex flex-col overflow-hidden">

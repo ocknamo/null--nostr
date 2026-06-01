@@ -58,21 +58,20 @@ fun TimelineScreen(
     var showNotificationsModal by remember { mutableStateOf(false) }
     var viewingPubkey by remember { mutableStateOf<String?>(null) }
 
+    // ADR-0013: relay-wide feed is removed from primary UI.
     val pagerState = rememberPagerState(
-        initialPage = 1
-    ) { 2 }
+        initialPage = 0
+    ) { 1 }
 
     LaunchedEffect(pagerState.currentPage) {
-        val targetFeed = if (pagerState.currentPage == 0) FeedType.GLOBAL else FeedType.FOLLOWING
-        if (uiState.feedType != targetFeed) {
-            viewModel.switchFeed(targetFeed)
+        if (uiState.feedType != FeedType.FOLLOWING) {
+            viewModel.switchFeed(FeedType.FOLLOWING)
         }
     }
 
     LaunchedEffect(uiState.feedType) {
-        val targetPage = if (uiState.feedType == FeedType.GLOBAL) 0 else 1
-        if (pagerState.currentPage != targetPage) {
-            pagerState.animateScrollToPage(targetPage)
+        if (uiState.feedType != FeedType.FOLLOWING) {
+            viewModel.switchFeed(FeedType.FOLLOWING)
         }
     }
 
@@ -81,16 +80,16 @@ fun TimelineScreen(
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             topBar = {
                 TimelineHeader(
-                    feedType = uiState.feedType,
-                    onFeedTypeChange = { viewModel.switchFeed(it) },
-                    showRecommendedDot = uiState.hasNewRecommendations || uiState.pendingGlobalPosts.isNotEmpty() || uiState.pendingRelayPosts.isNotEmpty(),
+                    feedType = FeedType.FOLLOWING,
+                    onFeedTypeChange = { viewModel.switchFeed(FeedType.FOLLOWING) },
+                    showRecommendedDot = false,
                     showFollowingDot = uiState.hasNewFollowing || uiState.pendingFollowingPosts.isNotEmpty(),
                     showNotificationsDot = uiState.hasNewNotifications,
                     onSearchClick = { showSearchModal = true },
                     onNotificationsClick = { viewModel.markNotificationsSeen(); showNotificationsModal = true },
-                    savedRelayUrls = uiState.savedRelayUrls,
-                    selectedRelayUrl = uiState.selectedRelayUrl,
-                    onSelectRelay = { viewModel.selectRelayFeed(it) }
+                    savedRelayUrls = emptyList(),
+                    selectedRelayUrl = null,
+                    onSelectRelay = { }
                 )
             },
             floatingActionButton = {
@@ -116,7 +115,7 @@ fun TimelineScreen(
                 TimelineContent(
                     viewModel = viewModel,
                     repository = repository,
-                    feedType = if (page == 0) FeedType.GLOBAL else FeedType.FOLLOWING,
+                    feedType = FeedType.FOLLOWING,
                     onProfileClick = { viewingPubkey = it },
                     onHashtagClick = { tag ->
                         val q = if (tag.startsWith("#")) tag else "#$tag"

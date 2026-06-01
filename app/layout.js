@@ -3,7 +3,7 @@ import ClientLayout from '@/components/ClientLayout'
 
 export const metadata = {
   title: 'ぬるぬる',
-  description: 'LINE風のNostrクライアント',
+  description: '指紋や顔認証だけではじめられる、あたらしいSNS。メールも電話番号もパスワードも不要。チャット暗号化、広告なし、行動履歴の収集なし。',
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,

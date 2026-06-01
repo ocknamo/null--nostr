@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Main timeline screen — リレー tab and フォロー tab.
-/// Mirrors Android TimelineScreen.kt: HorizontalPager + pull-to-refresh + FAB.
+/// Main timeline screen — follow-graph feed only after ADR-0013.
+/// Relay-wide feed was removed from the primary UI for safety.
 struct TimelineView: View {
 
     @Bindable var viewModel: TimelineViewModel
@@ -28,7 +28,6 @@ struct TimelineView: View {
 
                 ZStack(alignment: .top) {
                     TabView(selection: $selectedPage) {
-                        relayFeed.tag(0)
                         followingFeed.tag(1)
                     }
                     .tabViewStyle(.page(indexDisplayMode: .never))
@@ -112,7 +111,7 @@ struct TimelineView: View {
             HStack(spacing: NuruSpacing.space2) {
                 // Pill-style tab switcher (mirrors Android TimelineHeader)
                 HStack(spacing: NuruSpacing.space2) {
-                    relayPillButton
+                    // ADR-0013: relay tab removed from primary UI.
                     followPillButton
                 }
                 .padding(4)

@@ -2,14 +2,14 @@
 
 <img src="public/favicon-512.png" width="120" alt="ぬるぬる" />
 
-# ぬるぬる — null--nostr
+# ぬるぬる
 
-**シンプルで使いやすいNostrクライアント**
-*A simple and intuitive Nostr client*
+**指紋や顔認証だけではじめられる、あたらしいSNS。**
+*A social app you start with just your fingerprint or face. No email, no phone number, no password.*
 
 [![Latest Release](https://img.shields.io/github/v/release/tami1A84/null--nostr?label=Android&color=4CAF50)](https://github.com/tami1A84/null--nostr/releases/latest)
 [![License](https://img.shields.io/badge/license-Unlicense-blue)](#ライセンス--license)
-[![Nostr](https://img.shields.io/badge/Nostr-protocol-purple)](https://nostr.com)
+[![Biometric Sign-in](https://img.shields.io/badge/sign--in-biometric%20only-7C9CFF)](#日本語)
 
 <a href="https://opensats.org/blog/sixteenth-wave-of-nostr-grants">
   <img src="https://blossom.primal.net/dab6e0d933a2adb7a15c32cbf4fd5bf5321b8f5cf4389ea7aa55c25e2f3a024a.png" alt="ぬるぬる × OpenSats" width="100%" />
@@ -26,7 +26,14 @@
 
 ## 日本語
 
-Nostrは、特定の企業やサーバーに依存しない自由なSNSプロトコルです。アカウントは暗号鍵で管理され、どのサービスにも縛られません。**ぬるぬる**はその入り口を、シンプルで使い慣れた画面で提供します。
+**ぬるぬる**は、**メールアドレスも、電話番号も、パスワードもいらないSNS**です。
+
+チャットはデフォルトで暗号化され、広告はありません。
+子供の有無、最終学歴、職業、業種などの属性情報、位置情報、
+決済・購買などの行動履歴も一切収集しません。
+
+アカウントは会社のサーバーではなく、あなたの端末の中にあります。
+だから、運営に凍結されることも、電話番号を他人に知られることもありません。
 
 ### OpenSats Grant
 
@@ -57,7 +64,15 @@ Nostrは、特定の企業やサーバーに依存しない自由なSNSプロト
 
 ## English
 
-Nostr is an open, censorship-resistant social protocol. Your identity is a cryptographic key pair — no company, no central server, no lock-in. **null--nostr** makes Nostr feel simple and accessible.
+**NuruNuru (ぬるぬる)** is **a social app you start with just your fingerprint or face.**
+No email, no phone number, no password.
+
+Chats are encrypted by default. There are no ads.
+We do not collect attribute data such as whether you have children, education,
+occupation, or industry; location data; or behavioral history such as payments and purchases.
+
+Your account lives on your device, not on a company server. No one can freeze it,
+and no one needs your phone number to find you.
 
 ### OpenSats Grant
 

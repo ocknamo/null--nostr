@@ -161,7 +161,7 @@ struct MainTabView: View {
                 onSuccess:   {
                     showPostSheet = false
                     Task {
-                        await timelineVM.refreshRelay()
+                        await timelineVM.refreshFollowing()
                         if homeVM.isOwnProfile { await homeVM.refresh() }
                     }
                 }
@@ -324,7 +324,7 @@ struct MainTabView: View {
         return Button {
             if activeTab == tab {
                 switch tab {
-                case .timeline: Task { await timelineVM.refreshRelay() }
+                case .timeline: Task { await timelineVM.refreshFollowing() }
                 case .home:     Task { await homeVM.refresh() }
                 // App Store submission build: ろくなな refresh is disabled.
                 // case .rokunana: Task { await rokunanaVM.refresh() }

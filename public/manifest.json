@@ -1,13 +1,16 @@
 {
   "name": "ぬるぬる",
   "short_name": "ぬるぬる",
-  "description": "LINE風のNostrクライアント",
+  "description": "指紋や顔認証だけではじめられる、あたらしいSNS。メールも電話番号もパスワードも不要。チャット暗号化、広告なし、行動履歴の収集なし。",
   "start_url": "/",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#111111",
   "theme_color": "#06C755",
-  "categories": ["social", "communication"],
+  "categories": [
+    "social",
+    "communication"
+  ],
   "icons": [
     {
       "src": "/favicon-192.png",

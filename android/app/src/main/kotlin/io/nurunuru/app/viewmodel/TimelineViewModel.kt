@@ -60,7 +60,8 @@ class TimelineViewModel(
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(TimelineUiState(
-        isGlobalLoading = true,
+        // ADR-0013: relay-wide/global feed is no longer a primary UI surface.
+        isGlobalLoading = false,
         isFollowingLoading = true
     ))
     val uiState: StateFlow<TimelineUiState> = _uiState.asStateFlow()
@@ -132,7 +133,7 @@ class TimelineViewModel(
             }
 
             // Fast first-paint timelines: raw posts + cached profiles only.
-            launch { loadGlobalTimelineFast() }
+            // ADR-0013: relay-wide/global feed prefetch disabled.
 
             // バックグラウンドで設定をプリフェッチ（UIをブロックしない・すべて並列実行）
             launch(Dispatchers.IO) {
@@ -165,7 +166,7 @@ class TimelineViewModel(
                     repository.prefetchProfilesAndBadges(freshFollows)
                     loadFollowingTimelineFast(freshFollows)
                 }
-                launch { loadGlobalTimeline() }
+                // ADR-0013: relay-wide/global feed refresh disabled.
                 launch { loadFollowingTimeline() }
             }
 

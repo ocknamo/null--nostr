@@ -8,7 +8,7 @@ import SignUpModal from './SignUpModal'
 export default function LoginScreen({ onLogin }) {
   const [checking, setChecking] = useState(true)
   const [error, setError] = useState('')
-  
+
   // Nosskey (passkey) states
   const [nosskeySupported, setNosskeySupported] = useState(false)
   const [nosskeyHasKey, setNosskeyHasKey] = useState(false)
@@ -17,7 +17,7 @@ export default function LoginScreen({ onLogin }) {
   const [showSignUpModal, setShowSignUpModal] = useState(false)
   const [createdPubkey, setCreatedPubkey] = useState(null)
   const nosskeyManagerRef = useRef(null)
-  
+
   // nostr-login states
   const nostrLoginInitialized = useRef(false)
   const [nostrLoginReady, setNostrLoginReady] = useState(false)
@@ -28,7 +28,7 @@ export default function LoginScreen({ onLogin }) {
     const init = async () => {
       // Small delay to allow hydration
       await new Promise(r => setTimeout(r, 100))
-      
+
       try {
         const { NosskeyManager } = await import('nosskey-sdk')
         const manager = new NosskeyManager({
@@ -36,7 +36,7 @@ export default function LoginScreen({ onLogin }) {
           cacheOptions: { enabled: true, timeoutMs: 3600000 }
         })
         nosskeyManagerRef.current = manager
-        
+
         // 1. First check storage for existing key info (Synchronous/No prompt)
         const hasKey = manager.hasKeyInfo()
         let foundPubkey = false
@@ -75,7 +75,7 @@ export default function LoginScreen({ onLogin }) {
       } catch (e) {
         console.error('Nosskey initialization failed:', e)
       }
-      
+
       setChecking(false)
     }
     init()
@@ -85,14 +85,14 @@ export default function LoginScreen({ onLogin }) {
   useEffect(() => {
     // Automatically init nostr-login for non-passkey users
     const shouldInit = showNostrLoginOption || (!checking && !nosskeyHasKey)
-    
+
     if (!shouldInit || nostrLoginInitialized.current) return
-    
+
     const initNostrLogin = () => {
       nostrLoginInitialized.current = true
-      
+
       console.log('Loading nostr-login from CDN...')
-      
+
       // Check if script already loaded
       if (document.querySelector('script[src*="nostr-login"]')) {
         console.log('nostr-login script already exists')
@@ -107,7 +107,7 @@ export default function LoginScreen({ onLogin }) {
       // Set options via data attributes
       script.dataset.darkMode = 'true'
       script.dataset.title = 'ぬるぬる'
-      script.dataset.description = 'Nostrクライアント'
+      script.dataset.description = '指紋や顔認証だけではじめられる、あたらしいSNS。広告なし、データ収集なし。'
       script.dataset.perms = 'sign_event:1,sign_event:4,sign_event:7,sign_event:9735,nip04_encrypt,nip04_decrypt,nip44_encrypt,nip44_decrypt'
       script.dataset.methods = 'extension,connect,readOnly,local'
       script.dataset.noBanner = 'true'
@@ -137,7 +137,7 @@ export default function LoginScreen({ onLogin }) {
             }
           }
         })
-        
+
         console.log('nostr-login ready')
         setNostrLoginReady(true)
       } catch (e) {
@@ -145,7 +145,7 @@ export default function LoginScreen({ onLogin }) {
         setNostrLoginError(true)
       }
     }
-    
+
     initNostrLogin()
   }, [showNostrLoginOption, checking, nosskeySupported, onLogin])
 
@@ -153,7 +153,7 @@ export default function LoginScreen({ onLogin }) {
   const handleNostrLoginLaunch = () => {
     if (!nostrLoginReady) return
     console.log('Launching nostr-login')
-    
+
     try {
       // Use nlLaunch event to open the modal
       document.dispatchEvent(new CustomEvent('nlLaunch', { detail: 'welcome' }))
@@ -174,14 +174,14 @@ export default function LoginScreen({ onLogin }) {
       // Check for redirect_uri for app login
       const urlParams = new URLSearchParams(window.location.search)
       const redirectUri = urlParams.get('redirect_uri')
-      
+
       // First check for stored key info
       let keyInfo = manager.getCurrentKeyInfo()
       let storedPubkey = keyInfo?.pubkey || keyInfo?.publicKey
-      
+
       console.log('Login - stored key info:', keyInfo)
       console.log('Login - stored pubkey:', storedPubkey)
-      
+
       // If we have stored key info, use it
       if (keyInfo && storedPubkey) {
         console.log('handleNosskeyLogin: Found stored keyInfo, pubkey=', storedPubkey)
@@ -207,16 +207,16 @@ export default function LoginScreen({ onLogin }) {
         onLogin(storedPubkey)
         return
       }
-      
+
       // No stored key info - try to authenticate with existing passkey
       // This allows login even if localStorage was cleared
       console.log('No stored key info, attempting passkey authentication...')
-      
+
       try {
         // Call createNostrKey without credentialId to let browser select passkey
         const result = await manager.createNostrKey()
         console.log('Passkey auth result:', result)
-        
+
         if (result && result.pubkey) {
           console.log('handleNosskeyLogin: Passkey auth successful, pubkey=', result.pubkey)
           // Save the key info
@@ -305,6 +305,15 @@ export default function LoginScreen({ onLogin }) {
             <img src="/nurunuru-star.png" alt="ぬるぬる" className="w-full h-full object-cover" />
           </div>
           <h1 className="text-3xl font-bold text-[var(--text-primary)]">ぬるぬる</h1>
+          <p className="mt-4 text-lg font-semibold text-[var(--text-primary)]">
+            指紋や顔認証だけではじめられる、あたらしいSNS。
+          </p>
+          <p className="mt-2 text-sm leading-relaxed text-[var(--text-secondary)]">
+            メールも電話番号もパスワードもいりません。
+          </p>
+          <p className="mt-2 text-xs leading-relaxed text-[var(--text-tertiary)]">
+            チャットはデフォルトで暗号化。広告なし、属性情報・位置情報・行動履歴の収集なし。
+          </p>
         </div>
 
         {/* Login options */}
@@ -355,7 +364,7 @@ export default function LoginScreen({ onLogin }) {
                     disabled={!nostrLoginReady}
                     className="w-full btn-secondary py-3 text-sm disabled:opacity-50"
                   >
-                    Nostrでログイン (拡張機能 / Connect)
+                    外部アプリでログイン
                   </button>
                 </div>
               )}
@@ -397,7 +406,7 @@ export default function LoginScreen({ onLogin }) {
 
               <div className="text-center">
                 <p className="text-xs text-[var(--text-tertiary)]">
-                  NIP-46 / 拡張機能 / 読み取り専用
+                  外部アプリ / 拡張機能 / 読み取り専用にも対応
                 </p>
               </div>
             </div>
@@ -420,13 +429,13 @@ export default function LoginScreen({ onLogin }) {
       )}
 
       <div className="py-6 text-center animate-fadeIn">
-        <a 
-          href="https://github.com/nostr-jp" 
-          target="_blank" 
+        <a
+          href="https://github.com/tami1A84/null--nostr"
+          target="_blank"
           rel="noopener noreferrer"
           className="text-xs text-[var(--text-tertiary)] hover:text-[var(--line-green)] transition-colors"
         >
-          Powered by Nostr
+          オープンソースで公開中
         </a>
       </div>
     </div>
