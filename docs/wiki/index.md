@@ -26,14 +26,29 @@
 | [[culture/llm-onboarding]] | LLM コントリビュータのオンボーディングと出力規約。 |
 | [[culture/four-freedoms]] | 4軸自由ドクトリン (言論 / プライバシー / 経済 / 配布)。 |
 
+## Copy / Store Listings
+
+| Page | Summary |
+|---|---|
+| [[copy/store-listing]] | README / zapstore / Google Play / App Store の表層コピーと用語マッピング。 |
+
 ## Strategy / Operations
 
 | Page | Summary |
 |---|---|
 | [[strategy/themaday-2026-05-25]] | Block の “From Hierarchy to Intelligence” とストアデータを踏まえた ThemaDAY 経営会議・リーダー方向性すり合わせ。 |
 | [[strategy/themaday-2026-05-28-partnerships]] | Nostr Compass #24 掲載・公開前レビューを起点に、外部提携 / パートナーシップ / 開発者向け施策の方針を整理。 |
+| [[strategy/themaday-2026-05-31-week-review]] | 2026-05-25〜31 の週次振り返りと 6月 Learning Velocity 方針。5/31 Outcome で 6月ロードマップの前提を整理。 |
+| [[strategy/themaday-2026-06-01-management]] | ThemaDAY マネジメント経営会議。onboarding 主文、6/8 1.5.5 スコープ、リーダー hat、ろくなな code-only retention、QA テンプレを確定。 |
+| [[strategy/june-2026-roadmap]] | 2026年6月の主要タブ再設計ロードマップ。onboarding 主文、リレーフィード廃止、ホーム刷新、ニュースタブ化、NIP-5Aミニアプリ、2-hop信頼グラフ制限、ろくななroot tab廃止+code-only retention を整理。 |
 | [[strategy/nuruh-ip-2026-05-28]] | ぬるる IP マーケティング & 成長戦略 v1.0。四箇条 / 3層接点 / 5ループ / ライセンス階段 / KPI+ガードレール / 90日と24ヶ月ロードマップ。 |
 | [[operations/feedback-loop]] | NIP-50 search relay と nurunuru-mcp による Nostr feedback 収集、Issue draft、autofix 運用。 |
+
+## Quality / Release
+
+| Page | Summary |
+|---|---|
+| [[quality/qa-template]] | ADR-0014 に基づく manual real-device QA 記録テンプレート。platform slot / findings / 5 Whys / follow-up を残す。 |
 
 ## Platforms
 
@@ -113,6 +128,12 @@
 | [[decisions/adr-0010-passkey-prf-direct-method]] | Passkey PRF を直接署名手段として採用する判断。 |
 | [[decisions/adr-0011-nuruh-ip-doctrine]] | ぬるる IP 憲章 (四箇条)。「商品ではなく住人」として育てる長期方針。 |
 | [[decisions/adr-0012-monday-release-nuru-production-system]] | 月曜リリース列車と Nuru Production System を採用する判断。 |
+| [[decisions/adr-0015-home-tab-renewal]] | LINE Home風にホームを中心タブへ刷新し、フォローフィード/設定を集約する判断。ろくななは6月 Home scope から除外。 |
+| [[decisions/adr-0014-local-first-product-metrics]] | local-first metrics 実装は6月 Phase 1では見送り。実機 manual QA を一次情報としてオンボーディング改善を回す判断。 |
+| [[decisions/adr-0013-relay-feed-removal]] | スパム・違法コンテンツ流入経路になったリレーフィードを主要UIから削除し、リレー設定/投稿/検索用途は維持する判断。 |
+| [[decisions/adr-0018-rokunana-root-tab-removal]] | ろくななは root tab から外し、6月は UI 移設せずコードだけリポジトリに dead-but-preserved として残す。 |
+| [[decisions/adr-0017-nip-5a-mini-apps]] | NIP-5A ミニアプリを WebView/static-site として安全に起動する manifest / permission 境界。 |
+| [[decisions/adr-0016-news-curation-model]] | ニュースタブは NIP-23 + NIP-32 を 2-hop 信頼グラフで発見・表示する。 |
 
 ## Maintenance checklist for agents
 

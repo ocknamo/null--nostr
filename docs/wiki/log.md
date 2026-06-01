@@ -1,5 +1,43 @@
 # null--nostr LLM Wiki Log
 
+## [2026-06-01] strategy-decision | ThemaDAY management meeting confirms onboarding-first June plan
+
+- Added `docs/wiki/strategy/themaday-2026-06-01-management.md` for the management meeting and leader-hat alignment.
+- Confirmed onboarding as the leading clause of the June monthly objective; relay-feed removal and safe 4-tab skeleton remain parallel goals.
+- Confirmed News W25 as internal dogfood alpha, external communication deferred to 1.6.0 if stable.
+- Confirmed iOS Rust FFI Phase 1 starts from one read-only helper, not signing.
+- Amended ADR-0018: rokunana is root-tab removed and code-only retained in June, with no Home/Mini App/Settings entry.
+- Added `docs/wiki/quality/qa-template.md` for ADR-0014 manual real-device QA notes.
+
+## [2026-05-31] decision | Defer local-first metrics in favor of manual QA
+
+- Changed ADR-0014 from an implementation task to Deferred: local-first metrics remain a future option, but June Phase 1 will not add Android/iOS/Web counters.
+- Updated the June roadmap and ThemaDAY week review so P1 becomes manual real-device QA + qualitative ThemaDAY/Design Crit notes.
+- Rationale: the maintainer will perform direct real-device testing, and June's Home/News/Mini Apps restructuring benefits more from fast qualitative iteration than from cross-platform metrics plumbing.
+
+## [2026-05-31] decision-implementation | Relay feed removal ADRs and first UI cut
+
+- Added ADR-0013/0014/0015 for relay feed removal, local-first product metrics, and Home tab renewal.
+- Implemented the first ADR-0013 safety cut: Android/iOS/Web Timeline primary UI now shows only the follow-graph feed; relay picker/tab and Web desktop relay column are removed/hidden.
+- Disabled relay-wide background prefetch/fetch paths used only to populate the removed primary relay feed where safe; relay settings, NIP-65 metadata, relay-targeted publishing, search, and notification relay usage remain in scope.
+
+## [2026-05-31] decision | June tab strategy finalized: 2-hop trust graph, NIP-5A validation, rokunana kept
+
+- Finalized three June strategy decisions: News uses 2-hop trust-graph curation, NIP-5A manifest/launch validation is implementation-owned and safety-first, and rokunana is removed from root tab but kept as a feature via Home/Mini App migration.
+- Updated docs/wiki/strategy/june-2026-roadmap.md and the 2026-05-31 ThemaDAY Outcome section accordingly.
+- Added ADRs: adr-0016-news-curation-model, adr-0017-nip-5a-mini-apps, adr-0018-rokunana-root-tab-removal.
+
+## [2026-05-31] strategy | June roadmap updated for NIP-5A, network scope, and rokunana removal
+
+- Added/updated docs/wiki/strategy/june-2026-roadmap.md with the user-confirmed June direction: no 6/1 Google Play release, P4 NIP-50 MCP deferred, P5 Compass follow-up done, NIP-5A mini apps as WebView/static-site surfaces, network-scoped discovery, and rokunana root-tab removal while keeping the feature.
+- Corrected the mini-app assumption: NIP-5A is treated as the WebView/static-site mini-app mechanism referenced by Nostr Compass. Monetization remains optional/uncertain and will not block the WebView execution environment.
+- Reframed News and Mini Apps around 2-hop follow-graph discovery to avoid replaying the relay-feed spam/illegal-content problem.
+
+## [2026-05-31] strategy | ThemaDAY week review and next-week strategy
+
+- Added docs/wiki/strategy/themaday-2026-05-31-week-review.md documenting the 2026-05-25〜31 weekly KPT review and the next-week Learning Velocity Week plan.
+- Later updated the Outcome section with the 6/1 release skip, P4 deferral, P5 completion, and June roadmap decisions.
+
 LLM Wiki の時系列ログです。追記専用として扱います。
 
 ## [2026-05-29] chore | iOS App Store Connect version bump
