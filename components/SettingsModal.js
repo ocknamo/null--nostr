@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { nip19 } from 'nostr-tools'
 import { getLoginMethod } from '@/lib/nostr'
 import { AccountStatusCard, NosskeySecuritySection } from './AccountSecuritySettings'
 
@@ -14,6 +15,7 @@ import { AccountStatusCard, NosskeySecuritySection } from './AccountSecuritySett
 export default function SettingsModal({ pubkey, onClose, onLogout }) {
   const [mounted, setMounted] = useState(false)
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
+  const [inviteCopied, setInviteCopied] = useState(false)
 
   const PRIVACY_URL = 'https://tami1A84.github.io/null--nostr/privacy.html'
   const TERMS_URL = 'https://tami1A84.github.io/null--nostr/terms.html'
@@ -52,6 +54,23 @@ export default function SettingsModal({ pubkey, onClose, onLogout }) {
     }
   }
 
+  const handleShareInvite = async () => {
+    if (!pubkey) return
+    const npub = pubkey.startsWith('npub1') ? pubkey : nip19.npubEncode(pubkey)
+    const url = `https://www.nullnull.app/p/${npub}`
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: 'ぬるぬるに招待', text: 'リンクから始めると、わたしをフォローした状態でぬるぬるを始められます。', url })
+      } else {
+        await navigator.clipboard.writeText(url)
+        setInviteCopied(true)
+        setTimeout(() => setInviteCopied(false), 2000)
+      }
+    } catch (e) {
+      if (e?.name !== 'AbortError') console.error('Invite share failed:', e)
+    }
+  }
+
   const handleLogoutConfirm = () => {
     setShowLogoutConfirm(false)
     onClose?.()
@@ -87,6 +106,16 @@ export default function SettingsModal({ pubkey, onClose, onLogout }) {
 
           {pubkey && getLoginMethod() === 'nosskey' && (
             <NosskeySecuritySection pubkey={pubkey} />
+          )}
+
+          {pubkey && (
+            <SettingsRow
+              icon={<svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12v7a1 1 0 001 1h14a1 1 0 001-1v-7"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>}
+              title="招待"
+              subtitle={inviteCopied ? '招待リンクをコピーしました' : '友だちを招待リンクで共有'}
+              trailing="chevron"
+              onClick={handleShareInvite}
+            />
           )}
 
           <SettingsRow

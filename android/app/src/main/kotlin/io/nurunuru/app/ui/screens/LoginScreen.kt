@@ -249,6 +249,24 @@ fun LoginScreen(
                             Text("ログイン", fontSize = 16.sp, color = nuruColors.textPrimary)
                         }
                     }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 72.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(onClick = { uriHandler.openUri("https://tami1a84.github.io/null--nostr/terms.html") }) {
+                            Text("利用規約", color = nuruColors.textTertiary, fontSize = 12.sp)
+                        }
+                        TextButton(onClick = { uriHandler.openUri("https://tami1a84.github.io/null--nostr/privacy.html") }) {
+                            Text("プライバシーポリシー", color = nuruColors.textTertiary, fontSize = 12.sp)
+                        }
+                        TextButton(onClick = { uriHandler.openUri("https://tami1a84.github.io/null--nostr/") }) {
+                            Text("公式サイト", color = nuruColors.textTertiary, fontSize = 12.sp)
+                        }
+                    }
                 } else {
                     // Login options: nsec (primary) and others (collapsible)
                     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -437,38 +455,12 @@ fun LoginScreen(
                 }
             }
 
-            // Footer links
-            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "利用規約",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = nuruColors.textTertiary,
-                        modifier = Modifier.clickable { uriHandler.openUri("https://tami1a84.github.io/null--nostr/terms.html") }
-                    )
-                    Text(
-                        text = "プライバシーポリシー",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = nuruColors.textTertiary,
-                        modifier = Modifier.clickable { uriHandler.openUri("https://tami1a84.github.io/null--nostr/privacy.html") }
-                    )
-                }
-                Text(
-                    text = "公式サイト",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = nuruColors.textTertiary.copy(alpha = 0.85f),
-                    modifier = Modifier.clickable { uriHandler.openUri("https://tami1a84.github.io/null--nostr/") }
-                )
-            }
         }
     }
 
     if (showTermsDialog) {
         TermsAgreementScreen(
-            onOpenTerms = { uriHandler.openUri("https://tami1A84.github.io/null--nostr/terms.html") },
+            onOpenTerms = { uriHandler.openUri("https://tami1a84.github.io/null--nostr/terms.html") },
             onAgree = {
                 viewModel.prefs.hasAcceptedTerms = true
                 showTermsDialog = false

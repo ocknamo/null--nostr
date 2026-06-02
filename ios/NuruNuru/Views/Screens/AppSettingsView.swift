@@ -14,6 +14,11 @@ struct AppSettingsView: View {
     private let privacyURL = URL(string: "https://tami1A84.github.io/null--nostr/privacy.html")!
     private let termsURL = URL(string: "https://tami1A84.github.io/null--nostr/terms.html")!
 
+    private var inviteURL: URL {
+        let npub = pubkeyHex.hasPrefix("npub1") ? pubkeyHex : (NostrKeyUtils.encodeNpub(NostrKeyUtils.hexToBytes(pubkeyHex) ?? []) ?? pubkeyHex)
+        return URL(string: "https://www.nullnull.app/p/\(npub)")!
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -25,6 +30,21 @@ struct AppSettingsView: View {
                         prefs: prefs,
                         onLogout: onLogout
                     )
+
+                    ShareLink(
+                        item: inviteURL,
+                        subject: Text("ぬるぬるに招待"),
+                        message: Text("リンクから始めると、わたしをフォローした状態でぬるぬるを始められます。")
+                    ) {
+                        settingsRowContent(
+                            icon: "square.and.arrow.up",
+                            title: "招待",
+                            subtitle: "友だちを招待リンクで共有",
+                            titleColor: nil,
+                            trailing: "chevron.right"
+                        )
+                    }
+                    .buttonStyle(.plain)
 
                     settingsRow(
                         icon: "hand.raised",
@@ -72,7 +92,19 @@ struct AppSettingsView: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            HStack(spacing: NuruSpacing.space3) {
+            settingsRowContent(icon: icon, title: title, subtitle: subtitle, titleColor: titleColor, trailing: trailing)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func settingsRowContent(
+        icon: String,
+        title: String,
+        subtitle: String,
+        titleColor: Color? = nil,
+        trailing: String?
+    ) -> some View {
+        HStack(spacing: NuruSpacing.space3) {
                 ZStack {
                     Circle()
                         .fill(theme.bgPrimary)
@@ -106,7 +138,5 @@ struct AppSettingsView: View {
                 RoundedRectangle(cornerRadius: NuruSpacing.radiusXl)
                     .fill(theme.bgSecondary)
             )
-        }
-        .buttonStyle(.plain)
     }
 }

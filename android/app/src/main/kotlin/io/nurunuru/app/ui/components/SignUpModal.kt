@@ -4,7 +4,6 @@ import androidx.compose.animation.*
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.Manifest
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.widget.Toast
 import androidx.core.content.ContextCompat
@@ -29,8 +28,6 @@ import androidx.compose.ui.layout.ContentScale
 import coil.compose.AsyncImage
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -72,12 +69,12 @@ fun SignUpModal(
     onClose: () -> Unit,
     onSuccess: (String) -> Unit
 ) {
-    var step by remember { mutableStateOf("welcome") } // welcome, backup, relay, profile, tutorial, success, completing
+    var step by remember { mutableStateOf("welcome") } // welcome, relay, profile, tutorial, success, completing
     var generatedAccount by remember { mutableStateOf<GeneratedAccount?>(null) }
     var selectedRelays by remember { mutableStateOf<List<Nip65Relay>?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
-    var usingPasskey by remember { mutableStateOf(false) }
+    var usingPasskey by remember { mutableStateOf(true) }
 
     val nuruColors = LocalNuruColors.current
     val signUpScope = rememberCoroutineScope()
@@ -116,15 +113,13 @@ fun SignUpModal(
                     shape = RoundedCornerShape(24.dp)
                 ) {
                     Column {
-                        // 5 steps when registering via Passkey (no nsec backup needed),
-                        // 6 steps for the classic nsec flow.
-                        val totalSteps = if (usingPasskey) 5f else 6f
+                        // 5 steps: welcome -> region -> profile -> tutorial -> success.
+                        val totalSteps = 5f
                         val progress = when (step) {
                             "welcome" -> 1f / totalSteps
-                            "backup" -> 2f / totalSteps
-                            "relay" -> (if (usingPasskey) 2f else 3f) / totalSteps
-                            "profile" -> (if (usingPasskey) 3f else 4f) / totalSteps
-                            "tutorial" -> (if (usingPasskey) 4f else 5f) / totalSteps
+                            "relay" -> 2f / totalSteps
+                            "profile" -> 3f / totalSteps
+                            "tutorial" -> 4f / totalSteps
                             else -> 1f
                         }
                         Box(modifier = Modifier.fillMaxWidth().height(4.dp).background(nuruColors.bgSecondary)) {
@@ -140,19 +135,7 @@ fun SignUpModal(
                         ) {
                             when (step) {
                                 "welcome" -> WelcomeStep(
-                                    onNext = {
-                                        usingPasskey = false
-                                        isLoading = true
-                                        error = ""
-                                        val acc = viewModel.generateNewAccount()
-                                        if (acc != null) {
-                                            generatedAccount = acc
-                                            step = "backup"
-                                        } else {
-                                            error = "アカウント作成に失敗しました"
-                                        }
-                                        isLoading = false
-                                    },
+                                    onNext = {},
                                     onNextWithPasskey = {
                                         val act = signUpActivity
                                         if (act == null) {
@@ -168,10 +151,8 @@ fun SignUpModal(
                                                 )
                                                 if (acc != null) {
                                                     generatedAccount = acc
-                                                    // Passkey flow skips the nsec backup step.
                                                     step = "relay"
                                                 } else {
-                                                    usingPasskey = false
                                                     error = "パスキーの登録に失敗しました"
                                                 }
                                                 isLoading = false
@@ -181,10 +162,6 @@ fun SignUpModal(
                                     onClose = onClose,
                                     isLoading = isLoading,
                                     error = error
-                                )
-                                "backup" -> BackupStep(
-                                    account = generatedAccount!!,
-                                    onNext = { step = "relay" }
                                 )
                                 "relay" -> RelayStep(
                                     onRelaysSelected = { relays ->
@@ -327,7 +304,7 @@ fun WelcomeStep(
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("新規登録", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = nuruColors.textPrimary)
         Text(
-            "新しいNostrアカウントを作成します。\n秘密鍵はデバイス内に安全に保存されます。",
+            "パスキーだけで新しいNostrアカウントを作成します。\n秘密鍵を保管する必要はありません。",
             fontSize = 14.sp,
             color = nuruColors.textSecondary,
             textAlign = TextAlign.Center
@@ -372,100 +349,17 @@ fun WelcomeStep(
         )
     }
 
-    // Classic nsec registration — shown as secondary on passkey-capable devices,
-    // or as the only primary option when CredentialManager is unavailable.
-    if (passkeyAvailable) {
-        OutlinedButton(
-            onClick = onNext,
-            modifier = Modifier.fillMaxWidth().height(56.dp),
-            shape = RoundedCornerShape(16.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, LineGreen),
-            enabled = !isLoading
-        ) {
-            Text("従来の方法で作成（nsec）", fontWeight = FontWeight.Bold, color = LineGreen)
-        }
-    } else {
-        Button(
-            onClick = onNext,
-            modifier = Modifier.fillMaxWidth().height(56.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = LineGreen),
-            shape = RoundedCornerShape(16.dp),
-            enabled = !isLoading
-        ) {
-            if (isLoading) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
-            else Text("アカウントを作成する", fontWeight = FontWeight.Bold)
-        }
-    }
-
-    TextButton(onClick = onClose) {
-        Text("キャンセル", color = nuruColors.textTertiary)
-    }
-}
-
-@Composable
-fun BackupStep(
-    account: GeneratedAccount,
-    onNext: () -> Unit
-) {
-    val nuruColors = LocalNuruColors.current
-    val clipboardManager = LocalClipboardManager.current
-    var copied by remember { mutableStateOf(false) }
-
-    IconBox(icon = Icons.Default.Security, containerColor = Color(0xFFFFA000).copy(alpha = 0.1f), iconColor = Color(0xFFFFA000))
-
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("秘密鍵のバックアップ", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = nuruColors.textPrimary)
+    if (!passkeyAvailable) {
         Text(
-            "アカウントを復旧するために必要な「秘密鍵」です。この鍵は誰にも教えないでください。",
-            fontSize = 13.sp,
-            color = nuruColors.textSecondary,
+            "この端末ではパスキー登録を利用できません。既存アカウントでログインするか、対応端末で登録してください。",
+            fontSize = 12.sp,
+            color = nuruColors.textTertiary,
             textAlign = TextAlign.Center
         )
     }
 
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = nuruColors.bgSecondary),
-        shape = RoundedCornerShape(16.dp)
-    ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("あなたの秘密鍵 (nsec)", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFA000))
-            Text(
-                account.nsec,
-                fontSize = 12.sp,
-                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                color = nuruColors.textPrimary,
-                modifier = Modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.2f), RoundedCornerShape(8.dp)).padding(8.dp)
-            )
-
-            Button(
-                onClick = {
-                    clipboardManager.setText(AnnotatedString(account.nsec))
-                    copied = true
-                },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = nuruColors.bgTertiary),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Icon(
-                    imageVector = if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp),
-                    tint = if (copied) LineGreen else nuruColors.textPrimary
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(if (copied) "コピーしました" else "秘密鍵をコピー", fontSize = 13.sp, color = nuruColors.textPrimary)
-            }
-        }
-    }
-
-    Button(
-        onClick = onNext,
-        modifier = Modifier.fillMaxWidth().height(56.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = LineGreen),
-        shape = RoundedCornerShape(16.dp)
-    ) {
-        Text("次へ進む", fontWeight = FontWeight.Bold)
+    TextButton(onClick = onClose) {
+        Text("キャンセル", color = nuruColors.textTertiary)
     }
 }
 
@@ -487,8 +381,8 @@ fun RelayStep(onRelaysSelected: (List<Nip65Relay>) -> Unit) {
     IconBox(icon = Icons.Default.LocationOn, containerColor = Color(0xFF2196F3).copy(alpha = 0.1f), iconColor = Color(0xFF2196F3))
 
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("リレーのセットアップ", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = nuruColors.textPrimary)
-        Text("地域を選択すると最適なリレーが自動設定されます。", fontSize = 13.sp, color = nuruColors.textSecondary, textAlign = TextAlign.Center)
+        Text("地域の設定", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = nuruColors.textPrimary)
+        Text("地域を選択すると、近くのリレーサーバーを自動セットアップします。", fontSize = 13.sp, color = nuruColors.textSecondary, textAlign = TextAlign.Center)
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -592,7 +486,7 @@ fun RelayStep(onRelaysSelected: (List<Nip65Relay>) -> Unit) {
             shape = RoundedCornerShape(16.dp)
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("推奨リレー ($regionName)", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = nuruColors.textTertiary)
+                Text("推奨リレーサーバー ($regionName)", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = nuruColors.textTertiary)
                 if (isLoading) {
                     CircularProgressIndicator(modifier = Modifier.size(20.dp).align(Alignment.CenterHorizontally), color = LineGreen)
                 } else {
@@ -892,7 +786,7 @@ fun TutorialStep(
     ) {
         Text("はじめての投稿", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = nuruColors.textPrimary)
         Text(
-            "チュートリアルとして「#nostrはじめました」をつけて、はじめての投稿をしてみましょう。",
+            "まずは、ひとことあいさつしてみましょう。何を書けばいいか迷ったら、例文を使えます。",
             fontSize = 13.sp,
             color = nuruColors.textSecondary,
             textAlign = TextAlign.Center
@@ -941,6 +835,13 @@ fun TutorialStep(
         // ユーザーには常時ハッシュタグが見えている (「勝手に付けられた」を回避する規約)。
         // ユーザーがハッシュタグを消したら、消した状態のまま投稿される (自動補完なし)。
         // プレースホルダーは本文を全て消した時のガイドとしてのみ表示される。
+        OutlinedButton(
+            onClick = { content = "はじめまして。ぬるぬるを始めました。よろしくね。\n#" + TUTORIAL_HASHTAG },
+            shape = RoundedCornerShape(999.dp),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = LineGreen),
+            border = androidx.compose.foundation.BorderStroke(1.dp, LineGreen)
+        ) { Text("例文を使う", fontWeight = FontWeight.Bold) }
+
         OutlinedTextField(
             value = content,
             onValueChange = { newValue ->
@@ -1006,46 +907,11 @@ fun TutorialStep(
 @Composable
 fun SuccessStep(npub: String, onComplete: () -> Unit) {
     val nuruColors = LocalNuruColors.current
-    val context = LocalContext.current
-    val shareText = remember(npub) { profileShareText(npub) }
-
     IconBox(icon = Icons.Default.CheckCircle, containerColor = LineGreen.copy(alpha = 0.1f), iconColor = LineGreen)
 
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("準備完了！", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = nuruColors.textPrimary)
-        Text("プロフィールを友だちに共有できます。リンクから始めた人は、あなたをフォローした状態でスタートします。", fontSize = 14.sp, color = nuruColors.textSecondary, textAlign = TextAlign.Center)
-    }
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = nuruColors.bgSecondary),
-        shape = RoundedCornerShape(16.dp)
-    ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("プロフィールを共有", fontSize = 10.sp, color = nuruColors.textTertiary)
-            Text(
-                text = "Twitter/X や LINE に送ると、相手はあなたをフォローした状態でぬるぬるを始められます。",
-                fontSize = 13.sp,
-                color = nuruColors.textPrimary
-            )
-            OutlinedButton(
-                onClick = {
-                    val intent = Intent(Intent.ACTION_SEND).apply {
-                        type = "text/plain"
-                        putExtra(Intent.EXTRA_TEXT, shareText)
-                        putExtra(Intent.EXTRA_TITLE, "ぬるぬるでプロフィールを見てね")
-                    }
-                    context.startActivity(Intent.createChooser(intent, "プロフィールを共有"))
-                },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = LineGreen)
-            ) {
-                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("プロフィールを共有", fontWeight = FontWeight.Bold)
-            }
-        }
+        Text("アカウントが作成されました。ぬるぬるの世界へようこそ！", fontSize = 14.sp, color = nuruColors.textSecondary, textAlign = TextAlign.Center)
     }
 
     Button(
@@ -1058,7 +924,6 @@ fun SuccessStep(npub: String, onComplete: () -> Unit) {
     }
 }
 
-private fun profileShareText(npub: String): String = "https://www.nullnull.app/p/$npub"
 
 @Composable
 private fun IconBox(icon: ImageVector, containerColor: Color, iconColor: Color) {

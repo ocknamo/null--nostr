@@ -1,3 +1,10 @@
+## [2026-06-03] change | Passkey-only onboarding and invite relocation
+
+- 新規登録を Web / Android / iOS でパスキー登録のみに整理し、オンボーディング中の nsec バックアップ/従来作成導線を削除した。
+- 「リレーセットアップ」をユーザー向けには「地域の設定」とし、地域に応じたリレーサーバー自動セットアップとして案内するようにした。
+- #nostrはじめました チュートリアルに「あいさつしてみましょう」案内と例文チップを追加した。
+- オンボーディング最後のプロフィール共有/招待導線を削除し、ホームタブ設定の「招待」項目へ移設した。
+
 ## [2026-06-02] change | Rename Mini Apps screens and record Home settings migration QA
 
 - Renamed native Mini Apps hub files to match their post-migration responsibility: Android SettingsScreen.kt to MiniAppsScreen.kt, iOS SettingsView.swift to MiniAppsView.swift.

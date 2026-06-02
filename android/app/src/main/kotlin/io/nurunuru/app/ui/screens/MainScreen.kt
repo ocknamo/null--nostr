@@ -1,6 +1,7 @@
 package io.nurunuru.app.ui.screens
 
 import android.app.Activity
+import android.content.Intent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -406,6 +407,7 @@ private fun AppSettingsDialog(
     onLogout: () -> Unit
 ) {
     val uriHandler = LocalUriHandler.current
+    val context = LocalContext.current
     val nuruColors = LocalNuruColors.current
     var showLogoutConfirm by remember { mutableStateOf(false) }
     Dialog(
@@ -442,6 +444,15 @@ private fun AppSettingsDialog(
                     AccountStatusCard(prefs = prefs, pubkeyHex = pubkeyHex, onLogoutClick = { showLogoutConfirm = true })
                     if (!prefs.isExternalSigner) {
                         AccountSecuritySection(authViewModel = authViewModel, prefs = prefs)
+                    }
+                    AppSettingsRow(Icons.Default.Share, "招待", "友だちを招待リンクで共有") {
+                        val npub = io.nurunuru.app.data.NostrKeyUtils.encodeNpub(pubkeyHex) ?: pubkeyHex
+                        val intent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, "https://www.nullnull.app/p/$npub")
+                            putExtra(Intent.EXTRA_TITLE, "ぬるぬるに招待")
+                        }
+                        context.startActivity(Intent.createChooser(intent, "招待リンクを共有"))
                     }
                     AppSettingsRow(Icons.Default.PanTool, "プライバシーポリシー", "個人情報とデータの取り扱いを確認") { uriHandler.openUri("https://tami1A84.github.io/null--nostr/privacy.html") }
                     AppSettingsRow(Icons.Default.Description, "利用規約", "禁止事項、通報、ブロックについて確認") { uriHandler.openUri("https://tami1A84.github.io/null--nostr/terms.html") }

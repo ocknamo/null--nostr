@@ -83,8 +83,8 @@ export default function LoginScreen({ onLogin }) {
 
   // Initialize nostr-login via CDN when needed
   useEffect(() => {
-    // Automatically init nostr-login for non-passkey users
-    const shouldInit = showNostrLoginOption || (!checking && !nosskeyHasKey)
+    // App-style login screen always shows the generic login button, so keep nostr-login ready.
+    const shouldInit = !checking
 
     if (!shouldInit || nostrLoginInitialized.current) return
 
@@ -299,118 +299,103 @@ export default function LoginScreen({ onLogin }) {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-[var(--bg-primary)]">
       <div className="w-full max-w-md">
-        {/* Logo */}
-        <div className="text-center mb-8 animate-fadeIn">
-          <div className="w-28 h-28 mx-auto mb-4 rounded-3xl overflow-hidden shadow-lg">
+        {/* Logo — match native app sign-in screen */}
+        <div className="text-center mb-12 animate-fadeIn">
+          <div className="w-28 h-28 mx-auto mb-6 rounded-[28px] overflow-hidden shadow-2xl">
             <img src="/nurunuru-star.png" alt="ぬるぬる" className="w-full h-full object-cover" />
           </div>
-          <h1 className="text-3xl font-bold text-[var(--text-primary)]">ぬるぬる</h1>
-          <p className="mt-4 text-lg font-semibold text-[var(--text-primary)]">
-            指紋や顔認証だけではじめられる、あたらしいSNS。
-          </p>
-          <p className="mt-2 text-sm leading-relaxed text-[var(--text-secondary)]">
-            メールも電話番号もパスワードもいりません。
-          </p>
-          <p className="mt-2 text-xs leading-relaxed text-[var(--text-tertiary)]">
-            チャットはデフォルトで暗号化。広告なし、属性情報・位置情報・行動履歴の収集なし。
-          </p>
+          <h1 className="text-4xl font-black tracking-tight text-[var(--text-primary)]">ぬるぬる</h1>
         </div>
 
-        {/* Login options */}
-        <div className="space-y-4">
-          {(nosskeyHasKey || nosskeySupported) ? (
-            /* Passkey User: Prominent Passkey Login */
-            <div className="animate-slideUp space-y-4">
-              <button
-                onClick={handleNosskeyLogin}
-                disabled={nosskeyLoading}
-                className="w-full btn-line text-lg py-5 shadow-lg shadow-green-500/10 disabled:opacity-50"
-              >
-                {nosskeyLoading ? (
-                  <span className="flex items-center justify-center gap-3">
-                    <svg className="w-6 h-6 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                      <circle cx="12" cy="12" r="10" strokeOpacity="0.25"/>
-                      <path d="M12 2a10 10 0 019.5 7" strokeLinecap="round"/>
-                    </svg>
-                    認証中...
-                  </span>
-                ) : (
-                  <span className="flex items-center justify-center gap-3">
-                    <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                      <path d="M12 2a4 4 0 014 4v2h2a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2V10a2 2 0 012-2h2V6a4 4 0 014-4z"/>
-                      <circle cx="12" cy="15" r="1.5"/>
-                    </svg>
-                    パスキーでログイン
-                  </span>
-                )}
-              </button>
+        {/* App-style auth actions: 新規登録 / パスキーでログイン / ログイン */}
+        <div className="space-y-5">
+          <div className="animate-slideUp space-y-5">
+            <button
+              onClick={() => setShowSignUpModal(true)}
+              className="w-full h-16 rounded-[28px] bg-[var(--line-green)] text-white text-xl font-black shadow-[0_0_30px_rgba(6,199,85,0.35)] active:scale-[0.99] transition-transform disabled:opacity-50"
+            >
+              <span className="flex items-center justify-center gap-3">
+                <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2" />
+                  <circle cx="9" cy="7" r="4" />
+                  <circle cx="19" cy="11" r="3" />
+                  <path d="M19 9v4M17 11h4" />
+                </svg>
+                新規登録
+              </span>
+            </button>
 
-              <div className="text-center">
-                <button
-                  onClick={() => setShowNostrLoginOption(!showNostrLoginOption)}
-                  className="text-sm text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors inline-flex items-center gap-1"
-                >
-                  <span>その他のログイン方法</span>
-                  <svg className={`w-3.5 h-3.5 transition-transform ${showNostrLoginOption ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                    <polyline points="6 9 12 15 18 9"/>
+            <button
+              onClick={handleNosskeyLogin}
+              disabled={nosskeyLoading || (!nosskeySupported && !nosskeyHasKey)}
+              className="w-full h-16 rounded-[28px] bg-[#1c1c1e] text-[var(--line-green)] text-xl font-black active:scale-[0.99] transition-transform disabled:opacity-50"
+            >
+              {nosskeyLoading ? (
+                <span className="flex items-center justify-center gap-3">
+                  <svg className="w-6 h-6 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <circle cx="12" cy="12" r="10" strokeOpacity="0.25"/>
+                    <path d="M12 2a10 10 0 019.5 7" strokeLinecap="round"/>
                   </svg>
-                </button>
-              </div>
-
-              {showNostrLoginOption && (
-                <div className="pt-2 animate-fadeIn">
-                  <button
-                    onClick={handleNostrLoginLaunch}
-                    disabled={!nostrLoginReady}
-                    className="w-full btn-secondary py-3 text-sm disabled:opacity-50"
-                  >
-                    外部アプリでログイン
-                  </button>
-                </div>
+                  認証中...
+                </span>
+              ) : (
+                <span className="flex items-center justify-center gap-3">
+                  <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M4 8V6a2 2 0 012-2h2" />
+                    <path d="M16 4h2a2 2 0 012 2v2" />
+                    <path d="M20 16v2a2 2 0 01-2 2h-2" />
+                    <path d="M8 20H6a2 2 0 01-2-2v-2" />
+                    <path d="M8 12a4 4 0 018 0" />
+                    <path d="M10 12a2 2 0 014 0" />
+                    <path d="M12 12v3" />
+                  </svg>
+                  パスキーでログイン
+                </span>
               )}
-            </div>
-          ) : (
-            /* Non-Passkey User: Sign Up & Login */
-            <div className="animate-slideUp space-y-4">
-              <div className="space-y-3">
-                <button
-                  onClick={() => setShowSignUpModal(true)}
-                  className="w-full btn-line text-lg py-5 shadow-lg shadow-green-500/10"
-                >
-                  <span className="flex items-center justify-center gap-3">
-                    <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                      <path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" />
-                      <circle cx="8.5" cy="7" r="4" />
-                      <line x1="20" y1="8" x2="20" y2="14" />
-                      <line x1="17" y1="11" x2="23" y2="11" />
-                    </svg>
-                    新規登録
-                  </span>
-                </button>
+            </button>
 
-                <button
-                  onClick={handleNostrLoginLaunch}
-                  disabled={!nostrLoginReady}
-                  className="w-full btn-secondary text-lg py-4 disabled:opacity-50"
-                >
-                  <span className="flex items-center justify-center gap-3">
-                    <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                      <path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4" />
-                      <polyline points="10 17 15 12 10 7" />
-                      <line x1="15" y1="12" x2="3" y2="12" />
-                    </svg>
-                    ログイン
-                  </span>
-                </button>
-              </div>
+            <button
+              onClick={handleNostrLoginLaunch}
+              disabled={!nostrLoginReady}
+              className="w-full h-16 rounded-[28px] bg-[#1c1c1e] text-white text-xl font-black active:scale-[0.99] transition-transform disabled:opacity-50"
+            >
+              <span className="flex items-center justify-center gap-3">
+                <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10" />
+                  <path d="M12 8l4 4-4 4" />
+                  <path d="M8 12h8" />
+                </svg>
+                ログイン
+              </span>
+            </button>
+          </div>
 
-              <div className="text-center">
-                <p className="text-xs text-[var(--text-tertiary)]">
-                  外部アプリ / 拡張機能 / 読み取り専用にも対応
-                </p>
-              </div>
-            </div>
-          )}
+          <div className="pt-24 flex items-center justify-center gap-4 text-center animate-fadeIn">
+            <a
+              href="https://tami1a84.github.io/null--nostr/terms.html"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-[var(--text-tertiary)] hover:text-[var(--line-green)] transition-colors"
+            >
+              利用規約
+            </a>
+            <a
+              href="https://tami1a84.github.io/null--nostr/privacy.html"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-[var(--text-tertiary)] hover:text-[var(--line-green)] transition-colors"
+            >
+              プライバシーポリシー
+            </a>
+            <a
+              href="https://tami1a84.github.io/null--nostr/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-[var(--text-tertiary)] hover:text-[var(--line-green)] transition-colors"
+            >
+              公式サイト
+            </a>
+          </div>
 
           {error && (
             <div className="mt-4 p-4 rounded-2xl bg-red-500/10 border border-red-500/20 animate-scaleIn">
@@ -428,16 +413,6 @@ export default function LoginScreen({ onLogin }) {
         />
       )}
 
-      <div className="py-6 text-center animate-fadeIn">
-        <a
-          href="https://github.com/tami1A84/null--nostr"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-xs text-[var(--text-tertiary)] hover:text-[var(--line-green)] transition-colors"
-        >
-          オープンソースで公開中
-        </a>
-      </div>
     </div>
   )
 }

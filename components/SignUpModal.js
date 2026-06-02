@@ -20,8 +20,8 @@ import { autoDetectRelays, formatDistance, REGION_COORDINATES, selectRelaysByReg
  *
  * Handles new user registration including:
  * 1. Passkey registration via Nosskey
- * 2. Private key backup & Nostr key derivation
- * 3. Automatic relay setup based on geolocation
+ * 2. Nostr key derivation behind the passkey
+ * 3. Regional relay server setup
  * 4. Profile setup and metadata publishing
  */
 // チュートリアル投稿で使用する固定ハッシュタグ。
@@ -42,7 +42,7 @@ const TUTORIAL_DEFAULT_CONTENT = `\n#${TUTORIAL_HASHTAG}`
 const TUTORIAL_PLACEHOLDER = `いまどうしてる？\n#${TUTORIAL_HASHTAG}`
 
 export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
-  const [step, setStep] = useState('welcome') // welcome, backup, relay, profile, tutorial, success
+  const [step, setStep] = useState('welcome') // welcome, relay, profile, tutorial, success
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [createdPubkey, setCreatedPubkey] = useState(null)
@@ -93,7 +93,28 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
 
       if (cid) {
         setCredentialId(cid)
-        setStep('backup')
+
+        // Export and cache the Nostr key immediately, without showing an nsec backup step.
+        // 新規登録はパスキー登録のみ。秘密鍵バックアップ画面は表示しない。
+        const privateKeyHex = await nosskeyManager.exportNostrKey(null, cid)
+        if (!privateKeyHex) throw new Error('パスキーから鍵を準備できませんでした')
+
+        const pk = getPublicKey(hexToBytes(privateKeyHex))
+        setCreatedPubkey(pk)
+
+        const keyInfo = {
+          credentialId: nosskeyManager.constructor.bytesToHex ?
+            nosskeyManager.constructor.bytesToHex(cid) :
+            Array.from(cid).map(b => b.toString(16).padStart(2, '0')).join(''),
+          pubkey: pk,
+          salt: '6e6f7374722d70776b'
+        }
+        nosskeyManager.setCurrentKeyInfo(keyInfo)
+        setStoredPrivateKey(pk, privateKeyHex)
+        setBackupNsec(nip19.nsecEncode(hexToBytes(privateKeyHex)))
+
+        setStep('relay')
+        startRelayDetection()
       } else {
         throw new Error('パスキーの作成に失敗しました')
       }
@@ -343,7 +364,7 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
       if (!signed) throw new Error('署名に失敗しました')
 
       const published = await publishEvent(signed, targetRelays)
-      if (!published) throw new Error('リレーへの送信に失敗しました')
+      if (!published) throw new Error('リレーサーバーへの送信に失敗しました')
       setTutorialPosted(true)
     } catch (e) {
       console.error('Tutorial post failed:', e)
@@ -375,14 +396,13 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
     <div className="fixed inset-0 z-50 flex items-center justify-center modal-overlay p-4" onClick={onClose}>
       <div className="w-full max-w-md bg-[var(--bg-primary)] rounded-3xl overflow-hidden shadow-2xl animate-scaleIn" onClick={e => e.stopPropagation()}>
 
-        {/* Progress bar (6 steps: welcome / backup / relay / profile / tutorial / success) */}
+        {/* Progress bar (5 steps: welcome / region / profile / tutorial / success) */}
         <div className="h-1.5 w-full bg-[var(--bg-secondary)] flex">
           <div className={`h-full bg-[var(--line-green)] transition-all duration-500 ${
-            step === 'welcome' ? 'w-1/6' :
-            step === 'backup' ? 'w-2/6' :
-            step === 'relay' ? 'w-3/6' :
-            step === 'profile' ? 'w-4/6' :
-            step === 'tutorial' ? 'w-5/6' : 'w-full'
+            step === 'welcome' ? 'w-1/5' :
+            step === 'relay' ? 'w-2/5' :
+            step === 'profile' ? 'w-3/5' :
+            step === 'tutorial' ? 'w-4/5' : 'w-full'
           }`} />
         </div>
 
@@ -400,7 +420,7 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
               <div>
                 <h2 className="text-2xl font-bold text-[var(--text-primary)] mb-2">新規登録</h2>
                 <p className="text-[var(--text-secondary)] text-sm">
-                  パスキーを使用して、新しいNostrアカウントを作成します。
+                  パスキーだけで、新しいNostrアカウントを作成します。秘密鍵を保管する必要はありません。
                 </p>
               </div>
 
@@ -415,84 +435,12 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
                 disabled={loading}
                 className="w-full btn-line py-4 text-lg font-bold disabled:opacity-50"
               >
-                {loading ? '作成中...' : 'アカウントを作成する'}
+                {loading ? '登録中...' : 'パスキーで登録'}
               </button>
 
               <button onClick={onClose} className="text-[var(--text-tertiary)] text-sm hover:underline">
                 キャンセル
               </button>
-            </div>
-          )}
-
-          {step === 'backup' && (
-            <div className="text-center space-y-6 animate-fadeIn">
-              <div className="w-20 h-20 mx-auto bg-orange-500/10 rounded-full flex items-center justify-center">
-                <svg className="w-10 h-10 text-orange-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-                </svg>
-              </div>
-              <div>
-                <h2 className="text-2xl font-bold text-[var(--text-primary)] mb-2">秘密鍵のバックアップ</h2>
-                <p className="text-[var(--text-secondary)] text-sm">
-                  アカウントを復旧するために必要な「秘密鍵」を生成します。この鍵は誰にも教えないでください。
-                </p>
-              </div>
-
-              {!backupNsec ? (
-                <div className="space-y-4">
-                  {error && (
-                    <div className="p-3 bg-red-500/10 rounded-xl">
-                      <p className="text-red-500 text-xs">{error}</p>
-                    </div>
-                  )}
-                  <button
-                    onClick={handleBackupKey}
-                    disabled={loading}
-                    className="w-full btn-line py-4 text-lg font-bold disabled:opacity-50"
-                  >
-                    {loading ? '生成中...' : '秘密鍵を発行する'}
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <div className="bg-[var(--bg-secondary)] rounded-2xl p-4 text-left border border-orange-500/30">
-                    <p className="text-orange-500 text-[10px] font-bold mb-1 uppercase">あなたの秘密鍵 (nsec) - 大切に保管してください</p>
-                    <p className="text-[var(--text-primary)] text-xs font-mono break-all line-clamp-3 bg-black/20 p-2 rounded">
-                      {backupNsec}
-                    </p>
-                    <button
-                      onClick={handleCopyNsec}
-                      className="mt-2 w-full py-2 bg-[var(--bg-tertiary)] rounded-xl text-sm font-bold flex items-center justify-center gap-2"
-                    >
-                      {nsecCopied ? (
-                        <>
-                          <svg className="w-4 h-4 text-[var(--line-green)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <polyline points="20 6 9 17 4 12"/>
-                          </svg>
-                          コピーしました
-                        </>
-                      ) : (
-                        <>
-                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-                            <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
-                          </svg>
-                          秘密鍵をコピー
-                        </>
-                      )}
-                    </button>
-                  </div>
-                  <button
-                    onClick={() => {
-                      setStep('relay')
-                      startRelayDetection()
-                    }}
-                    className="w-full btn-line py-4 text-lg font-bold"
-                  >
-                    次へ進む
-                  </button>
-                </div>
-              )}
             </div>
           )}
 
@@ -505,9 +453,9 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
                     <circle cx="12" cy="10" r="3" />
                   </svg>
                 </div>
-                <h2 className="text-xl font-bold text-[var(--text-primary)] mb-1">リレーのセットアップ</h2>
+                <h2 className="text-xl font-bold text-[var(--text-primary)] mb-1">地域の設定</h2>
                 <p className="text-[var(--text-secondary)] text-xs">
-                  地域を選択すると最適なリレーが自動設定されます。
+                  地域を選択すると、近くのリレーサーバーを自動セットアップします。
                 </p>
               </div>
 
@@ -555,12 +503,12 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
                   {loading ? (
                     <div className="py-6 text-center space-y-2">
                       <div className="w-5 h-5 border-2 border-[var(--line-green)] border-t-transparent rounded-full animate-spin mx-auto"></div>
-                      <p className="text-[10px] text-[var(--text-tertiary)]">最適なリレーを検索中...</p>
+                      <p className="text-[10px] text-[var(--text-tertiary)]">最適なリレーサーバーを検索中...</p>
                     </div>
                   ) : recommendedRelays.length > 0 ? (
                     <>
                       <div className="flex items-center justify-between text-[10px] font-bold text-[var(--text-tertiary)] px-1 border-b border-[var(--border-color)] pb-2 mb-1">
-                        <span>推奨リレー ({locationInfo?.name || '選択済み'})</span>
+                        <span>推奨リレーサーバー ({locationInfo?.name || '選択済み'})</span>
                         <span>距離</span>
                       </div>
                       {recommendedRelays.map((relay, i) => (
@@ -706,7 +654,7 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
                 </div>
                 <h2 className="text-xl font-bold text-[var(--text-primary)] mb-1">はじめての投稿</h2>
                 <p className="text-[var(--text-secondary)] text-xs">
-                  チュートリアルとして「#nostrはじめました」をつけて、はじめての投稿をしてみましょう。
+                  まずは、ひとことあいさつしてみましょう。何を書けばいいか迷ったら、例文を使えます。
                 </p>
               </div>
 
@@ -732,6 +680,14 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
                 </div>
               ) : (
                 <div className="space-y-4">
+                  <button
+                    type="button"
+                    onClick={() => setTutorialContent('はじめまして。ぬるぬるを始めました。よろしくね。\n#' + TUTORIAL_HASHTAG)}
+                    className="inline-flex items-center gap-2 rounded-full bg-[var(--bg-secondary)] px-3 py-2 text-xs font-bold text-[var(--line-green)]"
+                  >
+                    例文を使う
+                  </button>
+
                   <div>
                     {/*
                       `#nostrはじめました` は既定で pre-fill されているため、エディタを開いた瞬間から

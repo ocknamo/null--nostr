@@ -432,14 +432,13 @@ struct LoginView: View {
     // MARK: - Footer
 
     private var footerSection: some View {
-        VStack(spacing: NuruSpacing.space1) {
-            Text("Powered by Nostr")
-                .font(NuruFont.bodySmall())
-                .foregroundStyle(theme.textTertiary)
-            Text("秘密鍵はデバイス外に送信されません")
-                .font(NuruFont.labelSmall())
-                .foregroundStyle(theme.textTertiary.opacity(0.7))
+        HStack(spacing: NuruSpacing.space4) {
+            Link("利用規約", destination: URL(string: "https://tami1a84.github.io/null--nostr/terms.html")!)
+            Link("プライバシーポリシー", destination: URL(string: "https://tami1a84.github.io/null--nostr/privacy.html")!)
+            Link("公式サイト", destination: URL(string: "https://tami1a84.github.io/null--nostr/")!)
         }
+        .font(NuruFont.bodySmall())
+        .foregroundStyle(theme.textTertiary)
         .padding(.bottom, NuruSpacing.space4)
     }
 }
@@ -453,7 +452,7 @@ private struct TermsAgreementSheet: View {
 
     @Environment(\.nuruTheme) private var theme
 
-    private let termsURL = URL(string: "https://tami1A84.github.io/null--nostr/terms.html")!
+    private let termsURL = URL(string: "https://tami1a84.github.io/null--nostr/terms.html")!
 
     var body: some View {
         NavigationStack {
@@ -637,33 +636,27 @@ private let kTutorialHashtag = "nostrはじめました"
 private let kTutorialDefaultContent = "\n#nostrはじめました"
 private let kTutorialPlaceholder = "いまどうしてる？\n#nostrはじめました"
 
-// MARK: - Sign Up Sheet (6-step wizard — mirrors Android SignUpModal.kt)
+// MARK: - Sign Up Sheet (5-step passkey wizard — mirrors Android SignUpModal.kt)
 
 struct SignUpSheet: View {
     @Binding var isPresented: Bool
     @Environment(AuthViewModel.self) private var viewModel
     @Environment(\.nuruTheme) private var theme
 
-    // Step: welcome → backup → relay → profile → tutorial → success
+    // Step: welcome → relay → profile → tutorial → success
     @State private var step = "welcome"
     @State private var generatedAccount: AuthViewModel.GeneratedAccount?
     @State private var selectedRelays: [Nip65Relay]?
     @State private var isLoading = false
     @State private var error = ""
-    /// True when the active sign-up wizard is using the Passkey (nosskey) path
-    /// instead of the classic nsec path. Passkey path skips the "backup" step
-    /// (the passkey itself is the backup), so the wizard runs 5 steps instead of 6.
-    @State private var usingPasskey = false
-
     private var progress: CGFloat {
-        let total: CGFloat = usingPasskey ? 5.0 : 6.0
+        let total: CGFloat = 5.0
         switch step {
         case "welcome":  return 1.0 / total
-        case "backup":   return 2.0 / total
-        case "relay":    return (usingPasskey ? 2.0 : 3.0) / total
-        case "profile":  return (usingPasskey ? 3.0 : 4.0) / total
-        case "tutorial": return (usingPasskey ? 4.0 : 5.0) / total
-        default:         return 1.0
+        case "relay":    return 2.0 / total
+        case "profile":  return 3.0 / total
+        case "tutorial": return 4.0 / total
+        default:          return 1.0
         }
     }
 
@@ -692,12 +685,8 @@ struct SignUpSheet: View {
                             switch step {
                             case "welcome":
                                 SignUpWelcomeStep(
-                                    onNext: {
-                                        usingPasskey = false
-                                        generateAccount()
-                                    },
+                                    onNext: {},
                                     onNextWithPasskey: {
-                                        usingPasskey = true
                                         generateAccountWithPasskey()
                                     },
                                     onClose: { isPresented = false },
@@ -705,13 +694,6 @@ struct SignUpSheet: View {
                                     error: error,
                                     passkeyAvailable: NosskeyManager.isPlatformSupported
                                 )
-                            case "backup":
-                                if let account = generatedAccount {
-                                    SignUpBackupStep(
-                                        account: account,
-                                        onNext: { step = "relay" }
-                                    )
-                                }
                             case "relay":
                                 SignUpRelayStep(onRelaysSelected: { relays in
                                     selectedRelays = relays
@@ -771,22 +753,6 @@ struct SignUpSheet: View {
     }
 
     // MARK: - Actions
-
-    private func generateAccount() {
-        isLoading = true
-        error = ""
-        Task {
-            let acc = await viewModel.generateNewAccount()
-            if let acc {
-                generatedAccount = acc
-                step = "backup"
-            } else {
-                error = "アカウント作成に失敗しました"
-            }
-            isLoading = false
-        }
-    }
-
     /// Nosskey "PRF direct" sign-up. Skips the nsec backup step because the
     /// passkey itself acts as the recoverable backup (iCloud Keychain / OS).
     private func generateAccountWithPasskey() {
@@ -798,7 +764,6 @@ struct SignUpSheet: View {
                 generatedAccount = acc
                 step = "relay"
             } else {
-                usingPasskey = false
                 if error.isEmpty {
                     error = "パスキーの登録に失敗しました。実機では www.nullnull.app の webcredentials 設定が必要です。"
                 }
@@ -881,7 +846,7 @@ private struct SignUpTutorialStep: View {
                 Text("はじめての投稿")
                     .font(NuruFont.titleMedium())
                     .foregroundStyle(theme.textPrimary)
-                Text("チュートリアルとして「#nostrはじめました」をつけて、はじめての投稿をしてみましょう。")
+                Text("まずは、ひとことあいさつしてみましょう。何を書けばいいか迷ったら、例文を使えます。")
                     .font(NuruFont.bodySmall())
                     .foregroundStyle(theme.textSecondary)
                     .multilineTextAlignment(.center)
@@ -920,6 +885,20 @@ private struct SignUpTutorialStep: View {
             } else {
                 // Editor (TextEditor は placeholder API を持たないため、ZStack で薄い灰色の
                 //         オーバーレイ Text を重ねる。content.isEmpty の時だけ表示)。
+                Button {
+                    content = "はじめまして。ぬるぬるを始めました。よろしくね。\n#\(kTutorialHashtag)"
+                } label: {
+                    Text("例文を使う")
+                        .font(NuruFont.labelSmall())
+                        .fontWeight(.bold)
+                        .foregroundStyle(NuruColors.lineGreen)
+                        .padding(.horizontal, NuruSpacing.space3)
+                        .padding(.vertical, NuruSpacing.space2)
+                        .background(theme.bgSecondary)
+                        .clipShape(Capsule())
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
                 VStack(alignment: .trailing, spacing: NuruSpacing.space1) {
                     ZStack(alignment: .topLeading) {
                         TextEditor(text: $content)
@@ -1011,8 +990,6 @@ private struct SignUpWelcomeStep: View {
     let onClose: () -> Void
     let isLoading: Bool
     let error: String
-    /// True when the platform supports the WebAuthn PRF extension (iOS 18+).
-    /// Drives whether the "パスキーで登録" primary button is visible.
     var passkeyAvailable: Bool = false
 
     @Environment(\.nuruTheme) private var theme
@@ -1029,17 +1006,10 @@ private struct SignUpWelcomeStep: View {
                 Text("新規登録")
                     .font(NuruFont.titleLarge())
                     .foregroundStyle(theme.textPrimary)
-                if passkeyAvailable {
-                    Text("Face ID または Touch ID で安全に登録します。\n秘密鍵を保管する必要はありません。")
-                        .font(NuruFont.bodySmall())
-                        .foregroundStyle(theme.textSecondary)
-                        .multilineTextAlignment(.center)
-                } else {
-                    Text("新しいNostrアカウントを作成します。\n秘密鍵はデバイス内に安全に保存されます。")
-                        .font(NuruFont.bodySmall())
-                        .foregroundStyle(theme.textSecondary)
-                        .multilineTextAlignment(.center)
-                }
+                Text("Face ID または Touch ID で安全に登録します。\n秘密鍵を保管する必要はありません。")
+                    .font(NuruFont.bodySmall())
+                    .foregroundStyle(theme.textSecondary)
+                    .multilineTextAlignment(.center)
             }
 
             if !error.isEmpty {
@@ -1049,7 +1019,6 @@ private struct SignUpWelcomeStep: View {
             }
 
             if passkeyAvailable, let passkeyAction = onNextWithPasskey {
-                // Primary: Passkey path.
                 Button(action: passkeyAction) {
                     Group {
                         if isLoading {
@@ -1068,38 +1037,11 @@ private struct SignUpWelcomeStep: View {
                 }
                 .buttonStyle(NuruPrimaryButtonStyle(isDisabled: isLoading))
                 .disabled(isLoading)
-
-                // Secondary: classic nsec sign-up.
-                Button(action: onNext) {
-                    Text("従来の方法で作成（nsec）")
-                        .font(NuruFont.bodyMedium())
-                        .foregroundStyle(theme.textSecondary)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 44)
-                }
-                .disabled(isLoading)
             } else {
-                Button(action: onNext) {
-                    Group {
-                        if isLoading {
-                            ProgressView().tint(.white).scaleEffect(0.8)
-                        } else {
-                            Text("アカウントを作成する")
-                                .font(NuruFont.buttonLarge())
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 56)
-                }
-                .buttonStyle(NuruPrimaryButtonStyle(isDisabled: isLoading))
-                .disabled(isLoading)
-
-                if !NosskeyManager.isPlatformSupported {
-                    Text("パスキー対応はiOS 18以降で利用できます")
-                        .font(NuruFont.labelSmall())
-                        .foregroundStyle(theme.textTertiary)
-                        .multilineTextAlignment(.center)
-                }
+                Text("この端末ではパスキー登録を利用できません。既存アカウントでログインするか、対応端末で登録してください。")
+                    .font(NuruFont.bodySmall())
+                    .foregroundStyle(theme.textTertiary)
+                    .multilineTextAlignment(.center)
             }
 
             Button("キャンセル", action: onClose)
@@ -1109,82 +1051,8 @@ private struct SignUpWelcomeStep: View {
     }
 }
 
-// MARK: - Step 2: Backup
+// MARK: - Step 2: Region
 
-private struct SignUpBackupStep: View {
-    let account: AuthViewModel.GeneratedAccount
-    let onNext: () -> Void
-
-    @Environment(\.nuruTheme) private var theme
-    @State private var copied = false
-
-    var body: some View {
-        VStack(spacing: NuruSpacing.space5) {
-            SignUpIconBox(
-                systemName: "lock.shield",
-                containerColor: Color.orange.opacity(0.1),
-                iconColor: .orange
-            )
-
-            VStack(spacing: NuruSpacing.space2) {
-                Text("秘密鍵のバックアップ")
-                    .font(NuruFont.titleMedium())
-                    .foregroundStyle(theme.textPrimary)
-                Text("アカウントを復旧するために必要な「秘密鍵」です。この鍵は誰にも教えないでください。")
-                    .font(NuruFont.bodySmall())
-                    .foregroundStyle(theme.textSecondary)
-                    .multilineTextAlignment(.center)
-            }
-
-            // nsec card
-            VStack(alignment: .leading, spacing: NuruSpacing.space2) {
-                Text("あなたの秘密鍵 (nsec)")
-                    .font(NuruFont.labelSmall())
-                    .fontWeight(.bold)
-                    .foregroundStyle(.orange)
-
-                Text(account.nsec)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(theme.textPrimary)
-                    .padding(NuruSpacing.space2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.black.opacity(0.2))
-                    .cornerRadius(NuruSpacing.radiusMd)
-
-                Button {
-                    UIPasteboard.general.string = account.nsec
-                    copied = true
-                } label: {
-                    HStack(spacing: NuruSpacing.space2) {
-                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                            .font(.system(size: 14))
-                            .foregroundStyle(copied ? NuruColors.lineGreen : theme.textPrimary)
-                        Text(copied ? "コピーしました" : "秘密鍵をコピー")
-                            .font(NuruFont.bodySmall())
-                            .foregroundStyle(theme.textPrimary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
-                    .background(theme.bgTertiary)
-                    .cornerRadius(NuruSpacing.radiusMd)
-                }
-            }
-            .padding(NuruSpacing.space4)
-            .background(theme.bgSecondary)
-            .cornerRadius(NuruSpacing.radiusXl)
-
-            Button(action: onNext) {
-                Text("次へ進む")
-                    .font(NuruFont.buttonMedium())
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 56)
-            }
-            .buttonStyle(NuruPrimaryButtonStyle())
-        }
-    }
-}
-
-// MARK: - Step 3: Relay
 
 private struct SignUpRelayStep: View {
     let onRelaysSelected: ([Nip65Relay]) -> Void
@@ -1212,10 +1080,10 @@ private struct SignUpRelayStep: View {
             )
 
             VStack(spacing: NuruSpacing.space2) {
-                Text("リレーのセットアップ")
+                Text("地域の設定")
                     .font(NuruFont.titleMedium())
                     .foregroundStyle(theme.textPrimary)
-                Text("地域を選択すると最適なリレーが自動設定されます。")
+                Text("地域を選択すると、近くのリレーサーバーを自動セットアップします。")
                     .font(NuruFont.bodySmall())
                     .foregroundStyle(theme.textSecondary)
                     .multilineTextAlignment(.center)
@@ -1274,7 +1142,7 @@ private struct SignUpRelayStep: View {
 
             // Relay list card
             VStack(alignment: .leading, spacing: NuruSpacing.space2) {
-                Text("推奨リレー (\(regionName))")
+                Text("推奨リレーサーバー (\(regionName))")
                     .font(NuruFont.labelSmall())
                     .fontWeight(.bold)
                     .foregroundStyle(theme.textTertiary)
@@ -1716,10 +1584,6 @@ private struct SignUpSuccessStep: View {
 
     @Environment(\.nuruTheme) private var theme
 
-    private var shareURL: URL {
-        URL(string: "https://www.nullnull.app/p/\(npub)")!
-    }
-
     var body: some View {
         VStack(spacing: NuruSpacing.space5) {
             SignUpIconBox(
@@ -1732,38 +1596,11 @@ private struct SignUpSuccessStep: View {
                 Text("準備完了！")
                     .font(NuruFont.titleLarge())
                     .foregroundStyle(theme.textPrimary)
-                Text("プロフィールを友だちに共有できます。リンクから始めた人は、あなたをフォローした状態でスタートします。")
+                Text("アカウントが作成されました。ぬるぬるの世界へようこそ！")
                     .font(NuruFont.bodySmall())
                     .foregroundStyle(theme.textSecondary)
                     .multilineTextAlignment(.center)
             }
-
-            VStack(alignment: .leading, spacing: NuruSpacing.space3) {
-                Text("プロフィールを共有")
-                    .font(NuruFont.labelSmall())
-                    .foregroundStyle(theme.textTertiary)
-                Text("Twitter/X や LINE に送ると、相手はあなたをフォローした状態でぬるぬるを始められます。")
-                    .font(NuruFont.bodySmall())
-                    .foregroundStyle(theme.textPrimary)
-                ShareLink(
-                    item: shareURL,
-                    subject: Text("ぬるぬるでプロフィールを見てね"),
-                    message: Text("リンクから始めると、このユーザーをフォローした状態でスタートできます。")
-                ) {
-                    HStack {
-                        Image(systemName: "square.and.arrow.up")
-                        Text("プロフィールを共有")
-                            .font(NuruFont.buttonMedium())
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 48)
-                }
-                .buttonStyle(NuruSecondaryButtonStyle(theme: theme))
-            }
-            .padding(NuruSpacing.space4)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(theme.bgSecondary)
-            .cornerRadius(NuruSpacing.radiusXl)
 
             Button(action: onComplete) {
                 Text("はじめる")
