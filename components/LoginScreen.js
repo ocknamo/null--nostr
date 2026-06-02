@@ -309,8 +309,8 @@ export default function LoginScreen({ onLogin }) {
 
         {/* Login options */}
         <div className="space-y-4">
-          {(nosskeyHasKey || nosskeySupported) ? (
-            /* Passkey User: Prominent Passkey Login */
+          {nosskeyHasKey ? (
+            /* Returning Passkey User: Prominent Passkey Login */
             <div className="animate-slideUp space-y-4">
               <button
                 onClick={handleNosskeyLogin}
@@ -359,9 +359,20 @@ export default function LoginScreen({ onLogin }) {
                   </button>
                 </div>
               )}
+
+              {/* Always offer a path to registration, even for returning users
+                  whose passkey was removed from the device / password manager. */}
+              <div className="text-center pt-1">
+                <button
+                  onClick={() => setShowSignUpModal(true)}
+                  className="text-sm text-[var(--line-green)] hover:underline font-bold"
+                >
+                  アカウントをお持ちでない方は新規登録
+                </button>
+              </div>
             </div>
           ) : (
-            /* Non-Passkey User: Sign Up & Login */
+            /* New / Non-Passkey User: Sign Up & Login */
             <div className="animate-slideUp space-y-4">
               <div className="space-y-3">
                 <button
