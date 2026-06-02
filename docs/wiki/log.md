@@ -823,3 +823,11 @@ LLM Wiki の時系列ログです。追記専用として扱います。
 - Android timeline post headers now render `profile.nip05` directly under the display name, matching iOS.
 - The verified checkmark remains beside the display name; the NIP-05 text is visible whenever present and uses LineGreen only when verified.
 - Source references: `android/app/src/main/kotlin/io/nurunuru/app/ui/components/PostContent.kt`, `android/app/src/main/kotlin/io/nurunuru/app/ui/components/PostItem.kt`, `android/app/src/main/kotlin/io/nurunuru/app/ui/components/LongFormPostItem.kt`, `ios/NuruNuru/Views/Components/PostContent.swift`.
+
+## [2026-06-02] strategy | ThemaDAY Home renewal alignment
+
+- Added `docs/wiki/strategy/themaday-2026-06-02-product-eng-design.md` to record product / engineering / design alignment for Home renewal.
+- Updated June roadmap and ADR-0015: Home now uses a Home-header account/profile icon for existing profile / my posts / likes, and the Home body is split into **アクティビティ** and **コンテンツ**.
+- Recorded that relay-feed removal is already complete and iOS Rust FFI current release-planning scope is complete; future work is verification / separate expansion, not a current blocker.
+- Existing Timeline following feed is planned to move into Home **コンテンツ**; Activity must not recreate relay-wide feed behavior.
+- Source references: `docs/wiki/strategy/june-2026-roadmap.md`, `docs/wiki/decisions/adr-0015-home-tab-renewal.md`, `docs/wiki/decisions/adr-0019-ios-rust-ffi-write-path.md`, `docs/wiki/ui/android-ios-sync.md`.

@@ -25,8 +25,7 @@ null--nostr は、Web / Android / iOS の UI 層と、Nostr 処理・暗号・�
 
 - **Design tokens:** `design-tokens/constants.json` から Web / Android / iOS に生成。
 - **Private keys:** Web は module closure、iOS は Keychain、Android は platform signer / Rust FFI 経由の制約を守る。
-- **iOS Rust FFI Phase 1/1.1/1.2:** iOS は `MlsFFIBridge` / `MlsFFILiveClient` 経由で read-only `mlsIsEncrypted() -> Bool?`、`mlsListGroups()` 件数、`mlsGroupsNeedingSelfUpdate(thresholdSecs:)` 件数だけを live smoke test として使う。Phase 1.2 は helper 別の sanitized status と手動再確認 UI だけを追加し、raw Rust error は表示しない。署名・投稿・key generation・秘密鍵 export は Phase 1.x 対象外。
-- **iOS Rust FFI Phase 1/1.1:** iOS は MlsFFIBridge / MlsFFILiveClient 経由で read-only mlsIsEncrypted() -> Bool?、mlsListGroups() 件数、mlsGroupsNeedingSelfUpdate(thresholdSecs:) 件数だけを live smoke test として使う。署名・投稿・key generation・秘密鍵 export は Phase 1/1.1 対象外。
+- **iOS Rust FFI:** 2026-06-02 時点で現行 release-planning scope は完了済み。read-only MLS diagnostics に加えて keygen / signing / signed raw-event publish contracts が利用可能な前提で扱う。ただし NIP-46 と Passkey/Nosskey は platform authorization path、private keys は Keychain-only という境界を維持する。
 - **Relay limits:** Web は global 4 / per-relay 2 concurrent connection を守る。
 - **IO discipline:** Android の Rust FFI / file IO / uploads は `Dispatchers.IO`。
 
@@ -38,17 +37,12 @@ Android release builds that include native libraries are configured for Android 
 Source references: android/app/build.gradle.kts, rust-engine/nurunuru-ffi/android/build.gradle.kts, rust-engine/.cargo/config.toml.
 
 
-- iOS Rust FFI Phase 2 adds keygen/sign/signed-raw-event relay-target contracts in rust-engine/nurunuru-ffi/src/lib.rs; iOS UI wiring remains a later phase.
+- iOS Rust FFI current release-planning scope is complete as of 2026-06-02; future Talk MLS expansion, if any, should be tracked separately.
 
 
-## iOS Rust FFI write-path note
+## iOS Rust FFI note
 
-iOS Rust FFI now has a staged write-path: Rust keygen is preferred for nsec onboarding, RustInternalSigner can provide NIP-01 signing behind a feature flag, and signed raw event publishing can route through Rust FFI with Swift relay publish fallback. NIP-46 and Passkey/Nosskey remain platform authorization paths.
-
-
-## iOS Rust FFI Phase 2-5 note
-
-iOS now has staged Rust FFI write-path wiring for keygen, internal signing, and signed raw-event publishing. NIP-46 and Passkey/Nosskey remain platform authorization paths. Phase 6 remains Talk MLS expansion.
+iOS Rust FFI current release-planning scope is complete as of 2026-06-02. Rust keygen, internal signing contracts, and signed raw-event publishing are treated as available within the accepted security boundaries. NIP-46 and Passkey/Nosskey remain platform authorization paths; private keys remain Keychain-only in app code. Future Talk MLS expansion, if any, should be tracked separately.
 
 ## Source references
 

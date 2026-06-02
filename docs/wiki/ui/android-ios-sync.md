@@ -22,6 +22,16 @@ Android と iOS は LINE 風 UI を platform native に実装しつつ、見た�
 
 
 
+
+
+### Home renewal two-layer structure (2026-06-02)
+
+- Home header includes an account/profile icon. Existing profile, my posts, and likes list move into that icon's account/profile hub.
+- Home body uses two layers: **アクティビティ** and **コンテンツ**.
+- Existing Timeline following feed moves to Home **コンテンツ**. It must preserve stable identity, no entrance animations, PostActions rules, image grid behavior, and pagination continuity.
+- **アクティビティ** must not become a relay-wide feed replacement. Use bounded account/social activity sources only.
+- Rokunana has no Home entry in June; keep ADR-0018 dead-but-preserved behavior.
+
 ### Home settings and Mini Apps responsibility split
 
 - Home tab gear settings own account/security UI across platforms: login status card, short pubkey/npub display, logout confirmation, auto-sign controls, and explicit nsec export warnings.

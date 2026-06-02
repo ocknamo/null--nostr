@@ -3,10 +3,19 @@
 ## Status
 
 Accepted — 2026-06-01
+Completed for current release-planning scope — 2026-06-02
+
+
+
+## Completion note (2026-06-02)
+
+Per user decision on 2026-06-02, the iOS Rust FFI work discussed for the current release-planning scope is complete. This ADR remains the record of the write-path boundary: Rust may provide keygen/sign/publish contracts, while NIP-46 and Passkey/Nosskey remain platform authorization paths and private keys remain Keychain-only in app code.
+
+Future Rust-related work, such as broader Talk MLS expansion or additional repository refactors, should be tracked separately and must not be treated as an unfinished blocker for the current Home renewal planning.
 
 ## Context
 
-The iOS Rust FFI work completed Phase 1 through Phase 1.2 as a read-only MLS diagnostic path: mlsIsEncrypted(), local MLS group counts, sanitized diagnostic errors, manual refresh, and checked-at time are live. Full iOS Rust FFI remains incomplete for signing, publishing, key generation, and broader Talk MLS migration.
+The iOS Rust FFI work initially completed Phase 1 through Phase 1.2 as a read-only MLS diagnostic path: mlsIsEncrypted(), local MLS group counts, sanitized diagnostic errors, manual refresh, and checked-at time. ADR-0019 then defined the write-path contract for signing, publishing, key generation, and targeted publish. As of the 2026-06-02 user decision, the current release-planning scope of iOS Rust FFI is complete; future Talk MLS expansion, if any, should be tracked separately.
 
 The existing iOS app uses Swift implementations for key generation, event signing, NIP-04/NIP-44 helpers, normal publishing, and relay-target fanout. Rust UniFFI already exposes broad MLS and relay APIs, but the iOS app needs a stable write-path contract before replacing Swift paths incrementally. The contract must preserve iOS requirements: Keychain-only private keys, NIP-46 for external signing, Passkey/Nosskey platform signing, NIP-70 relay-targeted publishing, and signed-event JSON reuse for UI/fanout.
 
@@ -34,10 +43,11 @@ This follows [[../culture/principles|五箇条]] by keeping the user-facing expe
 
 ## Consequences
 
-- iOS can adopt Rust keygen, signing, and targeted publish one seam at a time.
-- The Rust FFI crate now builds an rlib in addition to cdylib/staticlib so integration tests can import the crate directly.
+- iOS has completed the current release-planning Rust FFI scope for keygen/sign/publish-path integration.
+- The Rust FFI crate builds an rlib in addition to cdylib/staticlib so integration tests can import the crate directly.
 - Generated Swift/Kotlin bindings and the iOS XCFramework must be committed whenever these APIs change.
-- Future phases still need Swift adapters (RustInternalSigner / RustNostrFFIBridge) and repository wiring before the app is considered Full iOS Rust FFI.
+- NIP-46 and Passkey/Nosskey remain platform authorization paths; Rust FFI completion must not weaken those UX/security boundaries.
+- Future Rust/Talk expansion should be tracked separately instead of keeping this ADR as an open blocker.
 
 ## Source references
 

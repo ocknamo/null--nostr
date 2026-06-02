@@ -15,7 +15,7 @@
 
 | New tab | 役割 | 主な変更 |
 |---|---|---|
-| ホーム | LINE Home に近い中心タブ | フォローフィードをタイムラインから移設。プロフィール・ログイン状態・設定を集約候補。**ろくなな入口は6月中は置かない (ADR-0018 amendment)**。 |
+| ホーム | LINE Home renewal 2026 を参照した中心タブ | Body は **アクティビティ / コンテンツ** の2層。既存 Timeline フォローフィードは **コンテンツ** へ移設。既存プロフィール / 自分の投稿一覧 / いいね一覧は Home header 位置の account/profile icon 内へ移設。**ろくなな入口は6月中は置かない (ADR-0018 amendment)**。 |
 | トーク | 会話 | 既存方針を維持。 |
 | ニュース | NIP-23 長文記事 + NIP-32 ラベル | 旧タイムラインをリブランディング。2-hop信頼グラフ型で発見。 |
 | ミニアプリ | NIP-5A mini apps | WebView で静的サイトを開く。2-hop信頼グラフ型 + curated manifest validation。 |
@@ -23,6 +23,14 @@
 最重要の安全判断として、**リレーフィードは廃止**する。タイムラインのリレータブにはスパム・違法コンテンツが溢れており、ぬるぬるの文化憲章とストア公開品質に反するため、任意リレーの生フィードを主要導線に置かない。
 
 ニュースタブやミニアプリなどの発見面は、原則として **2-hop 信頼グラフ型**に制限する。初期範囲は「自分がフォローしている人 + その人たちがフォローしている人」(2-hop follow graph) を基本にする。これにより、Nostr の開放性を維持しつつ、初期体験にスパム・違法コンテンツが流入する確率を下げる。
+
+### 2026-06-02 ThemaDAY update
+
+- **リレーフィード削除は完了済み**。Theme 0 は未完了リスクではなく、verification / dead-code cleanup の対象として扱う。
+- **iOS Rust FFI は現行スコープ完了済み**。6/8 release train の blocker ではなく、Keychain / NIP-46 / Passkey/Nosskey 境界を守った状態で完了済みとして記録する。
+- Home renewal は、LINE Home renewal 2026 を参照し、Home body を **「アクティビティ」/「コンテンツ」** の2層構造に変更する。
+- 既存 Home のプロフィール、自分の投稿一覧、いいね一覧は、Home header 位置に置く account/profile icon 内へ移設する。
+- 既存 Timeline のフォローフィードは、Home の **コンテンツ** エリアへ移設する。
 
 ## User decisions recorded on 2026-05-31
 
@@ -35,10 +43,18 @@
 7. **ろくなな root tab は不要。ただし機能はコードとしてキープ。** 6月タブ再編で root tab から外す。**6月中は移設も行わず**、コードだけリポジトリに残す dead-but-preserved 扱い (ADR-0018 amendment 2026-06-01)。移設先判断は post-June に持ち越す。
 8. **NIP-5A manifest / 起動情報の検証方法は実装側に一任。** 本ロードマップでは安全側の curated + signed manifest 方針を採用する。
 
+## User decisions recorded on 2026-06-02
+
+1. **リレーフィードは削除完了済み。** 以後は未完了 theme ではなく verification / cleanup として扱う。
+2. **iOS Rust FFI は現行スコープ完了済み。** 以後は release blocker ではなく、既存 guardrails の維持確認として扱う。
+3. **Home は「アクティビティ」/「コンテンツ」の2層構造にする。** LINE Home renewal 2026 を参照する。
+4. **プロフィール / 自分の投稿一覧 / いいね一覧は Home header の account/profile icon 内へ移設する。** Home body を personal dashboard 化しない。
+5. **既存 Timeline フォローフィードは Home のコンテンツエリアへ移設する。**
+
 ## Current behavior
 
 - 既存ルートタブは AGENTS.md 上では 5 タブ: ホーム / トーク / ろくなな / タイムライン / ミニアプリ。
-- Android/iOS/Web にはタイムライン/リレー系のフィードがあり、ユーザー観測ではリレータブがスパム・違法コンテンツ流入経路になっている。
+- リレーフィード削除は完了済み。Android/iOS/Web の主要導線では任意リレー生フィードを扱わない。
 - NIP-23 long-form content と NIP-32 labels は既にプロダクト内で扱う前提がある。
 - ミニアプリタブは現状、設定系ミニアプリも混ざるハブになっている。
 
@@ -47,6 +63,10 @@
 ### Decision
 
 リレーフィード、特に「タイムラインタブのリレータブ」のような任意リレー生フィードは廃止する。
+
+### Status update (2026-06-02)
+
+リレーフィード削除は完了済み。W23/W24 の残作業は、主要導線から復活していないことの確認、不要 prefetch / dead code の整理、上級者向け relay settings との境界確認に限定する。
 
 ### Keep / Remove boundary
 
@@ -100,22 +120,37 @@ Findings should be recorded in ThemaDAY / Design Crit notes instead of product c
 
 ## Theme 2 — Home tab renewal (LINE Home inspired)
 
-LINE Home renewal を参照し、ホームタブを「アプリの中心」にする。
+LINE Home renewal 2026 を参照し、ホームタブを「アプリの中心」にする。2026-06-02 のユーザー決定により、Home body は **アクティビティ / コンテンツ** の2層構造とする。
 
-### Move into Home
+### Home header account/profile icon
 
-- 現在のタイムラインタブのフォローフィード
-- プロフィールカード
-- ログイン状態 / アカウント状態
-- 既存ミニアプリ内の設定系機能:
-  - Badge / Emoji / Zap / Relay / Cache / Mute / Event backup など
+Home header 位置に account/profile icon を置き、既存 Home の以下を icon 内の hub に移設する。
+
+- プロフィール / profile card
+- 自分の投稿一覧
+- いいね一覧
+
+この hub は「自分の場所」として扱い、Home body を profile dashboard 化しない。秘密鍵 export や signer 状態など sensitive settings を扱う場合は、既存の platform guardrails (iOS fullScreenCover / Android full-screen surface / Web full-screen modal) を守る。
+
+### Two-layer Home body
+
+| Layer | Role | Initial scope |
+|---|---|---|
+| **アクティビティ** | 日々の動き・戻る理由 | 通知、リアクション、返信、メンション、account activity などの候補。任意リレー生フィードの代替にはしない。 |
+| **コンテンツ** | 読む・眺める中心 | 既存 Timeline のフォローフィードをここへ移設する。 |
+
+### Move into Home Content
+
+- 現在の Timeline / タイムラインにある **フォローフィード**を、Home の **コンテンツ** エリアへ移設する。
+- Home Content は基本的に **フォロー graph**。リレー生フィードを混ぜない。
+- News / Mini Apps discovery を Home Content に混ぜる場合は、別途 Design Crit / ADR で判断する。
+
+### Keep out of Home in June
+
 - ~~ろくなな機能の入口またはショートカット~~ → **6月は移設しない。コードのみリポジトリにキープ (ADR-0018 amendment 2026-06-01)**
+- 任意リレー生フィード → 削除完了済み。復活させない。
 
-### Network scope
-
-ホームのフィードは基本的に **フォロー graph**。リレー生フィードを混ぜない。
-
-### ADR candidate
+### ADR reference
 
 - docs/wiki/decisions/adr-0015-home-tab-renewal.md
 
@@ -218,7 +253,7 @@ Reasons:
 
 | Position | Tab | Notes |
 |---:|---|---|
-| 1 | ホーム | LINE Home inspired. Follow feed + profile + settings (no rokunana entry in June — code preserved only). |
+| 1 | ホーム | LINE Home renewal 2026 inspired. Header account/profile icon contains profile / my posts / likes. Body has **アクティビティ** and **コンテンツ**; following feed moves into Content. No rokunana entry in June. |
 | 2 | トーク | Existing Talk. |
 | 3 | ニュース | Replaces Timeline. NIP-23 + NIP-32 with 2-hop trust graph. |
 | 4 | ミニアプリ | NIP-5A WebView apps with 2-hop trust graph. |
@@ -232,14 +267,16 @@ Reasons:
 
 | Week | Focus | Output |
 |---|---|---|
-| W23 6/01-07 | ADRs + relay feed removal + manual QA checklist | Relay feed removed from UI; real-device QA checklist started |
+| W23 6/01-07 | ADRs + completed relay-feed/iOS-FFI verification + Home two-layer Design Crit | Relay feed removal and current-scope iOS Rust FFI recorded as complete; Home header icon + アクティビティ/コンテンツ design fixed |
 | W24 6/08-14 | 1.5.5 release train + onboarding improvement | 1.5.5 includes safety/tab groundwork + QA findings applied |
-| W25 6/15-21 | Onboarding polish + Home renewal + News internal dogfood alpha | Follow feed moved to Home; NIP-23 News internal dogfood alpha |
+| W25 6/15-21 | Onboarding polish + Home renewal + News internal dogfood alpha | Follow feed moved to Home コンテンツ; Activity layer dogfooded; NIP-23 News internal dogfood alpha |
 | W26 6/22-28 | NIP-5A mini app WebView alpha | Mini app static site can open safely in WebView |
 | W27 6/29-07/05 | 1.6.0 release + June ThemaDAY | 4-tab architecture review + first external News communication if dogfood is stable |
 
 ## Open Questions
 
+- Home のアクティビティ層の最小初期データ源: notifications / reactions / replies / mentions / account activity のどこから始めるか。
+- Header account/profile icon に settings まで含めるか、profile / my posts / likes に限定して settings gear を別に残すか。
 - 2-hop graph の取得コスト: 起動時に全部取るか、News/Mini Apps タブを開いた時に遅延取得するか。
 - 2-hop graph の重みづけ: 1-hop author > 2-hop author > 1-hop labeler > 2-hop labeler のような rank を入れるか。
 - NIP-5A manifest の canonical event / metadata 仕様は Nostr Compass の仕様更新に追随する必要がある。
@@ -250,6 +287,7 @@ Reasons:
 - User decision, 2026-05-31: local-first metrics implementation is deferred; manual real-device QA is sufficient for June Phase 1.
 - User decision, 2026-05-31: NIP-5A URL, 2-hop trust graph, rokunana root-tab removal with initial keep-and-move direction.
 - User decision, 2026-06-01: rokunana is tightened to code-only retention in June (no Home/Mini App/Settings entry); onboarding is the leading clause of the June monthly objective; News alpha is internal dogfood in W25 with external communication deferred to 1.6.0 if stable.
+- User decision, 2026-06-02: relay feed deletion completed; iOS Rust FFI current scope completed; Home body changed to アクティビティ / コンテンツ; profile / my posts / likes move behind Home header account/profile icon; Timeline following feed moves to Home Content.
 - Nostr Compass NIP-5A: https://nostrcompass.org/ja/topics/nip-5a/
 - LINE Home renewal 2026: https://guide.line.me/ja/update/home-renewal2026.html
 - LINE mini app digital content payment release: https://www.lycorp.co.jp/ja/news/release/020192/
@@ -258,6 +296,7 @@ Reasons:
 
 ## Related pages
 
+- [[strategy/themaday-2026-06-02-product-eng-design]]
 - [[strategy/themaday-2026-05-31-week-review]]
 - [[strategy/nuruh-ip-2026-05-28]]
 - [[decisions/adr-0012-monday-release-nuru-production-system]]

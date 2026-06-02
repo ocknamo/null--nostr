@@ -40,6 +40,7 @@
 | [[strategy/themaday-2026-05-28-partnerships]] | Nostr Compass #24 掲載・公開前レビューを起点に、外部提携 / パートナーシップ / 開発者向け施策の方針を整理。 |
 | [[strategy/themaday-2026-05-31-week-review]] | 2026-05-25〜31 の週次振り返りと 6月 Learning Velocity 方針。5/31 Outcome で 6月ロードマップの前提を整理。 |
 | [[strategy/themaday-2026-06-01-management]] | ThemaDAY マネジメント経営会議。onboarding 主文、6/8 1.5.5 スコープ、リーダー hat、ろくなな code-only retention、QA テンプレを確定。 |
+| [[strategy/themaday-2026-06-02-product-eng-design]] | 製品開発・エンジニアリング・デザインの ThemaDAY すり合わせ。リレーフィード削除/iOS Rust FFI 完了を前提化し、Home を header account icon + アクティビティ/コンテンツ2層構造へ更新。 |
 | [[strategy/june-2026-roadmap]] | 2026年6月の主要タブ再設計ロードマップ。onboarding 主文、リレーフィード廃止、ホーム刷新、ニュースタブ化、NIP-5Aミニアプリ、2-hop信頼グラフ制限、ろくななroot tab廃止+code-only retention を整理。 |
 | [[strategy/nuruh-ip-2026-05-28]] | ぬるる IP マーケティング & 成長戦略 v1.0。四箇条 / 3層接点 / 5ループ / ライセンス階段 / KPI+ガードレール / 90日と24ヶ月ロードマップ。 |
 | [[operations/feedback-loop]] | NIP-50 search relay と nurunuru-mcp による Nostr feedback 収集、Issue draft、autofix 運用。 |

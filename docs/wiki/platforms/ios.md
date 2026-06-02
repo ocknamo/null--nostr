@@ -36,7 +36,7 @@ ios/NuruNuru/
 
 ## Rust FFI migration status
 
-As of 2026-06-01, iOS Rust FFI Phase 1-1.2 is live only for read-only MLS diagnostics. Phase 2 adds generated Rust FFI contracts for key generation, public-key derivation, event signing JSON, internal-client signing, and raw-event relay-target publishing, but the iOS app has not yet switched normal UI flows to those APIs.
+As of 2026-06-02, the iOS Rust FFI work relevant to the current release-planning scope is complete. The migration includes the previous read-only MLS diagnostics and the write-path contracts for key generation, public-key derivation, event signing JSON, internal-client signing, and raw-event relay-target publishing. Future Talk MLS expansion, if any, should be tracked separately rather than treated as an unfinished blocker for Home renewal.
 
 Important boundaries:
 
@@ -90,6 +90,7 @@ NostrRepository.ensureMlsClient() and ensureRustNostrClient() both use the activ
 
 - `ios/NuruNuru/`
 - `ios/GUARDRAILS.md`
+- `docs/wiki/decisions/adr-0019-ios-rust-ffi-write-path.md`
 - `ios/project.yml`
 - `ios/NuruNuru/Data/`
 - `ios/NuruNuru/ViewModels/`

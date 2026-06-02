@@ -316,6 +316,18 @@ User confirmed the following management decisions:
 - ニュースタブの 2-hop graph 取得を「タブを開いた時に遅延取得」にした場合、初回タップ時の体感速度は許容範囲か? → W25 dogfood で測定。
 - ろくなな機能の post-June 扱いをどうするか: Home shortcut / NIP-5A Mini App / Settings entry / permanent code-only retention。6月中は判断しない。
 
+
+
+## 2026-06-02 correction / superseding notes
+
+The 2026-06-02 ThemaDAY product/engineering/design alignment supersedes several planning assumptions in this 2026-06-01 page:
+
+- Relay feed removal is already complete; remaining work is verification / cleanup, not initial removal.
+- iOS Rust FFI current release-planning scope is complete; it should not remain a 1.5.5 blocker.
+- Home renewal direction is tightened: Home header gets an account/profile icon containing existing profile, my posts, and likes; Home body becomes **アクティビティ** / **コンテンツ**; existing Timeline following feed moves to **コンテンツ**.
+
+See [[themaday-2026-06-02-product-eng-design]].
+
 ## Source references
 
 - [[themaday-2026-05-25]]
