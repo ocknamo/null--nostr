@@ -21,14 +21,11 @@ import { SigningError } from './SigningAdapter'
 interface NosskeyManager {
   getPublicKey(): Promise<string>
   signEvent(event: UnsignedEvent): Promise<Event>
-  nip04?: {
-    encrypt(pubkey: string, plaintext: string): Promise<string>
-    decrypt(pubkey: string, ciphertext: string): Promise<string>
-  }
-  nip44?: {
-    encrypt(pubkey: string, plaintext: string): Promise<string>
-    decrypt(pubkey: string, ciphertext: string): Promise<string>
-  }
+  // nosskey-sdk >=0.1.0 exposes flat NIP encryption methods
+  nip04Encrypt?(peerPubkey: string, plaintext: string): Promise<string>
+  nip04Decrypt?(peerPubkey: string, ciphertext: string): Promise<string>
+  nip44Encrypt?(peerPubkey: string, plaintext: string): Promise<string>
+  nip44Decrypt?(peerPubkey: string, ciphertext: string): Promise<string>
 }
 
 declare global {
@@ -95,7 +92,7 @@ export class NosskeySigner implements SigningAdapter {
   }
 
   async nip04Encrypt(pubkey: string, plaintext: string): Promise<string> {
-    if (!this.manager.nip04?.encrypt) {
+    if (!this.manager.nip04Encrypt) {
       throw new SigningError(
         'NIP-04 encryption not supported by Nosskey',
         'NOT_SUPPORTED'
@@ -103,7 +100,7 @@ export class NosskeySigner implements SigningAdapter {
     }
 
     try {
-      return await this.manager.nip04.encrypt(pubkey, plaintext)
+      return await this.manager.nip04Encrypt(pubkey, plaintext)
     } catch (error) {
       throw new SigningError(
         'NIP-04 encryption failed',
@@ -114,7 +111,7 @@ export class NosskeySigner implements SigningAdapter {
   }
 
   async nip04Decrypt(pubkey: string, ciphertext: string): Promise<string> {
-    if (!this.manager.nip04?.decrypt) {
+    if (!this.manager.nip04Decrypt) {
       throw new SigningError(
         'NIP-04 decryption not supported by Nosskey',
         'NOT_SUPPORTED'
@@ -122,7 +119,7 @@ export class NosskeySigner implements SigningAdapter {
     }
 
     try {
-      return await this.manager.nip04.decrypt(pubkey, ciphertext)
+      return await this.manager.nip04Decrypt(pubkey, ciphertext)
     } catch (error) {
       throw new SigningError(
         'NIP-04 decryption failed',
@@ -133,7 +130,7 @@ export class NosskeySigner implements SigningAdapter {
   }
 
   async nip44Encrypt(pubkey: string, plaintext: string): Promise<string> {
-    if (!this.manager.nip44?.encrypt) {
+    if (!this.manager.nip44Encrypt) {
       throw new SigningError(
         'NIP-44 encryption not supported by Nosskey',
         'NOT_SUPPORTED'
@@ -141,7 +138,7 @@ export class NosskeySigner implements SigningAdapter {
     }
 
     try {
-      return await this.manager.nip44.encrypt(pubkey, plaintext)
+      return await this.manager.nip44Encrypt(pubkey, plaintext)
     } catch (error) {
       throw new SigningError(
         'NIP-44 encryption failed',
@@ -152,7 +149,7 @@ export class NosskeySigner implements SigningAdapter {
   }
 
   async nip44Decrypt(pubkey: string, ciphertext: string): Promise<string> {
-    if (!this.manager.nip44?.decrypt) {
+    if (!this.manager.nip44Decrypt) {
       throw new SigningError(
         'NIP-44 decryption not supported by Nosskey',
         'NOT_SUPPORTED'
@@ -160,7 +157,7 @@ export class NosskeySigner implements SigningAdapter {
     }
 
     try {
-      return await this.manager.nip44.decrypt(pubkey, ciphertext)
+      return await this.manager.nip44Decrypt(pubkey, ciphertext)
     } catch (error) {
       throw new SigningError(
         'NIP-44 decryption failed',
@@ -173,9 +170,9 @@ export class NosskeySigner implements SigningAdapter {
   supports(feature: SignerFeature): boolean {
     switch (feature) {
       case 'nip04':
-        return !!this.manager.nip04
+        return typeof this.manager.nip04Encrypt === 'function'
       case 'nip44':
-        return !!this.manager.nip44
+        return typeof this.manager.nip44Encrypt === 'function'
       case 'getRelays':
         return false
       case 'delegation':
