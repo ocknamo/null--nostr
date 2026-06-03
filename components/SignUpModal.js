@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { nip19, getPublicKey } from 'nostr-tools'
+import { nip19 } from 'nostr-tools'
 import {
   savePubkey,
   setStoredPrivateKey,
@@ -96,19 +96,16 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
 
         // Export and cache the Nostr key immediately, without showing an nsec backup step.
         // 新規登録はパスキー登録のみ。秘密鍵バックアップ画面は表示しない。
-        const privateKeyHex = await nosskeyManager.exportNostrKey(null, cid)
+        // 0.1.x: exportNostrKey requires a non-null NostrKeyInfo, so derive it via
+        // createNostrKey first (returns credentialId hex / derived pubkey / standard salt),
+        // then export reuses the cached PRF secret without an extra prompt.
+        const keyInfo = await nosskeyManager.createNostrKey(cid)
+        const privateKeyHex = await nosskeyManager.exportNostrKey(keyInfo)
         if (!privateKeyHex) throw new Error('パスキーから鍵を準備できませんでした')
 
-        const pk = getPublicKey(hexToBytes(privateKeyHex))
+        const pk = keyInfo.pubkey
         setCreatedPubkey(pk)
 
-        const keyInfo = {
-          credentialId: nosskeyManager.constructor.bytesToHex ?
-            nosskeyManager.constructor.bytesToHex(cid) :
-            Array.from(cid).map(b => b.toString(16).padStart(2, '0')).join(''),
-          pubkey: pk,
-          salt: '6e6f7374722d70776b'
-        }
         nosskeyManager.setCurrentKeyInfo(keyInfo)
         setStoredPrivateKey(pk, privateKeyHex)
         setBackupNsec(nip19.nsecEncode(hexToBytes(privateKeyHex)))
@@ -124,50 +121,6 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
         setError('登録がキャンセルされました')
       } else {
         setError(e.message || 'エラーが発生しました')
-      }
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  // Handle Private Key Backup (Nostr Key derivation step)
-  const handleBackupKey = async () => {
-    setLoading(true)
-    setError('')
-    try {
-      // 2. Export private key - This triggers the SECOND biometric prompt
-      // We use the credentialId from the previous step
-      const privateKeyHex = await nosskeyManager.exportNostrKey(null, credentialId)
-
-      if (privateKeyHex) {
-        // Derive public key from the exported private key
-        const pk = getPublicKey(hexToBytes(privateKeyHex))
-        setCreatedPubkey(pk)
-
-        // Construct key info for Nosskey SDK
-        const keyInfo = {
-          credentialId: nosskeyManager.constructor.bytesToHex ?
-            nosskeyManager.constructor.bytesToHex(credentialId) :
-            Array.from(credentialId).map(b => b.toString(16).padStart(2, '0')).join(''),
-          pubkey: pk,
-          salt: '6e6f7374722d70776b' // "nostr-pwk" — standard nosskey PRF eval salt (NIP draft / nosskey-sdk normalizes legacy values)
-        }
-
-        // Update manager and storage
-        nosskeyManager.setCurrentKeyInfo(keyInfo)
-        setStoredPrivateKey(pk, privateKeyHex)
-
-        // Set nsec for display
-        setBackupNsec(nip19.nsecEncode(hexToBytes(privateKeyHex)))
-      } else {
-        throw new Error('秘密鍵のエクスポートに失敗しました')
-      }
-    } catch (e) {
-      console.error('Backup error:', e)
-      if (e.name === 'NotAllowedError') {
-        setError('認証がキャンセルされました')
-      } else {
-        setError(e.message || '秘密鍵の生成に失敗しました')
       }
     } finally {
       setLoading(false)
