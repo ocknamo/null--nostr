@@ -21,6 +21,7 @@
 | [[culture/principles]] | 北極星 + 五箇条。ぬるぬるの文化的憲章 v0.1。 |
 | [[culture/not-doing]] | ぬるぬるが意図的にやらないこと。 |
 | [[culture/design-crit]] | Weekly Nuru Design Crit の運用と Crit ルール。 |
+| [[culture/crit-logs/2026-W23]] | 2026-W23 Design Crit log。マーケティング成長戦略 v2 の 5決議 (Week-1 復帰率、三声モデル、ICP固定、safe starter graph、ぬるる bunker) を記録。 |
 | [[culture/release-quality]] | 月曜リリース列車と Nuru Production System (TPS-inspired quality/stability)。 |
 | [[culture/copy-style]] | 日本語コピー規約 (直訳禁止、既存採用語の保護)。 |
 | [[culture/llm-onboarding]] | LLM コントリビュータのオンボーディングと出力規約。 |
@@ -41,15 +42,25 @@
 | [[strategy/themaday-2026-05-31-week-review]] | 2026-05-25〜31 の週次振り返りと 6月 Learning Velocity 方針。5/31 Outcome で 6月ロードマップの前提を整理。 |
 | [[strategy/themaday-2026-06-01-management]] | ThemaDAY マネジメント経営会議。onboarding 主文、6/8 1.5.5 スコープ、リーダー hat、ろくなな code-only retention、QA テンプレを確定。 |
 | [[strategy/themaday-2026-06-02-product-eng-design]] | 製品開発・エンジニアリング・デザインの ThemaDAY すり合わせ。リレーフィード削除/iOS Rust FFI 完了を前提化し、Home を header account icon + アクティビティ/コンテンツ2層構造へ更新。 |
+| [[strategy/themaday-2026-06-03-marketing-growth]] | ThemaDAY マーケティング・成長戦略・コミュニケーション統合版。Week-1 復帰率、AARRT v2、三声モデル、safe starter graph、危機対応を整理。 |
 | [[strategy/june-2026-roadmap]] | 2026年6月の主要タブ再設計ロードマップ。onboarding 主文、リレーフィード廃止、ホーム刷新、ニュースタブ化、NIP-5Aミニアプリ、2-hop信頼グラフ制限、ろくななroot tab廃止+code-only retention を整理。 |
 | [[strategy/nuruh-ip-2026-05-28]] | ぬるる IP マーケティング & 成長戦略 v1.0。四箇条 / 3層接点 / 5ループ / ライセンス階段 / KPI+ガードレール / 90日と24ヶ月ロードマップ。 |
 | [[operations/feedback-loop]] | NIP-50 search relay と nurunuru-mcp による Nostr feedback 収集、Issue draft、autofix 運用。 |
+| [[operations/crisis-response]] | 外部露出・ストア審査・Nostr 上の誤解に対応する Trust Surface FAQ と crisis escalation matrix。 |
+
+
+## Decisions (recent)
+
+| Page | Summary |
+|---|---|
+| [[decisions/adr-0020-safe-starter-graph]] | 初回 Home の空白離脱を避ける safe starter graph。任意リレー生フィードを復活させず、公式/ぬるる/日本語 starter accounts を安全候補として扱う Proposed ADR。 |
 
 ## Quality / Release
 
 | Page | Summary |
 |---|---|
 | [[quality/qa-template]] | ADR-0014 に基づく manual real-device QA 記録テンプレート。platform slot / findings / 5 Whys / follow-up を残す。 |
+| [[quality/manual-cohort-observation]] | Week-1 復帰率を製品計測コードなしで観察する manual cohort テンプレート。5人/週、初投稿、反応、7日以内復帰を記録。 |
 
 ## Platforms
 
@@ -66,6 +77,7 @@
 | Page | Summary |
 |---|---|
 | [[features/timeline]] | フォロー / おすすめタイムライン、投稿表示、リアクション状態。 |
+| [[features/news]] | ニュースタブ。NIP-23 長文記事と NIP-32 おすすめラベルを 2-hop 信頼グラフ内の discovery boost signal として使う設計。 |
 | [[features/onboarding]] | パスキー専用の新規登録 5 ステップ + `#nostrはじめました` チュートリアル投稿。 |
 | [[features/post-composer]] | 投稿作成、140文字制限、画像アップロード、リレー指定、NIP-70。 |
 | [[features/notifications]] | 通知一覧、Kind 6 / Kind 1 #p、ポーリング、表示仕様。 |
@@ -157,3 +169,5 @@
 ## Quality
 
 | [[quality/qa-2026-06-01]] | iOS Rust FFI Phase 1.1 read-only diagnostics の manual QA PASS 記録。 |
+
+| [[nips/nip-32]] | NIP-32 labels。Birdwatch/context label support と News recommended / おすすめ label discovery design。 |

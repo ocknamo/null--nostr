@@ -25,7 +25,7 @@ null--nostr は複数の Nostr Implementation Possibilities を扱います。�
 | NIP-25 | Active | Reactions kind 7 including custom emoji reactions. | [[nip-25]] |
 | NIP-27 | Active | Text notes render and create `nostr:` mentions for profiles/events. | `PostContent.kt`, `PostSheet.swift`, `lib/nostr.js` |
 | NIP-30 | Active/native strong | Custom emoji lists/sets kind 10030/30030 and emoji picker/cache. | [[nip-30]] |
-| NIP-32 | Active/helper | Labeling/Birdwatch kind 1985. | `NostrRepositoryActions.kt`, `lib/nostr.js` |
+| NIP-32 | Active/helper + News design | Labeling kind 1985. Birdwatch/context labels are code-backed; News uses recommended / おすすめ labels as planned NIP-23 discovery boost signals. | [[nip-32]] |
 | NIP-42 | Web helper | Relay auth kind 22242 on Web. | `lib/nostr.js` |
 | NIP-44 | Active/helper | Encryption for NIP-17/NIP-46/private mute lists; signer APIs. | `InternalSigner.kt`, `ExternalSigner.kt`, `InternalSigner.swift`, `ExternalSigner.swift`, `lib/nip46.js` |
 | NIP-46 | Active on iOS/Web | Nostr Connect on Web and iOS; iOS external signing uses NIP-46 rather than NIP-55. | [[nip-46]] |

@@ -838,3 +838,41 @@ LLM Wiki の時系列ログです。追記専用として扱います。
 - Recorded that relay-feed removal is already complete and iOS Rust FFI current release-planning scope is complete; future work is verification / separate expansion, not a current blocker.
 - Existing Timeline following feed is planned to move into Home **コンテンツ**; Activity must not recreate relay-wide feed behavior.
 - Source references: `docs/wiki/strategy/june-2026-roadmap.md`, `docs/wiki/decisions/adr-0015-home-tab-renewal.md`, `docs/wiki/decisions/adr-0019-ios-rust-ffi-write-path.md`, `docs/wiki/ui/android-ios-sync.md`.
+
+## [2026-06-03] strategy | ThemaDAY マーケティング・成長戦略・コミュニケーション
+
+- 北極星指標を Week-1 復帰率に固定 (提案)。
+- AARRT (Acquisition / Activation / Anchoring / Recommend / Trust) フレームを採用 (提案)。
+- コミュニケーションを「運営の声 × ぬるるの声」二重唱モデルとして整理 (提案)。
+- 90日ロードマップ: 6/8 1.5.5 → 6/29 1.6.0 (Home renewal) → 7/27 Mini Apps α → 8/8 ぬるるの日 第1回 → 8/31 90日レビュー。
+- Design Crit 即決3事項: (A) 北極星指標 / (B) 二重唱モデル / (C) ぬるる本体 npub の NIP-46 bunker 2-of-N。
+- 対応 ADR 候補: bunker 構成は別 ADR 起票候補。
+
+## [2026-06-03] strategy | ThemaDAY マーケティング・成長戦略・コミュニケーション (統合版 v2)
+
+- Agent1 提案 + Agent2 批判レビューを統合し、本ページ themaday-2026-06-03-marketing-growth.md を v2 に差し替え。
+- 戦略仮説を「初投稿後7日以内に戻る理由を作る」に再定義。
+- ICP を 90日固定: (1) 日本Nostr既存 + (2) プライバシー意識ある一般 に集中 (NEW)。
+- AARRT v2: A3 Anchoring の主役を「初投稿への反応ループ」に再定義。ぬるるは復帰理由の一つに格下げ。
+- Manual cohort 観察プロトコル (5人/週) を北極星測定の spine として採用。
+- 三声モデル (運営/ぬるる/開発者) + ぬるるは週3から開始 (毎日ではなく)。
+- 危機対応マトリクス (5シナリオ) を Trust の一部として追加。
+- Crit 議題を 3 → 5 に再構成: A (GO条件付) / B (GO頻度抑制) / D (GO ICP固定 NEW) / E (REVISE safe starter graph NEW) / C (REVISE 後送り)。
+- C bunker 構成はマーケティング開始の blocker にしない方針へ修正。
+
+## [2026-06-03] operations | Design Crit W23 follow-up for marketing strategy
+
+- Created `docs/wiki/culture/crit-logs/2026-W23.md` with 5 Design Crit decisions: A Week-1 North Star, B three-voice cadence, D 90-day ICP, E safe starter graph, C Nuruh npub bunker deferral.
+- Created `docs/wiki/quality/manual-cohort-observation.md` to operationalize Week-1 retention without product telemetry, following ADR-0014.
+- Created `docs/wiki/decisions/adr-0020-safe-starter-graph.md` as Proposed ADR for first Home safe starter graph.
+- Created `docs/wiki/operations/crisis-response.md` for trust-surface FAQ and crisis escalation scenarios.
+- Updated `docs/wiki/index.md` with the new strategy, quality, operations, and recent ADR pages.
+
+## [2026-06-03] strategy | News tab recommended labels with NIP-23 and NIP-32
+
+- Updated ADR-0016 to clarify that News discovery uses NIP-32 recommended / おすすめ labels as boost signals for NIP-23 long-form articles inside a 2-hop trust graph.
+- Added `docs/wiki/features/news.md` to define the News discovery model, user-facing copy, ranking outline, and manual QA checklist.
+- Added `docs/wiki/nips/nip-32.md` to document current Birdwatch label support and the proposed News recommended-label semantics.
+- Updated `docs/wiki/strategy/june-2026-roadmap.md` Theme 3 to include recommended-label discovery rules.
+- Updated `docs/wiki/nips/README.md` NIP-32 row, `docs/wiki/index.md`, and related links.
+- Implementation status is intentionally documented as design / implementation target for News ranking, not as already shipped source behavior.

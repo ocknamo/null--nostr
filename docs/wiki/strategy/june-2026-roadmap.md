@@ -163,7 +163,7 @@ Home header 位置に account/profile icon を置き、既存 Home の以下を 
 - NIP-23 long-form content (kind 30023) を中心にする。
 - short notes (kind 1) のリレー生流入は扱わない。
 
-### 2-hop trust-graph curation
+### 2-hop trust-graph curation + NIP-32 おすすめラベル
 
 初期定義:
 
@@ -173,11 +173,31 @@ Home header 位置に account/profile icon を置き、既存 Home の以下を 
 4. Label candidate: 1-hop または 2-hop に含まれる pubkey が付けた NIP-32 label。
 5. Display rule: author または labeler のどちらかが 2-hop trust graph 内にある NIP-23 article を候補にする。
 
+2026-06-03 update: NIP-32 の `recommended` / `おすすめ` ラベルを、NIP-23 article discovery の boost signal として使う。
+
+Accepted recommendation label candidates:
+
+| Namespace | Value | Meaning |
+|---|---|---|
+| `news` | `recommended` | News article recommendation |
+| `news` | `おすすめ` | Japanese News recommendation |
+| `content` | `recommended` | General content recommendation |
+| `content` | `おすすめ` | Japanese general recommendation |
+
+Ranking rules:
+
+- 1-hop author は最も強い signal。
+- 1-hop labeler のおすすめは強い boost。
+- 2-hop author / 2-hop labeler のおすすめは中程度の boost。
+- 複数 labeler のおすすめは加点してよいが cap を置く。
+- `birdwatch` / context labels は correction/context として扱い、おすすめ boost には使わない。
+
 Safety rules:
 
 - 任意リレーからの NIP-23 全件流入はしない。
 - 初回は 2-hop graph + default safe relays に限定。
 - mute/block/report label は常に優先して除外。
+- おすすめラベルは表示許可ではなく boost signal。安全フィルタを上書きしない。
 - 将来、公式 curated account は boost signal として扱えるが、単独必須にはしない。
 
 ### Monetization note
