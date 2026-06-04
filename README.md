@@ -60,6 +60,12 @@
 
 `npub194dkgpxl2vk7pqkeualh7sjh5m6rldumh80gm5av0h67d494qzcqum2u20`
 
+### 開発者向け
+
+- 貢献方法: [CONTRIBUTING.md](./CONTRIBUTING.md)
+- セキュリティ報告: [SECURITY.md](./SECURITY.md)
+- アーキテクチャ、内部ガイドライン、AI agent 向け手順: [AGENTS.md](./AGENTS.md)
+
 ---
 
 ## English
@@ -101,4 +107,6 @@ Released under the [Unlicense](LICENSE).
 
 ### For Developers
 
-Architecture, internal guidelines, and AI agent instructions: [AGENTS.md](./AGENTS.md)
+- Contributing: [CONTRIBUTING.md](./CONTRIBUTING.md)
+- Security reports: [SECURITY.md](./SECURITY.md)
+- Architecture, internal guidelines, and AI agent instructions: [AGENTS.md](./AGENTS.md)

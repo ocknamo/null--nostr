@@ -43,6 +43,7 @@
 | [[strategy/themaday-2026-06-01-management]] | ThemaDAY マネジメント経営会議。onboarding 主文、6/8 1.5.5 スコープ、リーダー hat、ろくなな code-only retention、QA テンプレを確定。 |
 | [[strategy/themaday-2026-06-02-product-eng-design]] | 製品開発・エンジニアリング・デザインの ThemaDAY すり合わせ。リレーフィード削除/iOS Rust FFI 完了を前提化し、Home を header account icon + アクティビティ/コンテンツ2層構造へ更新。 |
 | [[strategy/themaday-2026-06-03-marketing-growth]] | ThemaDAY マーケティング・成長戦略・コミュニケーション統合版。Week-1 復帰率、AARRT v2、三声モデル、safe starter graph、危機対応を整理。 |
+| [[strategy/themaday-2026-06-04-partnerships-developers]] | 2人目コントリビュータ受領を契機とした ThemaDAY 外部提携 & 開発者施策。Contributor Entrance MVP、Contribution Ladder L0–L5、private vulnerability intake、dependency-update verification、bounty/CLA/Hacktoberfest 不採用を整理。 |
 | [[strategy/june-2026-roadmap]] | 2026年6月の主要タブ再設計ロードマップ。onboarding 主文、リレーフィード廃止、ホーム刷新、ニュースタブ化、NIP-5Aミニアプリ、2-hop信頼グラフ制限、ろくななroot tab廃止+code-only retention を整理。 |
 | [[strategy/nuruh-ip-2026-05-28]] | ぬるる IP マーケティング & 成長戦略 v1.0。四箇条 / 3層接点 / 5ループ / ライセンス階段 / KPI+ガードレール / 90日と24ヶ月ロードマップ。 |
 | [[operations/feedback-loop]] | NIP-50 search relay と nurunuru-mcp による Nostr feedback 収集、Issue draft、autofix 運用。 |
@@ -77,7 +78,7 @@
 | Page | Summary |
 |---|---|
 | [[features/timeline]] | フォロー / おすすめタイムライン、投稿表示、リアクション状態。 |
-| [[features/news]] | ニュースタブ。NIP-23 長文記事と NIP-32 おすすめラベルを 2-hop 信頼グラフ内の discovery boost signal として使う設計。 |
+| [[features/news]] | ニュースタブ。NIP-23 kind 30023 長文記事、null.news.category カテゴリ、ニュースソース設定。ランキングなし。 |
 | [[features/onboarding]] | パスキー専用の新規登録 5 ステップ + `#nostrはじめました` チュートリアル投稿。 |
 | [[features/post-composer]] | 投稿作成、140文字制限、画像アップロード、リレー指定、NIP-70。 |
 | [[features/notifications]] | 通知一覧、Kind 6 / Kind 1 #p、ポーリング、表示仕様。 |

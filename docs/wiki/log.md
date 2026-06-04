@@ -876,3 +876,42 @@ LLM Wiki の時系列ログです。追記専用として扱います。
 - Updated `docs/wiki/strategy/june-2026-roadmap.md` Theme 3 to include recommended-label discovery rules.
 - Updated `docs/wiki/nips/README.md` NIP-32 row, `docs/wiki/index.md`, and related links.
 - Implementation status is intentionally documented as design / implementation target for News ranking, not as already shipped source behavior.
+
+## [2026-06-04] feature | News tab implementation with NIP-23 and null.news.category
+
+- Implemented News tab across Web, Android, and iOS navigation: ホーム / トーク / タイムライン / ニュース / ミニ.
+- News fetches NIP-23 kind 30023 published articles, hides kind 30024 drafts, deduplicates by 30023:<pubkey>:<d>, and sorts by published_at / created_at newest-first.
+- Added null.news.category category filtering with t tag fallback; no ranking tab and no initial trusted labeler list.
+- Added news source settings for npub / hex / NIP-05 sources; empty sources show latest relay kind 30023 articles.
+- Source references: components/NewsTab.js, android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepositoryNews.kt, android/app/src/main/kotlin/io/nurunuru/app/ui/screens/NewsScreen.kt, ios/NuruNuru/Views/Screens/MainTabView.swift.
+
+## [2026-06-04] strategy | ThemaDAY 外部提携 & 開発者施策 (2人目コントリビュータ受領)
+
+- Recorded 2026-06-04 PR #201 (commit 7d4b33f) merged by ocknamo: nosskey-sdk 0.1.2 follow-up — 4 files, -284/+120, includes Co-authored-by: Claude (LLM-assisted contribution).
+- Added `docs/wiki/strategy/themaday-2026-06-04-partnerships-developers.md` (Proposed) defining 90-day partnership and developer initiative strategy.
+- Inherited [[themaday-2026-05-28-partnerships]] 5-requirement gate (non-exclusive, source-verifiable, culture-preserving, user-benefiting, human-reviewed) and connected to [[themaday-2026-06-03-marketing-growth]] three-voice model + 90-day ICP.
+- Introduced **Contribution Ladder (L0–L5)** as observation axis, replacing contributor-count KPI with "段の分布" + 文化適合 PR 率.
+- Introduced **monthly Contributor Spotlight (1st Friday)** and **monthly Dev Hour (3rd Wednesday)** as the rhythm for the "開発者向けの声" track. PR #201 ocknamo becomes the first Spotlight target (2026-06-19).
+- Explicitly **NOT doing in 90 days**: bounty, CLA, Hacktoberfest, partner badges, LLM-bot label, translation public call, contributor leaderboard, Discord/Slack, corporate sponsor acceptance.
+- Proposed 5 GO-track Crit items for W23+1 (2026-06-08): CONTRIBUTING.md / CODE_OF_CONDUCT.md / ISSUE_TEMPLATE×4+general PR template / Contribution Ladder / bounty-Hacktoberfest non-adoption.
+- Open Questions captured for CODE_OF_CONDUCT style, LLM-single-author PR policy, Dev Hour channel format, and external PR SLA against 1-person operation.
+- Source references: docs/wiki/strategy/themaday-2026-06-04-partnerships-developers.md, GitHub commit 7d4b33f1ec024f8a0bb72762a9c0231f6b7d0a6d, components/SignUpModal.js, src/adapters/signing/NosskeySigner.ts, AGENTS.md, docs/wiki/culture/llm-onboarding.md.
+
+
+## [2026-06-04] strategy | Synthesized developer initiatives after Agent2 critique
+
+- Updated docs/wiki/strategy/themaday-2026-06-04-partnerships-developers.md from Proposed to Synthesized working copy.
+- Reduced Phase 0 scope to Contributor Entrance MVP: CONTRIBUTING.md, general PR template, bug_report.md, wiki_update.md, and 3 curated L1/L2 good first issue candidates.
+- Replaced numeric contributor / PR / wiki-PR targets with capacity-first observation: review burden, cultural-fit decision records, dependency-update verification, private vulnerability intake, and Dev Hour trigger conditions.
+- Parked monthly Dev Hour and Wiki Walk until active contributor count / repeated-question triggers are met; Spotlight remains optional and requires contributor consent.
+- Added private vulnerability intake guidance: secrets, signing, key derivation, encryption, and passkey reports should not be sent to public Issues.
+- Added dependency-update verification path for PR #201-style changes, with stronger checks for key/signing/passkey/encryption dependencies.
+
+
+## [2026-06-04] docs | Contributor Entrance MVP implemented
+
+- Added root `CONTRIBUTING.md` with first-PR flow, Contribution Ladder L0–L5, five-principles checklist, build/test commands, wiki update rules, security intake guidance, dependency-update verification, and LLM-assisted contribution expectations.
+- Added root `SECURITY.md` to direct secrets/signing/key-derivation/encryption/passkey reports away from public Issues and toward private vulnerability reporting / minimal security contact requests.
+- Added general `.github/pull_request_template.md` for non-UI PRs, including verification done / not verified, security/privacy checklist, wiki update checklist, and LLM-assisted disclosure.
+- Added `.github/ISSUE_TEMPLATE/bug_report.md` and `.github/ISSUE_TEMPLATE/wiki_update.md`; feature request and NIP support templates remain deferred per Contributor Entrance MVP scope.
+- Updated `README.md` Japanese and English developer sections to link to CONTRIBUTING, SECURITY, and AGENTS.
