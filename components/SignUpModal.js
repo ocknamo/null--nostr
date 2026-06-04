@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
-import { nip19 } from 'nostr-tools'
+import { useState, useRef } from 'react'
+import { nip19, getPublicKey } from 'nostr-tools'
 import {
   savePubkey,
   setStoredPrivateKey,
@@ -46,9 +46,7 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [createdPubkey, setCreatedPubkey] = useState(null)
-  const [credentialId, setCredentialId] = useState(null)
   const [backupNsec, setBackupNsec] = useState('')
-  const [nsecCopied, setNsecCopied] = useState(false)
   const [recommendedRelays, setRecommendedRelays] = useState([])
   const [locationInfo, setLocationInfo] = useState(null)
   const [selectionMode, setSelectionMode] = useState('auto') // auto, manual
@@ -92,18 +90,27 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
       })
 
       if (cid) {
-        setCredentialId(cid)
-
         // Export and cache the Nostr key immediately, without showing an nsec backup step.
         // 新規登録はパスキー登録のみ。秘密鍵バックアップ画面は表示しない。
-        // 0.1.x: exportNostrKey requires a non-null NostrKeyInfo, so derive it via
-        // createNostrKey first (returns credentialId hex / derived pubkey / standard salt),
-        // then export reuses the cached PRF secret without an extra prompt.
-        const keyInfo = await nosskeyManager.createNostrKey(cid)
-        const privateKeyHex = await nosskeyManager.exportNostrKey(keyInfo)
+        //
+        // nosskey-sdk 0.1.x requires a non-null NostrKeyInfo for exportNostrKey.
+        // Calling createNostrKey(cid) before exportNostrKey(keyInfo) performs two
+        // PRF assertions after passkey creation, so keep the Web onboarding at the
+        // pre-0.1.2 two-prompt behavior by providing the required keyInfo shape and
+        // passing the freshly-created credentialId explicitly to exportNostrKey.
+        const credentialIdHex = Array.from(cid)
+          .map(b => b.toString(16).padStart(2, '0'))
+          .join('')
+        const exportKeyInfo = {
+          credentialId: credentialIdHex,
+          pubkey: '',
+          salt: '6e6f7374722d70776b' // "nostr-pwk" standard PRF salt
+        }
+        const privateKeyHex = await nosskeyManager.exportNostrKey(exportKeyInfo, cid)
         if (!privateKeyHex) throw new Error('パスキーから鍵を準備できませんでした')
 
-        const pk = keyInfo.pubkey
+        const pk = getPublicKey(hexToBytes(privateKeyHex))
+        const keyInfo = { ...exportKeyInfo, pubkey: pk }
         setCreatedPubkey(pk)
 
         nosskeyManager.setCurrentKeyInfo(keyInfo)
@@ -127,15 +134,6 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
     }
   }
 
-  const handleCopyNsec = async () => {
-    try {
-      await navigator.clipboard.writeText(backupNsec)
-      setNsecCopied(true)
-      setTimeout(() => setNsecCopied(false), 2000)
-    } catch (e) {
-      console.error('Copy failed:', e)
-    }
-  }
 
   // Handle relay detection
   const startRelayDetection = async () => {

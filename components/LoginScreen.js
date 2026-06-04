@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { nip19 } from 'nostr-tools'
-import { savePubkey, setStoredPrivateKey, hexToBytes } from '@/lib/nostr'
+import { savePubkey, hexToBytes } from '@/lib/nostr'
 import SignUpModal from './SignUpModal'
 
 export default function LoginScreen({ onLogin }) {
@@ -222,16 +222,11 @@ export default function LoginScreen({ onLogin }) {
           // Save the key info
           manager.setCurrentKeyInfo(result)
 
-          // Also try to export and store the private key immediately to facilitate redirection
-          try {
-            const privateKeyHex = await manager.exportNostrKey(result)
-            if (privateKeyHex) {
-              console.log('handleNosskeyLogin: Pre-exported private key')
-              setStoredPrivateKey(result.pubkey, privateKeyHex)
-            }
-          } catch (e) {
-            console.warn('handleNosskeyLogin: Failed to pre-export key:', e)
-          }
+          // Do not pre-export the private key during normal web login.
+          // nosskey-sdk@0.1.x createNostrKey() already performs the passkey
+          // assertion needed to restore keyInfo; exportNostrKey() performs a
+          // second assertion. Keep login to a single passkey prompt and export
+          // only for app redirect / explicit key export / signing fallback paths.
 
           // Handle app redirect if requested
           if (redirectUri) {

@@ -62,7 +62,7 @@
 - 投稿ロジックは `handlePostTutorial()`:
   - `createEventTemplate(1, content, tags)` → `signEventNip07()` → `publishEvent(signed, targetRelays)`。
   - PostModal.js の `extractHashtags` と同じ regex (`/#([^\s#\u3000]+)/g`) を使用。
-- Progress bar は 6 分割 (`w-1/6` … `w-full`)。
+- Progress bar は 5 ステップ (`welcome` / `relay` / `profile` / `tutorial` / `success`) に対応。
 
 ### Android — `android/.../ui/components/SignUpModal.kt`
 
@@ -100,7 +100,7 @@
 
 ## Source references
 
-- `components/SignUpModal.js` (Web 6-step wizard)
+- `components/SignUpModal.js` (Web 5-step passkey wizard)
 - `android/app/src/main/kotlin/io/nurunuru/app/ui/components/SignUpModal.kt` (Android)
 - `android/app/src/main/kotlin/io/nurunuru/app/viewmodel/AuthViewModel.kt` (`publishTutorialPost`)
 - `ios/NuruNuru/Views/Screens/LoginView.swift` (`SignUpTutorialStep`)
@@ -143,6 +143,13 @@ Passkey 経路で backup を省く理由は「Passkey 自体が iCloud Keychain 
 Password Manager で同期されるリカバリ手段であり、nsec を別途バックアップさせる
 必要がないため」(see ADR-0010)。
 
+Web は `nosskey-sdk@0.1.2` に合わせ、`exportNostrKey(null, cid)` ではなく
+`exportNostrKey(keyInfo, cid)` を使う。`keyInfo` は SDK 0.1.x の必須形状
+(`credentialId`, `pubkey`, `salt`) を満たすために作成し、公開鍵は export した
+secret から `getPublicKey(hexToBytes(privateKeyHex))` で確定する。これにより、
+`createNostrKey(cid)` → `exportNostrKey(keyInfo)` による追加 PRF assertion を避け、
+Web の新規登録は従来同様「Passkey 登録 + PRF assertion」の2段階に抑える。
+
 ### Welcome ステップの UI 分岐
 
 | 環境 | primary ボタン | secondary |
@@ -155,7 +162,7 @@ Password Manager で同期されるリカバリ手段であり、nsec を別途�
 
 | 経路 | UI 表示条件 |
 |---|---|
-| Web | 「パスキーでログイン」常時 (PublicKeyCredential サポート時のみ) |
+| Web | 「パスキーでログイン」常時 (PublicKeyCredential サポート時のみ)。通常ログインは `createNostrKey()` の1回だけ認証し、`exportNostrKey()` は app redirect / 明示 export 等まで遅延する。明示 export 済みの auto-sign key は暗号化永続保存から復元する |
 | Android | 「パスキーでログイン」ボタンは `NosskeyManager.loadStoredKeyInfo() != null` のときだけ表示 |
 | iOS 18+ | LoginView 直下に「パスキーでログイン」を表示。ローカル `NosskeyKeyInfo` がない再インストール直後でも discoverable assertion で iCloud Keychain の Passkey picker を開き、`credentialId / pubkey / salt` を復元してログインする。 |
 

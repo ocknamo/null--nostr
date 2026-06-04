@@ -915,3 +915,24 @@ LLM Wiki の時系列ログです。追記専用として扱います。
 - Added general `.github/pull_request_template.md` for non-UI PRs, including verification done / not verified, security/privacy checklist, wiki update checklist, and LLM-assisted disclosure.
 - Added `.github/ISSUE_TEMPLATE/bug_report.md` and `.github/ISSUE_TEMPLATE/wiki_update.md`; feature request and NIP support templates remain deferred per Contributor Entrance MVP scope.
 - Updated `README.md` Japanese and English developer sections to link to CONTRIBUTING, SECURITY, and AGENTS.
+
+## [2026-06-04] docs | Nosskey SDK 0.1.2 Web onboarding follow-up
+
+- Updated Nosskey wiki docs for `nosskey-sdk@^0.1.2`, the `exportNostrKey(keyInfo, cid)` Web sign-up path, and the 5-step passkey onboarding flow without a backup step.
+- Documented that Web currently preserves the two-prompt registration behavior (Passkey creation + PRF assertion) while true native-style one-prompt parity remains dependent on WebAuthn/SDK support.
+- Source references: `components/SignUpModal.js`, `src/adapters/signing/NosskeySigner.ts`, `package.json`, `docs/wiki/nips/nosskey.md`, `docs/wiki/features/onboarding.md`.
+
+## [2026-06-04] fix | Web passkey login single-prompt path
+
+- Removed normal-login private-key pre-export from `components/LoginScreen.js` so passkey login performs only `createNostrKey()` unless an app `redirect_uri` requires an nsec.
+- Removed passive private-key export from `app/page.js` Nosskey session restore to avoid unexpected authentication prompts on page load.
+- Updated Nosskey / onboarding wiki notes to distinguish normal Web login from explicit export, app redirect, DM fallback, and signing paths.
+- Source references: `components/LoginScreen.js`, `app/page.js`, `docs/wiki/nips/nosskey.md`, `docs/wiki/features/onboarding.md`.
+
+## [2026-06-04] fix | Persist exported Web auto-sign key encrypted at rest
+
+- Added encrypted persistent restore for explicitly exported Web private keys so auto-sign remains enabled after reopening the site without another `exportNostrKey()` passkey prompt.
+- `lib/secure-key-store.js` now encrypts exported keys with AES-GCM using a non-extractable per-origin CryptoKey stored in IndexedDB and keeps raw key bytes only in the module-private in-memory map.
+- `app/page.js` restores the encrypted key on reload only when `nurunuru_auto_sign` is enabled; logout clears the in-memory and persisted key via `clearStoredPrivateKey()`.
+- Updated Web Nosskey settings to recognize persisted exported keys and removed the legacy `window.nostrPrivateKey` storage path from `NosskeySettings.tsx`.
+- Source references: `lib/secure-key-store.js`, `lib/nostr.js`, `app/page.js`, `components/AccountSecuritySettings.js`, `src/ui/components/settings/NosskeySettings.tsx`, `docs/wiki/nips/nosskey.md`, `docs/wiki/features/onboarding.md`.

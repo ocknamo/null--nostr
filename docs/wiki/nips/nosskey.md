@@ -6,8 +6,9 @@ Nosskey (a portmanteau of **Nos**tr + pass**key**) is a draft NIP and open-sourc
 SDK that derives the Nostr secp256k1 secret key directly from the WebAuthn
 **PRF extension** output of a platform Passkey. The secret is **never persisted
 to disk** — only a small `{ credentialId, pubkey, salt, username? }` metadata
-record is kept. Each signing / NIP-04 / NIP-44 operation re-prompts the user
-for a Face ID / Touch ID / 指紋認証 assertion to recompute the secret.
+record is kept. Each signing / NIP-04 / NIP-44 operation may re-prompt the user
+for a Face ID / Touch ID / 指紋認証 assertion to recompute the secret, unless the
+platform integration keeps a short-lived in-memory PRF/secret-key cache.
 
 Reference:
 - SDK: <https://github.com/ocknamo/nosskey-sdk>
@@ -38,7 +39,7 @@ The canonical PRF salt across implementations is the UTF-8 string `"nostr-pwk"`.
 - bytes: `[0x6e, 0x6f, 0x73, 0x74, 0x72, 0x2d, 0x70, 0x77, 0x6b]`
 
 The legacy value `6e6f7374722d6b6579` (`"nostr-key"`) appears in older nosskey
-SDK releases and in this repo's pre-2026-05-23 Web sign-up. `nosskey-sdk@^0.0.4`
+SDK releases and in this repo's pre-2026-05-23 Web sign-up. `nosskey-sdk@^0.1.2`
 auto-normalises legacy salt values to the standard one on load; new keys
 across all three platforms are now created with the standard salt.
 
@@ -46,21 +47,33 @@ across all three platforms are now created with the standard salt.
 
 ### Web (`components/SignUpModal.js`, `components/LoginScreen.js`)
 
-- Uses `nosskey-sdk@^0.0.4` from npm. Lazy-loaded in `LoginScreen.js` and
+- Uses `nosskey-sdk@^0.1.2` from npm. Lazy-loaded in `LoginScreen.js` and
   `app/page.js`.
 - `NosskeyManager` is created with `storageKey: 'nurunuru_nosskey'` and a
   1-hour key cache.
-- 6-step sign-up wizard (`SignUpModal.js`):
-  1. `welcome` — calls `createPasskey({ rp: { name: 'ぬるぬる' }, … })`. **1st** biometric prompt.
-  2. `backup`  — calls `exportNostrKey(null, credentialId)` to surface the
-     derived nsec for optional copy. **2nd** biometric prompt. Stores
-     `keyInfo = { credentialId, pubkey, salt: '6e6f7374722d70776b' }`.
-  3. `relay`   — region picker → recommended relays.
-  4. `profile` — kind 0 metadata + kind 10002 NIP-65 relay list publish.
-  5. `tutorial` — `#nostrはじめました` first post.
-  6. `success` — show npub.
+- 5-step sign-up wizard (`SignUpModal.js`):
+  1. `welcome` — calls `createPasskey({ rp: { name: 'ぬるぬる' }, … })` to
+     create the resident Passkey, then calls `exportNostrKey(keyInfo, cid)`
+     with a minimal SDK-0.1.x-compatible `NostrKeyInfo` shape to derive the
+     initial secret key and public key. This preserves the pre-0.1.2 Web
+     behavior of one Passkey registration prompt plus one PRF assertion.
+  2. `relay`   — region picker → recommended relays.
+  3. `profile` — kind 0 metadata + kind 10002 NIP-65 relay list publish.
+  4. `tutorial` — `#nostrはじめました` first post.
+  5. `success` — show npub / complete or redirect to app.
+- The old `backup` step and `exportNostrKey(null, credentialId)` call were
+  removed when moving to `nosskey-sdk@0.1.x`, where `exportNostrKey` requires
+  a non-null `NostrKeyInfo`.
 - Subsequent logins call `NosskeyManager.createNostrKey()` with no
-  `credentialId` so the browser shows the passkey picker.
+  `credentialId` so the browser shows the passkey picker. Normal Web login does
+  **not** call `exportNostrKey()`; exporting is reserved for app redirect,
+  explicit key export, DM fallback, or signing paths that require the secret.
+  This avoids a second passkey prompt during login.
+- When the user explicitly exports the key, Web stores it in the module-private
+  key store and persists an encrypted-at-rest copy using AES-GCM with a
+  non-extractable per-origin WebCrypto key in IndexedDB. On reload,
+  `app/page.js` restores this copy only when auto-sign is enabled, without
+  invoking WebAuthn.
 
 ### iOS (`ios/NuruNuru/Data/NosskeyManager.swift`, `NosskeySigner.swift`)
 
@@ -130,22 +143,26 @@ prompt and zeroized after use.
 
 | Concern | Web | iOS | Android |
 |---|---|---|---|
-| Library | `nosskey-sdk@^0.0.4` | Native `AuthenticationServices` (iOS 18+) | `androidx.credentials` 1.2.2 (API 28+) |
+| Library | `nosskey-sdk@^0.1.2` | Native `AuthenticationServices` (iOS 18+) | `androidx.credentials` 1.2.2 (API 28+) |
 | Storage key | `nurunuru_nosskey` (localStorage) | `nurunuru_nosskey_keyinfo` (UserDefaults) | `nurunuru_nosskey` SharedPreferences |
 | Login method flag | `nurunuru_login_method = 'nosskey'` | `loginMethod = "nosskey"` | `loginMethod = "nosskey"` |
 | Signer | `NosskeyManager.signEvent` | `NosskeySigner` (`EventSigner` impl) | `NosskeySigner` (`AppSigner` impl) |
 | Cache TTL | 60 min | 5 min | 5 min |
 | RP ID | `location.host` (auto) | `"www.nullnull.app"` | `"www.nullnull.app"` |
-| Sign-up step count | 6 | 5 (skip backup) | 5 (skip backup) |
+| Sign-up step count | 5 (skip backup) | 5 (skip backup) | 5 (skip backup) |
 | Fallback | nostr-login extension | nsec / NIP-46 | nsec / NIP-55 (Amber) |
 
 ## Source references
 
 - Web
   - `components/SignUpModal.js` (uses `NosskeyManager.createPasskey` /
-    `exportNostrKey`; salt updated to `6e6f7374722d70776b` 2026-05-23)
-  - `components/LoginScreen.js`
-  - `app/page.js` (rehydration of `NosskeyManager` on reload)
+    `exportNostrKey(keyInfo, cid)`; salt `6e6f7374722d70776b`)
+  - `components/LoginScreen.js` (lazy-loads `NosskeyManager`, restores stored
+    key info, and uses discoverable `createNostrKey()` for passkey login)
+  - `app/page.js` (rehydration of `NosskeyManager` on reload without passive
+    encrypted auto-sign key restore)
+  - `src/adapters/signing/NosskeySigner.ts` (tracks nosskey-sdk 0.1.x flat
+    NIP-04/NIP-44 method names; broader DM routing is future work)
 - iOS
   - `ios/NuruNuru/Data/NosskeyManager.swift` (PRF orchestration)
   - `ios/NuruNuru/Data/NosskeySigner.swift` (event signing with cached secret)
@@ -172,8 +189,8 @@ prompt and zeroized after use.
 
 ## Related pages
 
-- [[../features/onboarding|features/onboarding]] — 6-step sign-up wizard
-  (5-step for passkey path).
+- [[../features/onboarding|features/onboarding]] — 5-step passkey sign-up wizard
+  with tutorial post step.
 - [[nip-46|NIP-46: Nostr Connect]] — Web/iOS external signing path.
 - [[../decisions/adr-0010-passkey-prf-direct-method|ADR-0010]] — why we chose
   the PRF Direct Method over an encryption/decryption Passkey scheme.
@@ -194,3 +211,8 @@ prompt and zeroized after use.
 - Should `NosskeyKeyInfo.username` be exposed in profile copy ("@user")
   somewhere in Settings? Currently we hardcode `"user"` to avoid asking the
   user up-front.
+- Web sign-up currently still needs one Passkey creation prompt plus one PRF
+  assertion to obtain the Nostr secret with `nosskey-sdk@0.1.2`. Native
+  iOS/Android can derive the secret during registration; true one-prompt Web
+  sign-up parity depends on WebAuthn PRF registration-result support and/or SDK
+  API changes.

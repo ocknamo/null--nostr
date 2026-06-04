@@ -8,7 +8,7 @@ import HomeTab from '@/components/HomeTab'
 import TalkTab from '@/components/TalkTab'
 import TimelineTab from '@/components/TimelineTab'
 import MiniAppTab from '@/components/MiniAppTab'
-import { loadPubkey, clearPubkey, getLoginMethod, startBackgroundPrefetch, clearPrefetchPromises, setStoredPrivateKey, clearStoredPrivateKey, getPrivateKeyHex, nip19, hexToBytes } from '@/lib/nostr'
+import { loadPubkey, clearPubkey, getLoginMethod, getAutoSignEnabled, startBackgroundPrefetch, clearPrefetchPromises, restoreStoredPrivateKey, clearStoredPrivateKey, getPrivateKeyHex, nip19, hexToBytes } from '@/lib/nostr'
 import { initCache } from '@/lib/cache'
 
 // Desktop sidebar navigation items
@@ -113,6 +113,14 @@ export default function Home() {
       // Check for stored pubkey on mount
       const storedPubkey = loadPubkey()
       if (storedPubkey) {
+        // Restore a previously exported auto-sign key without a passkey prompt.
+        // This keeps the user-enabled auto-sign setting active across reloads
+        // while avoiding the unexpected exportNostrKey() prompt we removed from
+        // passive Nosskey restore.
+        if (getLoginMethod() === 'nosskey' && getAutoSignEnabled() && !getPrivateKeyHex()) {
+          await restoreStoredPrivateKey(storedPubkey)
+        }
+
         // If already logged in and redirect_uri is present, redirect back to app
         if (redirectUri) {
           const privateKeyHex = getPrivateKeyHex()
@@ -144,18 +152,12 @@ export default function Home() {
             
             if (manager.hasKeyInfo()) {
               window.nosskeyManager = manager
-              // Try to restore private key for auto-signing
-              try {
-                const keyInfo = manager.getCurrentKeyInfo()
-                if (keyInfo) {
-                  const privateKeyHex = await manager.exportNostrKey(keyInfo)
-                  if (privateKeyHex) {
-                    setStoredPrivateKey(storedPubkey, privateKeyHex)
-                  }
-                }
-              } catch (e) {
-                console.log('Could not restore private key:', e)
-              }
+              // Do not export the private key during passive session restore.
+              // exportNostrKey() triggers a passkey assertion, so doing it here
+              // causes an unexpected authentication prompt on page load/login.
+              // A user-enabled auto-sign key is restored above from encrypted
+              // persistent storage without WebAuthn; other paths request the
+              // secret only when the user action requires it.
             }
           } catch (e) {
             console.log('Failed to restore Nosskey:', e)
@@ -221,9 +223,10 @@ export default function Home() {
   }
 
   const handleLogout = () => {
+    const logoutPubkey = pubkey || loadPubkey()
     clearPubkey()
     clearPrefetchPromises()
-    clearStoredPrivateKey()
+    clearStoredPrivateKey(logoutPubkey)
     // Clear Nosskey data if it was used
     if (window.nosskeyManager) {
       window.nosskeyManager.clearStoredKeyInfo()

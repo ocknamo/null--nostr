@@ -7,7 +7,7 @@ import {
   hexToBytes,
   copyToClipboard
 } from '@/lib/nostr'
-import { hasPrivateKey, storePrivateKey } from '@/lib/secure-key-store'
+import { hasPrivateKey, hasPersistedPrivateKey, persistPrivateKey, restorePrivateKey, storePrivateKey } from '@/lib/secure-key-store'
 
 /**
  * Shared account status card for Home settings.
@@ -56,15 +56,20 @@ export function NosskeySecuritySection({ pubkey }) {
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      if (hasPrivateKey()) setHasExportedKey(true)
+      if (hasPrivateKey(pubkey) || hasPersistedPrivateKey(pubkey)) setHasExportedKey(true)
       const savedAutoSign = localStorage.getItem('nurunuru_auto_sign')
       setAutoSign(savedAutoSign !== 'false')
     }
-  }, [])
+  }, [pubkey])
 
-  const handleAutoSignChange = (enabled) => {
+  const handleAutoSignChange = async (enabled) => {
     setAutoSign(enabled)
     localStorage.setItem('nurunuru_auto_sign', enabled ? 'true' : 'false')
+
+    if (enabled && pubkey && !hasPrivateKey(pubkey) && hasPersistedPrivateKey(pubkey)) {
+      const restored = await restorePrivateKey(pubkey)
+      if (restored) setHasExportedKey(true)
+    }
   }
 
   const handleExportKey = async () => {
@@ -84,6 +89,7 @@ export function NosskeySecuritySection({ pubkey }) {
       const nsec = nip19.nsecEncode(hexToBytes(privateKeyHex))
       setExportedNsec(nsec)
       storePrivateKey(pubkey, privateKeyHex)
+      await persistPrivateKey(pubkey, privateKeyHex)
       setHasExportedKey(true)
     } catch (e) {
       console.error(e)

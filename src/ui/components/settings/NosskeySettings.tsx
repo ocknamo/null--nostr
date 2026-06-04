@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { nip19 } from 'nostr-tools'
+import { hasPrivateKey, hasPersistedPrivateKey, persistPrivateKey, restorePrivateKey, storePrivateKey } from '@/lib/secure-key-store'
 
 interface NosskeySettingsProps {
   pubkey: string
@@ -17,13 +18,13 @@ export default function NosskeySettings({ pubkey }: NosskeySettingsProps) {
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      if ((window as any).nostrPrivateKey) {
+      if (hasPrivateKey(pubkey) || hasPersistedPrivateKey(pubkey)) {
         setHasExportedKey(true)
       }
       const savedAutoSign = localStorage.getItem('nurunuru_auto_sign')
       setAutoSign(savedAutoSign !== 'false')
     }
-  }, [])
+  }, [pubkey])
 
   const hexToBytes = (hex: string): Uint8Array => {
     const bytes = new Uint8Array(hex.length / 2)
@@ -33,9 +34,14 @@ export default function NosskeySettings({ pubkey }: NosskeySettingsProps) {
     return bytes
   }
 
-  const handleAutoSignChange = (enabled: boolean) => {
+  const handleAutoSignChange = async (enabled: boolean) => {
     setAutoSign(enabled)
     localStorage.setItem('nurunuru_auto_sign', enabled ? 'true' : 'false')
+
+    if (enabled && pubkey && !hasPrivateKey(pubkey) && hasPersistedPrivateKey(pubkey)) {
+      const restored = await restorePrivateKey(pubkey)
+      if (restored) setHasExportedKey(true)
+    }
   }
 
   const handleExportKey = async () => {
@@ -62,7 +68,8 @@ export default function NosskeySettings({ pubkey }: NosskeySettingsProps) {
 
       const nsec = nip19.nsecEncode(hexToBytes(privateKeyHex))
       setExportedNsec(nsec)
-      ;(window as any).nostrPrivateKey = privateKeyHex
+      storePrivateKey(pubkey, privateKeyHex)
+      await persistPrivateKey(pubkey, privateKeyHex)
       setHasExportedKey(true)
 
     } catch (e: any) {
