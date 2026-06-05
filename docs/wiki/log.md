@@ -936,3 +936,11 @@ LLM Wiki の時系列ログです。追記専用として扱います。
 - `app/page.js` restores the encrypted key on reload only when `nurunuru_auto_sign` is enabled; logout clears the in-memory and persisted key via `clearStoredPrivateKey()`.
 - Updated Web Nosskey settings to recognize persisted exported keys and removed the legacy `window.nostrPrivateKey` storage path from `NosskeySettings.tsx`.
 - Source references: `lib/secure-key-store.js`, `lib/nostr.js`, `app/page.js`, `components/AccountSecuritySettings.js`, `src/ui/components/settings/NosskeySettings.tsx`, `docs/wiki/nips/nosskey.md`, `docs/wiki/features/onboarding.md`.
+
+## [2026-06-06] strategy | ThemaDAY 企業文化と open speech / scoped reach
+
+- Added `docs/wiki/strategy/themaday-2026-06-06-company-culture.md` to record the approved culture-building strategy: open protocol, small trusted communities, speech/display separation, two-step-flow discovery, safe starter graph, and “小さな政府、小さなLINE”.
+- Added `docs/wiki/decisions/adr-0021-open-speech-scoped-reach.md` as Accepted ADR for open speech with scoped reach and native posting parity.
+- Recorded the user decision that native app posting restrictions are rejected: iOS / Android / Web remain write-capable; store and safety risk should be handled by scoped display, relay-feed removal, trust graph, mute/block/report, and NIP-70 rather than disabling native composers.
+- Updated culture / feature docs to clarify that freedom of speech means publishing / quoting / exiting without platform permission, not an entitlement to appear in every timeline.
+- Source references: docs/wiki/strategy/themaday-2026-06-06-company-culture.md, docs/wiki/decisions/adr-0021-open-speech-scoped-reach.md, docs/wiki/culture/not-doing.md, docs/wiki/culture/four-freedoms.md, docs/wiki/features/post-composer.md.

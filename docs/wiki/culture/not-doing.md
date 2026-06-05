@@ -9,6 +9,7 @@
 - Nostr 用語 (relay, pubkey, NIP, kind, event, signature) を初心者向け画面に浴びせない。
 - 機能ボタンで画面を埋めない。1画面に主アクションは原則1〜2個。
 - 競合 SNS の中毒的エンゲージメント設計 (無限スクロール演出、赤バッジ濫用、即時通知ハック) を真似ない。
+- 「誰でも発言できる」を「誰でも全員のタイムラインに表示される」と解釈しない。発言権と表示 / 到達権は分ける ([[../decisions/adr-0021-open-speech-scoped-reach|ADR-0021]])。
 - タイムラインに entrance animation を追加しない (既存規約)。
 - 投稿の「いいね」を heart アイコンにしない (thumbs-up / 既存規約)。
 - PostActions に reply ボタンを置かない ([[../decisions/adr-0005-postactions-no-reply-button|ADR-0005]] 既決)。
@@ -24,6 +25,7 @@
 - Web / Android / iOS で別アプリのような体験を許さない。
 - [[../ui/design-tokens|design-tokens]] 外の色・余白・フォントサイズを置かない。
 - 1プラットフォームだけ先行する機能を、ADR なしでマージしない。
+- iOS / Android を閲覧専用・投稿不可にしない。ネイティブ投稿制限は採用せず、ストア / 安全リスクはリレーフィード削除、信頼グラフ、ミュート / ブロック / report、コピー審査配慮で扱う ([[../decisions/adr-0021-open-speech-scoped-reach|ADR-0021]])。
 
 ## 鍵とセキュリティ (Keys & Security)
 
@@ -73,3 +75,4 @@
 - [[../decisions/adr-0005-postactions-no-reply-button]]
 - [[../decisions/adr-0007-design-crit-ritual]]
 - [[../decisions/adr-0008-four-freedoms-mission]]
+- [[../decisions/adr-0021-open-speech-scoped-reach]]

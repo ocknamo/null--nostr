@@ -44,6 +44,7 @@
 | [[strategy/themaday-2026-06-02-product-eng-design]] | 製品開発・エンジニアリング・デザインの ThemaDAY すり合わせ。リレーフィード削除/iOS Rust FFI 完了を前提化し、Home を header account icon + アクティビティ/コンテンツ2層構造へ更新。 |
 | [[strategy/themaday-2026-06-03-marketing-growth]] | ThemaDAY マーケティング・成長戦略・コミュニケーション統合版。Week-1 復帰率、AARRT v2、三声モデル、safe starter graph、危機対応を整理。 |
 | [[strategy/themaday-2026-06-04-partnerships-developers]] | 2人目コントリビュータ受領を契機とした ThemaDAY 外部提携 & 開発者施策。Contributor Entrance MVP、Contribution Ladder L0–L5、private vulnerability intake、dependency-update verification、bounty/CLA/Hacktoberfest 不採用を整理。 |
+| [[strategy/themaday-2026-06-06-company-culture]] | ThemaDAY 企業文化 / カルチャー構築。言論の自由を「発言権と表示 / 到達権の分離」として定義し、open protocol + scoped reach + native posting parity を整理。 |
 | [[strategy/june-2026-roadmap]] | 2026年6月の主要タブ再設計ロードマップ。onboarding 主文、リレーフィード廃止、ホーム刷新、ニュースタブ化、NIP-5Aミニアプリ、2-hop信頼グラフ制限、ろくななroot tab廃止+code-only retention を整理。 |
 | [[strategy/nuruh-ip-2026-05-28]] | ぬるる IP マーケティング & 成長戦略 v1.0。四箇条 / 3層接点 / 5ループ / ライセンス階段 / KPI+ガードレール / 90日と24ヶ月ロードマップ。 |
 | [[operations/feedback-loop]] | NIP-50 search relay と nurunuru-mcp による Nostr feedback 収集、Issue draft、autofix 運用。 |
@@ -55,6 +56,7 @@
 | Page | Summary |
 |---|---|
 | [[decisions/adr-0020-safe-starter-graph]] | 初回 Home の空白離脱を避ける safe starter graph。任意リレー生フィードを復活させず、公式/ぬるる/日本語 starter accounts を安全候補として扱う Proposed ADR。 |
+| [[decisions/adr-0021-open-speech-scoped-reach]] | 言論の自由を発言 / 公開 / 退出として守り、主要 UI の到達範囲は関係性で絞る。iOS / Android / Web の投稿 parity を維持する Accepted ADR。 |
 
 ## Quality / Release
 
@@ -149,6 +151,7 @@
 | [[decisions/adr-0019-ios-rust-ffi-write-path]] | iOS Rust FFI write-path migration starts from keygen/sign/publish contracts; NIP-46/Passkey remain platform signer paths. |
 | [[decisions/adr-0017-nip-5a-mini-apps]] | NIP-5A ミニアプリを WebView/static-site として安全に起動する manifest / permission 境界。 |
 | [[decisions/adr-0016-news-curation-model]] | ニュースタブは NIP-23 + NIP-32 を 2-hop 信頼グラフで発見・表示する。 |
+| [[decisions/adr-0021-open-speech-scoped-reach]] | Open speech with scoped reach。発言権と表示 / 到達権を分け、ネイティブ投稿 parity を維持する判断。 |
 
 ## Maintenance checklist for agents
 

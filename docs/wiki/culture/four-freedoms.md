@@ -39,6 +39,13 @@
 
 ## 軸ごとの実装方針 (概略)
 
+### 軸 1: 言論 (Speech)
+
+- 言論の自由は、発言・公開・引用・退出の自由を指す。全員のタイムラインに表示される権利ではない。
+- ぬるぬるは **発言権と表示 / 到達権を分ける**。Nostr event は公開できるが、主要 UI に表示するかはフォロー graph、2-hop trust graph、starter graph、mute / block / report、共同体境界で判断する。
+- iOS / Android / Web はすべて投稿可能なクライアントとして維持する。ネイティブアプリだけを閲覧専用にする投稿制限は採用しない ([[../decisions/adr-0021-open-speech-scoped-reach|ADR-0021]])。
+- リレー生フィードを主要 UI に置かないことは検閲ではなく、共同体と日常体験を守る表示設計である ([[../decisions/adr-0013-relay-feed-removal|ADR-0013]])。
+
 ### 軸 3: 経済 (Economy)
 
 - **NIP-57 Zap** を「投げ銭」「おひねり」「ご祝儀」として LINE スタンプ送信レベルの軽さで再設計する。
@@ -89,6 +96,7 @@
 - [[not-doing]]
 - [[copy-style]]
 - [[../decisions/adr-0008-four-freedoms-mission]]
+- [[../decisions/adr-0021-open-speech-scoped-reach]]
 - [[../platforms/parity-matrix]]
 - [[../nips/nip-57]]
 
@@ -99,4 +107,5 @@
 - [[../nips/nip-65]]
 - [[../nips/nip-70]]
 - [[../decisions/adr-0008-four-freedoms-mission]]
+- [[../decisions/adr-0021-open-speech-scoped-reach]]
 - `AGENTS.md`

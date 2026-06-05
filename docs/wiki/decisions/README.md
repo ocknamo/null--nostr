@@ -27,6 +27,8 @@ This directory stores lightweight Architecture Decision Records (ADRs). Use ADRs
 | [[adr-0017-nip-5a-mini-apps]] | NIP-5A ミニアプリの manifest / permission 境界。 |
 | [[adr-0018-rokunana-root-tab-removal]] | ろくなな root tab removal と code-only retention。 |
 | [[adr-0019-ios-rust-ffi-write-path]] | iOS Rust FFI write-path migration starts from keygen/sign/publish contracts. |
+| [[adr-0020-safe-starter-graph]] | Safe starter graph for first Home experience without reintroducing relay-wide feeds. |
+| [[adr-0021-open-speech-scoped-reach]] | Open speech with scoped reach, relationship-scoped primary surfaces, and native posting parity. |
 
 ## ADR convention
 

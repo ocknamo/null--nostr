@@ -7,6 +7,7 @@ Post Composer は投稿作成 UI です。テキスト、画像、リレー指�
 ## Current behavior
 
 - 投稿文字数は 140 文字。
+- 2026-06-05 の文化 / 戦略判断により、Android / iOS / Web はいずれも投稿可能なクライアントとして維持する。ネイティブアプリだけ投稿不可にする制限は採用しない ([[../decisions/adr-0021-open-speech-scoped-reach|ADR-0021]])。
 - Android は `PostModal.kt` で厳密に enforced。
 - iOS は `PostSheet.swift` で厳密に enforced。
 - Android では relay selection panel があり、`targetRelays` により targeted publish を行う。
@@ -18,6 +19,11 @@ Post Composer は投稿作成 UI です。テキスト、画像、リレー指�
 - Android の画像アップロードは `withContext(Dispatchers.IO)` 内で `async {}` を使い並列化する。
 
 ## Platform notes
+
+### Cross-platform parity
+
+Web / Android / iOS はすべて投稿可能な surface として扱う。ストア・安全リスクは投稿導線を消すのではなく、主要表示面のスコープ、リレー生フィード削除、ミュート / ブロック / report、NIP-70 protection で扱う。
+
 
 ### Android
 
@@ -38,6 +44,7 @@ Post Composer は投稿作成 UI です。テキスト、画像、リレー指�
 - `android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepository.kt`
 - `ios/NuruNuru/Views/Sheets/PostSheet.swift`
 - `rust-engine/nurunuru-ffi/src/lib.rs`
+- `docs/wiki/decisions/adr-0021-open-speech-scoped-reach.md`
 
 ## Related pages
 
