@@ -983,7 +983,7 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
       event.pubkey = pubkey
 
       // Add client tag
-      event.tags = [...event.tags, ['client', 'nullnull']]
+      event.tags = [...event.tags, ['client', 'ぬるぬるweb']]
 
       // 返信 (NIP-10): e + p タグ
       if (replyToPost) {

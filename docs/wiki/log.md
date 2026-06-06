@@ -944,3 +944,16 @@ LLM Wiki の時系列ログです。追記専用として扱います。
 - Recorded the user decision that native app posting restrictions are rejected: iOS / Android / Web remain write-capable; store and safety risk should be handled by scoped display, relay-feed removal, trust graph, mute/block/report, and NIP-70 rather than disabling native composers.
 - Updated culture / feature docs to clarify that freedom of speech means publishing / quoting / exiting without platform permission, not an entitlement to appear in every timeline.
 - Source references: docs/wiki/strategy/themaday-2026-06-06-company-culture.md, docs/wiki/decisions/adr-0021-open-speech-scoped-reach.md, docs/wiki/culture/not-doing.md, docs/wiki/culture/four-freedoms.md, docs/wiki/features/post-composer.md.
+
+## [2026-06-06] fix | Scope client tag to post-source display events
+
+- Updated Android generic publish helpers so `client` tags are opt-in instead of being added to every event.
+- Kept Android kind 1 `publishNote()` client attribution for `via ...` display, while kind 10002 relay list metadata now publishes without `client`.
+- Documented that `client` tags are for post-source attribution, not NIP-65 relay-list metadata.
+- Source references: `android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepository.kt`, `android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepositoryActions.kt`, `android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepositoryLiveStream.kt`, `android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepositoryBackup.kt`, `docs/wiki/nips/nip-65.md`, `docs/wiki/ui/android-ios-sync.md`.
+
+## [2026-06-06] fix | Japanese via labels for client tags
+
+- Updated new client tag labels to show `via ぬるぬるiOS`, `via ぬるぬるAndroid`, and `via ぬるぬるweb` for newly published post-source attribution.
+- Kept the Issue #200 scope rule: these labels are for post-source display and must not be added to kind 10002 relay-list metadata.
+- Source references: `android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepository.kt`, `ios/NuruNuru/Data/NostrRepository+Actions.swift`, `components/HomeTab.js`, `components/TimelineTab.js`, `components/miniapps/SchedulerApp.js`, `docs/wiki/ui/android-ios-sync.md`.

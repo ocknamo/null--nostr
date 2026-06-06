@@ -68,7 +68,7 @@ Android と iOS は LINE 風 UI を platform native に実装しつつ、見た�
 - Reply button は PostActions にはない。返信は詳細画面や投稿シートの `replyTo*` 経由で扱う。
 - Repost は通常タップで kind 6 repost、長押しで quote repost を起動できる。
 - Like は thumbs-up 系アイコン。heart ではない。
-- Android / iOS とも末尾に `client` tag がある場合 `via ...` 表示を行う。
+- 投稿表示対象イベントの末尾に `client` tag がある場合 `via ...` 表示を行う。新規投稿で付ける表示名は iOS `ぬるぬるiOS`、Android `ぬるぬるAndroid`、Web `ぬるぬるweb`。`client` tag は投稿元クライアント表示用であり、kind 10002 relay list metadata などの設定・リスト系イベントには付けない。
 
 ### Copy and modals
 

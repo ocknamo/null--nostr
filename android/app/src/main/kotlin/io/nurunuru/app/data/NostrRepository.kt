@@ -77,7 +77,7 @@ class NostrRepository(
     internal fun getOneHourAgo(): Long = System.currentTimeMillis() / 1000 - Constants.Time.HOUR_SECS
     internal fun getOneDayAgo(): Long = System.currentTimeMillis() / 1000 - Constants.Time.DAY_SECS
 
-    internal val clientTag: List<String> get() = listOf("client", "nullnull Android")
+    internal val clientTag: List<String> get() = listOf("client", "ぬるぬるAndroid")
 
     internal fun withClientTag(tags: List<List<String>>): List<List<String>> =
         if (tags.any { it.getOrNull(0) == "client" }) tags else tags + listOf(clientTag)
@@ -140,10 +140,11 @@ class NostrRepository(
     internal suspend fun publishNewEvent(
         kind: Int,
         content: String,
-        tags: List<List<String>>
+        tags: List<List<String>>,
+        addClientTag: Boolean = false
     ): String? {
         val rustClient = client.getRustClient() ?: return null
-        val eventTags = withClientTag(tags)
+        val eventTags = if (addClientTag) withClientTag(tags) else tags
         return try {
             if (isExternalSigner()) {
                 val unsigned = withContext(Dispatchers.IO) {

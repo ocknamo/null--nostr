@@ -80,7 +80,7 @@ suspend fun NostrRepository.publishNote(
     if (nip70Protected && tags.none { it.getOrNull(0) == "-" }) {
         tags.add(listOf("-"))
     }
-    if (tags.none { it.getOrNull(0) == "client" }) {
+    if (kind == NostrKind.TEXT_NOTE && tags.none { it.getOrNull(0) == "client" }) {
         tags.add(clientTag)
     }
 

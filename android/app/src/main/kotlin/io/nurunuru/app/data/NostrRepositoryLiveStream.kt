@@ -43,10 +43,11 @@ suspend fun NostrRepository.fetchEvents(
 suspend fun NostrRepository.publishEvent(
     kind: Int,
     content: String,
-    tags: List<List<String>> = emptyList()
+    tags: List<List<String>> = emptyList(),
+    addClientTag: Boolean = false
 ): NostrEvent? {
     val allTags = tags.toMutableList()
-    if (allTags.none { it.getOrNull(0) == "client" }) {
+    if (addClientTag && allTags.none { it.getOrNull(0) == "client" }) {
         allTags.add(clientTag)
     }
     val eventId = publishNewEvent(kind, content, allTags) ?: return null

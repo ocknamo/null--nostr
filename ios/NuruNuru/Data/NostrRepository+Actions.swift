@@ -38,9 +38,9 @@ extension NostrRepository {
         }
         if let cw = contentWarning, !cw.isEmpty { tags.append(["content-warning", cw]) }
         if nip70Protected { tags.append(["-"]) }
-        // クライアント識別タグ (iOS 版は "nullnull iOS" を付与)
+        // クライアント識別タグ (iOS 版は "ぬるぬるiOS" を付与)
         if !tags.contains(where: { $0.first == "client" }) {
-            tags.append(["client", "nullnull iOS"])
+            tags.append(["client", "ぬるぬるiOS"])
         }
         for tag in customTags {
             guard let name = tag.first else { continue }

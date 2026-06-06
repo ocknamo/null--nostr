@@ -162,7 +162,7 @@ function CreateEventForm({ pubkey, onCreated, onCancel }) {
         ['title', title.trim()],
         ...validDates.map(d => ['date', d]),
         ['t', 'chousei'],
-        ['client', 'nullnull-chousei']
+        ['client', 'ぬるぬるweb']
       ]
       
       if (location.trim()) {
@@ -1443,7 +1443,7 @@ export default function SchedulerApp({ pubkey }) {
           ['p', event.pubkey],
           ['status', status],
           ['date', date],
-          ['client', 'nullnull-chousei']
+          ['client', 'ぬるぬるweb']
         ],
         content: '',
         pubkey
