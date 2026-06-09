@@ -1,6 +1,6 @@
 import Foundation
 
-/// Nostr event kinds — synced with Android NostrKind and web lib/constants.js.
+/// Nostr event kinds — synced with Android NostrKind and Web lib/nostr-kinds.js.
 enum NostrKind {
     static let metadata         = 0
     static let textNote         = 1
@@ -15,6 +15,8 @@ enum NostrKind {
     static let directMessage    = 14     // NIP-17 chat message
     static let fileMessage      = 15     // NIP-17 file message
     static let genericRepost    = 16
+    static let videoEvent       = 21     // NIP-71 regular video event
+    static let portraitShortVideo = 22   // NIP-71 short-form portrait video event
     static let channelCreate    = 40
     static let channelMeta      = 41
     static let channelMessage   = 42
@@ -27,7 +29,9 @@ enum NostrKind {
     static let nip98Auth        = 27235
     static let blossomAuth      = 24242
     static let blossomUserServerList = 10063
+    static let nsiteRoot        = 15128  // NIP-5A root nsite manifest
     static let clientAuth       = 22242  // NIP-42 relay authentication
+    static let nostrConnect     = 24133  // NIP-46 / Nostr Connect
     static let zapRequest       = 9734
     static let zapReceipt       = 9735
     static let muteList         = 10000
@@ -47,7 +51,10 @@ enum NostrKind {
     static let emojiSet         = 30030
     static let badgeDefinition  = 30009
     static let profileBadges    = 30008
-    static let videoLoop        = 34236
+    static let nsiteLegacy      = 34128  // NIP-5A legacy nsite manifest (deprecated upstream)
+    static let addressableVideo = 34235  // NIP-71 addressable video event
+    static let addressableShortVideo = 34236
+    static let nsiteNamed       = 35128  // NIP-5A named nsite manifest
     static let calendarRsvp     = 31925
     static let dateCandidate    = 31926
     static let timeBasedEvent   = 31927

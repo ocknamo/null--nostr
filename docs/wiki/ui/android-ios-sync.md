@@ -114,3 +114,10 @@ Android と iOS は LINE 風 UI を platform native に実装しつつ、見た�
 ## QA
 
 - Home settings / Mini Apps split verification: [[quality/qa-2026-06-02]].
+
+
+## Relay diagnostics sync note
+
+- iOS `RelaySettingsView` exposes Rust publish diagnostics (pending signed outbox count, manual retry, RelayRouter health) behind `NURUNURU_FFI_AVAILABLE`.
+- Android Mini Apps relay settings has an equivalent local diagnostics card with pending signed outbox count, manual retry, and RelayRouter health.
+- Web Relay Settings now has a parity diagnostics card backed by browser-local signed publish outbox state and `connection-manager.js` relay health. Keep copy/layout aligned when any platform changes; raw signed event JSON/content must not be shown.

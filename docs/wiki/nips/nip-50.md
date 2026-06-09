@@ -7,6 +7,7 @@ NIP-50 search is used for text search across Nostr events. In null--nostr it sup
 ## Current behavior
 
 - Android search parses structured operators and routes text-present queries to searchnos / NIP-50.
+- Upstream `nostr-protocol/nips` commit `7a2197c00d1bbff19b32d19851f4dffe4810b8ed` adds an `autocomplete:true/false` search extension; null--nostr has not yet claimed support for emitting or parsing this extension.
 - The feedback automation MCP builds NIP-50 filters with search, kinds, limit, optional time bounds, authors, and tag filters.
 - The MCP defaults to wss://search.nos.today and kind 1 notes for public feedback collection.
 - Default feedback queries are ぬるぬる, #ぬるぬるはじめました, nullnull Android, nullnull iOS, nullnull, via nullnull Android, via nullnull iOS, and via nullnull.

@@ -435,7 +435,7 @@ const HomeTab = forwardRef(function HomeTab({ pubkey, onLogout, onStartDM, onHas
     try {
       // Fetch notes, reposts, short videos, and user's reactions in parallel
       const [notes, reposts, myReactionEvents] = await Promise.all([
-        fetchEvents({ kinds: [1, NOSTR_KINDS.LONG_FORM, NOSTR_KINDS.SHORT_VIDEO], authors: [pubkey], since: oneDayAgo, limit: 50 }, RELAYS),
+        fetchEvents({ kinds: [1, NOSTR_KINDS.LONG_FORM, NOSTR_KINDS.ADDRESSABLE_SHORT_VIDEO], authors: [pubkey], since: oneDayAgo, limit: 50 }, RELAYS),
         fetchEvents({ kinds: [6], authors: [pubkey], since: oneDayAgo, limit: 30 }, RELAYS),
         fetchEvents({ kinds: [7], authors: [pubkey], since: oneDayAgo, limit: 50 }, RELAYS)
       ])
@@ -796,7 +796,7 @@ const HomeTab = forwardRef(function HomeTab({ pubkey, onLogout, onStartDM, onHas
 
       // Add video tags if present
       if (recordedVideo) {
-        event.kind = 34236
+        event.kind = NOSTR_KINDS.ADDRESSABLE_SHORT_VIDEO
         const hashTag = recordedVideo.proofTags?.find(t => t[0] === 'x')
         const hash = hashTag ? hashTag[1] : ''
 

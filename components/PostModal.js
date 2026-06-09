@@ -6,6 +6,7 @@ import { uploadImagesInParallel } from '@/lib/imageUtils'
 import EmojiPicker from './EmojiPicker'
 import { useSTT } from '@/hooks/useSTT'
 import DivineVideoRecorder from './DivineVideoRecorder'
+import { NOSTR_KINDS } from '@/lib/constants'
 
 // Extract hashtags from content (NIP-01)
 function extractHashtags(content) {
@@ -270,7 +271,7 @@ export default function PostModal({ pubkey, replyTo, quotedEvent, onClose, onSuc
       }
 
       await publishEvent({
-        kind: recordedVideo ? 34236 : 1,
+        kind: recordedVideo ? NOSTR_KINDS.ADDRESSABLE_SHORT_VIDEO : NOSTR_KINDS.TEXT_NOTE,
         content: finalContent,
         tags,
         created_at: Math.floor(Date.now() / 1000),

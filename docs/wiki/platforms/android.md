@@ -32,13 +32,23 @@ android/app/src/main/kotlin/io/nurunuru/app/
 - NIP-55 / Amber external signer via `ExternalSigner.kt`。
 - Talk は Marmot MLS 中心。NIP-17 models は legacy/deprecated。
 - Relay settings and NIP-65 outbox behavior are implemented in data/settings layers.
+- Timeline hot paths do not perform NIP-05 verification; `NostrRepository.enrichPosts()` enriches profiles/engagement and leaves NIP-05 verification to explicit profile/detail flows.
+- Relay feed empty responses preserve the selected relay and existing relay posts instead of auto-clearing the feed.
+- Android Rust write paths now consume structured `FfiPublishResult` for raw signed publish and text-note publish where available; failed sends remain visible as queued/failed in the Rust durable outbox instead of being treated as a silent boolean failure.
+- `NostrClient.connect()` triggers a best-effort `retryPendingPublishOutbox(20)` on `Dispatchers.IO` after Rust connect; it logs results and never blocks startup.
+- Repository accessors expose `retryPendingPublishOutbox()`, `getRelayHealthSnapshots()`, and `getPendingPublishOutbox()` for future Relay Settings / Performance Console UI.
+- Android Mini Apps relay settings now include a local diagnostics card showing pending signed publish outbox items, manual retry, and Rust RelayRouter health snapshots. Raw signed event JSON is not displayed.
 
 ## Source references
 
 - `android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepository.kt`
+- `android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepositoryActions.kt`
+- `android/app/src/main/kotlin/io/nurunuru/app/data/NostrClient.kt`
+- `android/app/src/main/kotlin/io/nurunuru/app/viewmodel/TimelineViewModel.kt`
 - `android/app/src/main/kotlin/io/nurunuru/app/ui/components/PostModal.kt`
 - `android/app/src/main/kotlin/io/nurunuru/app/ui/components/ImageViewerDialog.kt`
 - `android/app/src/main/kotlin/io/nurunuru/app/ui/screens/MainScreen.kt`
+- `android/app/src/main/kotlin/io/nurunuru/app/ui/screens/MiniAppsScreen.kt`
 - `rust-engine/.cargo/config.toml`
 
 ## Related pages

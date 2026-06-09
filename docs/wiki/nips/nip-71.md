@@ -7,7 +7,8 @@ The project has a short-video area called ろくなな. Current code uses OpenVi
 ## Current behavior
 
 - iOS `RokunanaVideo` describes diVine/OpenVine-compatible NIP-71 short video events.
-- Primary discovery/publish kind is 34236.
+- Primary discovery/publish kind is 34236, which upstream names “Addressable Short Video Event”.
+- Upstream NIP-71 also defines regular video kind 21, portrait short video kind 22, and addressable video kind 34235.
 - Acceptable video kinds in iOS parsing include 22, 21, 34235, 34236, and 34237.
 - Publishing uses tags such as `d`, `imeta`, `title`, `summary`, `language`, and `client`.
 - Android timeline paths include `NostrKind.VIDEO_LOOP` kind 34236 alongside text notes, long-form posts, and reposts.
@@ -16,7 +17,7 @@ The project has a short-video area called ろくなな. Current code uses OpenVi
 
 ### Android
 
-- `NostrKind.VIDEO_LOOP = 34236`.
+- `NostrKind.ADDRESSABLE_SHORT_VIDEO = 34236`.
 - Timeline fetch paths include `VIDEO_LOOP`.
 - Video playback uses `VideoPlayer.kt` / ExoPlayer elsewhere in UI.
 
@@ -28,7 +29,7 @@ The project has a short-video area called ろくなな. Current code uses OpenVi
 
 ### Web
 
-- `lib/constants.js` includes `SHORT_VIDEO: 34236`.
+- `lib/nostr-kinds.js` includes `SHORT_VIDEO: 34236`.
 
 ## Source references
 
@@ -38,7 +39,7 @@ The project has a short-video area called ろくなな. Current code uses OpenVi
 - `android/app/src/main/kotlin/io/nurunuru/app/data/models/NostrModels.kt`
 - `android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepositoryTimeline.kt`
 - `android/app/src/main/kotlin/io/nurunuru/app/ui/components/VideoPlayer.kt`
-- `lib/constants.js`
+- `lib/nostr-kinds.js`
 
 ## Related pages
 

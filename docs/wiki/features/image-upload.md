@@ -9,7 +9,7 @@ Image upload supports nostr.build, share.yabu.me/yabu.me, and Blossom-compatible
 - Composer image uploads are performed off the main thread.
 - Android composer uploads multiple images in parallel using `async { }` inside `withContext(Dispatchers.IO)`.
 - iOS routes uploads through `ImageUploadService` / repository helpers based on `prefs.uploadServer`.
-- Upload server settings include Blossom defaults and compatibility with legacy targets.
+- Upload server settings include Blossom defaults and compatibility with legacy NIP-96-style targets.
 - iOS settings can publish/read Blossom user server lists (`kind:10063`) for BUD-03-style server discovery.
 - Renderers handle media URLs from content and NIP-92 `imeta` tags.
 

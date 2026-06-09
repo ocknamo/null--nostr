@@ -27,6 +27,8 @@ null--nostr は、Web / Android / iOS の UI 層と、Nostr 処理・暗号・�
 - **Private keys:** Web は module closure、iOS は Keychain、Android は platform signer / Rust FFI 経由の制約を守る。
 - **iOS Rust FFI:** 2026-06-02 時点で現行 release-planning scope は完了済み。read-only MLS diagnostics に加えて keygen / signing / signed raw-event publish contracts が利用可能な前提で扱う。ただし NIP-46 と Passkey/Nosskey は platform authorization path、private keys は Keychain-only という境界を維持する。
 - **Relay limits:** Web は global 4 / per-relay 2 concurrent connection を守る。
+- **Relay routing / health:** Rust core owns local `RelayRouter` health/cooldown snapshots for explicit relay fetch and targeted native publish paths. Web keeps an independent `connection-manager.js` health map for browser relay diagnostics.
+- **Durable publish groundwork:** Rust publish paths enqueue fully-signed event JSON only in `db_path/publish_outbox.json` before network send, then mark items published/failed; no signer secrets or unsigned signing material are stored. Web has matching local groundwork in `lib/publish-outbox.js` using browser `localStorage` for fully signed event JSON only.
 - **IO discipline:** Android の Rust FFI / file IO / uploads は `Dispatchers.IO`。
 
 
@@ -45,6 +47,9 @@ Source references: android/app/build.gradle.kts, rust-engine/nurunuru-ffi/androi
 iOS Rust FFI current release-planning scope is complete as of 2026-06-02. Rust keygen, internal signing contracts, and signed raw-event publishing are treated as available within the accepted security boundaries. NIP-46 and Passkey/Nosskey remain platform authorization paths; private keys remain Keychain-only in app code. Future Talk MLS expansion, if any, should be tracked separately.
 
 ## Source references
+
+- `rust-engine/nurunuru-core/src/relay.rs`
+- `rust-engine/nurunuru-core/src/outbox.rs`
 
 - `AGENTS.md`
 - `lib/nostr.js`

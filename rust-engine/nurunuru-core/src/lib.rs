@@ -28,6 +28,7 @@ pub mod engine;
 pub mod error;
 pub mod filters;
 pub mod mls;
+pub mod outbox;
 pub mod recommendation;
 pub mod relay;
 pub mod types;

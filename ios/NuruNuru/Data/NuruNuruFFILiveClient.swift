@@ -428,6 +428,39 @@ final class RustInternalSigner: EventSigner {
     }
 }
 
+
+struct RustPublishDeliveryResult: Sendable {
+    let eventId: String
+    let ok: Bool
+    let okRelays: [String]
+    let failedRelays: [String]
+    let firstOkMs: UInt64
+    let retryQueued: Bool
+    let error: String
+}
+
+struct RustRelayHealthStatus: Sendable {
+    let url: String
+    let role: String
+    let successes: UInt64
+    let failures: UInt64
+    let lastSuccessMs: UInt64
+    let lastFailureMs: UInt64
+    let cooldownUntilMs: UInt64
+    let lastError: String
+    let available: Bool
+}
+
+struct RustPublishOutboxStatus: Sendable {
+    let eventId: String
+    let relayUrls: [String]
+    let createdAtMs: UInt64
+    let updatedAtMs: UInt64
+    let attempts: UInt32
+    let state: String
+    let lastError: String
+}
+
 /// Thin Swift wrapper for Rust raw-event publishing and unsigned-event creation.
 /// Uses the encrypted MLS constructors only, matching the issue #181 guardrails.
 final class RustNostrFFIClient: @unchecked Sendable {
@@ -457,6 +490,20 @@ final class RustNostrFFIClient: @unchecked Sendable {
     func connect(relayUrls: [String]) {
         for relay in relayUrls { try? client.addRelay(url: relay) }
         client.connect()
+        // Best-effort durable outbox retry. Do not block the caller/actor: this
+        // path is invoked from repository publish setup as well as startup.
+        let client = self.client
+        Task.detached(priority: .utility) {
+            do {
+                let retried = try client.retryPendingPublishOutbox(limit: 20)
+                let ok = retried.filter(\.ok).count
+                if !retried.isEmpty {
+                    AppLogger.log("FFI", "Rust publish outbox retry on connect ok=\(ok) total=\(retried.count)")
+                }
+            } catch {
+                AppLogger.log("FFI", "Rust publish outbox retry on connect failed: \(error)")
+            }
+        }
     }
 
     func disconnect() throws { try client.disconnect() }
@@ -479,10 +526,68 @@ final class RustNostrFFIClient: @unchecked Sendable {
 
     @discardableResult
     func publishRawEvent(_ eventJSON: String, relayUrls: [String]?) throws -> String {
+        let result = try publishRawEventResult(eventJSON, relayUrls: relayUrls)
+        return result.eventId
+    }
+
+    func publishRawEventResult(_ eventJSON: String, relayUrls: [String]?) throws -> RustPublishDeliveryResult {
+        let ffiResult: NuruNuruFFILib.FfiPublishResult
         if let relayUrls, !relayUrls.isEmpty {
-            return try client.publishRawEventToRelays(eventJson: eventJSON, relayUrls: relayUrls)
+            ffiResult = try client.publishRawEventToRelaysResult(eventJson: eventJSON, relayUrls: relayUrls)
+        } else {
+            ffiResult = try client.publishRawEventResult(eventJson: eventJSON)
         }
-        return try client.publishRawEvent(eventJson: eventJSON)
+        return Self.bridgePublishResult(ffiResult)
+    }
+
+    func retryPendingPublishOutbox(limit: UInt32 = 20) throws -> [RustPublishDeliveryResult] {
+        try client.retryPendingPublishOutbox(limit: limit).map(Self.bridgePublishResult)
+    }
+
+    func relayHealthSnapshots() -> [RustRelayHealthStatus] {
+        client.relayHealthSnapshots().map(Self.bridgeRelayHealth)
+    }
+
+    func pendingPublishOutbox(limit: UInt32 = 50) throws -> [RustPublishOutboxStatus] {
+        try client.pendingPublishOutbox(limit: limit).map(Self.bridgeOutboxItem)
+    }
+
+    private static func bridgePublishResult(_ r: NuruNuruFFILib.FfiPublishResult) -> RustPublishDeliveryResult {
+        RustPublishDeliveryResult(
+            eventId: r.eventId,
+            ok: r.ok,
+            okRelays: r.okRelays,
+            failedRelays: r.failedRelays,
+            firstOkMs: r.firstOkMs,
+            retryQueued: r.retryQueued,
+            error: r.error
+        )
+    }
+
+    private static func bridgeRelayHealth(_ r: NuruNuruFFILib.FfiRelayHealthSnapshot) -> RustRelayHealthStatus {
+        RustRelayHealthStatus(
+            url: r.url,
+            role: r.role,
+            successes: r.successes,
+            failures: r.failures,
+            lastSuccessMs: r.lastSuccessMs,
+            lastFailureMs: r.lastFailureMs,
+            cooldownUntilMs: r.cooldownUntilMs,
+            lastError: r.lastError,
+            available: r.available
+        )
+    }
+
+    private static func bridgeOutboxItem(_ item: NuruNuruFFILib.FfiPublishOutboxItem) -> RustPublishOutboxStatus {
+        RustPublishOutboxStatus(
+            eventId: item.eventId,
+            relayUrls: item.relayUrls,
+            createdAtMs: item.createdAtMs,
+            updatedAtMs: item.updatedAtMs,
+            attempts: item.attempts,
+            state: item.state,
+            lastError: item.lastError
+        )
     }
 }
 

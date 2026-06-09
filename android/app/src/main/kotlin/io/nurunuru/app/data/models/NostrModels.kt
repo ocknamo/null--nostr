@@ -66,6 +66,41 @@ data class ScoredPost(
     val isBookmarked: Boolean = false
 )
 
+
+// ─── Publish delivery / relay diagnostics ──────────────────────────────────
+
+data class PublishDeliveryResult(
+    val eventId: String = "",
+    val ok: Boolean = false,
+    val okRelays: List<String> = emptyList(),
+    val failedRelays: List<String> = emptyList(),
+    val firstOkMs: Long = 0L,
+    val retryQueued: Boolean = false,
+    val error: String = ""
+)
+
+data class RelayHealthStatus(
+    val url: String,
+    val role: String,
+    val successes: Long,
+    val failures: Long,
+    val lastSuccessMs: Long,
+    val lastFailureMs: Long,
+    val cooldownUntilMs: Long,
+    val lastError: String,
+    val available: Boolean
+)
+
+data class PublishOutboxStatus(
+    val eventId: String,
+    val relayUrls: List<String>,
+    val createdAtMs: Long,
+    val updatedAtMs: Long,
+    val attempts: Int,
+    val state: String,
+    val lastError: String
+)
+
 /** NIP-17 DM conversation — legacy, kept for read-only display during migration. */
 @Deprecated("Use MlsGroup for new conversations (NIP-EE)")
 data class DmConversation(
@@ -195,7 +230,7 @@ val DEFAULT_RELAYS = listOf(
     "wss://relay.damus.io"
 )
 
-// Nostr event kinds - synced with web version lib/constants.js NOSTR_KINDS
+// Nostr event kinds - synced with Web lib/nostr-kinds.js NOSTR_KINDS and iOS NostrKind
 object NostrKind {
     const val METADATA = 0
     const val TEXT_NOTE = 1
@@ -210,6 +245,8 @@ object NostrKind {
     const val DIRECT_MESSAGE = 14       // NIP-17 chat message
     const val FILE_MESSAGE = 15         // NIP-17 file message
     const val GENERIC_REPOST = 16
+    const val VIDEO_EVENT = 21             // NIP-71 regular video event
+    const val PORTRAIT_SHORT_VIDEO = 22    // NIP-71 short-form portrait video event
     const val CHANNEL_CREATE = 40
     const val CHANNEL_META = 41
     const val CHANNEL_MESSAGE = 42
@@ -221,7 +258,6 @@ object NostrKind {
     const val LABEL = 1985              // Birdwatch
     const val NIP98_AUTH = 27235
     const val BLOSSOM_AUTH = 24242
-    const val CLIENT_AUTH = 22242       // NIP-42 relay authentication
     const val ZAP_REQUEST = 9734
     const val ZAP_RECEIPT = 9735
     const val MUTE_LIST = 10000
@@ -236,12 +272,19 @@ object NostrKind {
     const val INTERESTS = 10015
     const val EMOJI_LIST = 10030
     const val DM_RELAY_LIST = 10050     // NIP-17 DM receiving relay list
+    const val BLOSSOM_USER_SERVER_LIST = 10063
+    const val NSITE_ROOT = 15128        // NIP-5A root nsite manifest
+    const val CLIENT_AUTH = 22242       // NIP-42 relay authentication
+    const val NOSTR_CONNECT = 24133     // NIP-46 / Nostr Connect
     const val LONG_FORM = 30023
     const val DRAFT_LONG_FORM = 30024
     const val EMOJI_SET = 30030
     const val BADGE_DEFINITION = 30009
     const val PROFILE_BADGES = 30008
-    const val VIDEO_LOOP = 34236
+    const val NSITE_LEGACY = 34128      // NIP-5A legacy nsite manifest (deprecated upstream)
+    const val ADDRESSABLE_VIDEO = 34235 // NIP-71 addressable video event
+    const val ADDRESSABLE_SHORT_VIDEO = 34236
+    const val NSITE_NAMED = 35128       // NIP-5A named nsite manifest
     // Chronostr (calendar/scheduler)
     const val CALENDAR_RSVP = 31925
     const val DATE_CANDIDATE = 31926

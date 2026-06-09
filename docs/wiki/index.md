@@ -108,6 +108,7 @@
 | Page | Summary |
 |---|---|
 | [[nips/README]] | コード確認に基づく対応 NIP 一覧と規約。 |
+| [[nips/kind-registry]] | upstream NIP / registry-of-kinds に基づく kind audit notes。 |
 | [[nips/nip-04]] | Legacy encrypted DM compatibility paths。 |
 | [[nips/nip-17]] | Private Direct Messages と native Talk の legacy 境界。 |
 | [[nips/nip-18]] | Reposts and quote repost behavior。 |
@@ -118,6 +119,7 @@
 | [[nips/nip-51]] | Lists: mute, bookmarks, emoji list。 |
 | [[nips/nip-58]] | Badges: awards, definitions, profile badges。 |
 | [[nips/nip-59]] | Gift wrap: NIP-17 DMs and Marmot Welcome delivery。 |
+| [[nips/nip-5a]] | Static Websites / nsites。Scroll mini-app kinds 1227/10027 との境界。 |
 | [[nips/nip-46]] | Nostr Connect / 外部署名。 |
 | [[nips/nip-50]] | Search capability / searchnos / feedback-loop MCP。 |
 | [[nips/nip-57]] | Lightning Zaps。 |
@@ -125,6 +127,7 @@
 | [[nips/nip-70]] | Protected events / `[-]` tag。 |
 | [[nips/nip-71]] | ろくなな short video / kind 34236。 |
 | [[nips/nip-98]] | Upload HTTP auth / Blossom auth。 |
+| [[nips/nip-b7]] | Blossom upload ecosystem、kind 10063 / 24242、NIP-96 legacy 境界。 |
 
 ## Decisions
 

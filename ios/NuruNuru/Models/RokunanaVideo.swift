@@ -190,11 +190,11 @@ struct RokunanaVideo: Identifiable, Hashable {
 
 enum RokunanaVideoKinds {
     /// OpenVine/diVine discovery uses only kind 34236.
-    static let addressableShortVideo = NostrKind.videoLoop
+    static let addressableShortVideo = NostrKind.addressableShortVideo
     static let discoveryKinds = [addressableShortVideo]
 
     /// Accepted when parsing referenced videos from outside diVine.
-    static let acceptableVideoKinds = [22, 21, 34235, 34236, 34237]
+    static let acceptableVideoKinds = [NostrKind.portraitShortVideo, NostrKind.videoEvent, NostrKind.addressableVideo, NostrKind.addressableShortVideo, 34237]
 }
 
 enum RokunanaRelays {

@@ -804,14 +804,13 @@ class TimelineViewModel(
             val posts = try { repository.fetchRelayTimeline(relayUrl, 50) }
                         catch (_: Exception) { emptyList() }
             if (posts.isEmpty()) {
-                // タイムアウトまたは接続失敗 → リレー選択を解除して通常フィードに戻す
+                // タイムアウトまたは接続失敗でも既存表示は消さない。
+                // Relay tabs are explicitly selected by the user; an empty/slow
+                // relay response should not auto-deselect the relay or blank a
+                // previously healthy feed.
                 android.util.Log.d("TimelineViewModel",
-                    "loadRelayFeed: $relayUrl returned 0 events, auto-deselecting")
-                _uiState.update { it.copy(
-                    selectedRelayUrl = null,
-                    relayPosts = emptyList(),
-                    isRelayFeedLoading = false
-                ) }
+                    "loadRelayFeed: $relayUrl returned 0 events; preserving current relay feed")
+                _uiState.update { it.copy(isRelayFeedLoading = false) }
             } else {
                 // 初回取得イベントを既読としてマーク（ライブストリームとの重複防止）
                 seenRelayEventIds.addAll(posts.map { it.event.id })

@@ -7,7 +7,7 @@ NIP-46 is used for remote/external signing. In this repository it is especially 
 ## Current behavior
 
 - Web implements a NIP-46 client/session flow in `lib/nip46.js`.
-- iOS has `ExternalSigner.swift`, described as a NIP-46 remote signer client; messages are kind 24133 encrypted with NIP-44.
+- iOS has `ExternalSigner.swift`, described as a NIP-46 remote signer client; messages are Nostr Connect kind 24133 encrypted with NIP-44.
 - iOS login exposes a Nostr Connect path and `AuthViewModel` completes login after NIP-46 connection.
 - Android uses NIP-55/Amber for external signing rather than NIP-46 as the main native external signer path.
 - Rust FFI/core supports unsigned event creation and raw signed event publishing, which external signer paths use.

@@ -54,6 +54,7 @@ import EmojiPicker from './EmojiPicker'
 import { NOSTR_KINDS } from '@/lib/constants'
 import { useSTT } from '@/hooks/useSTT'
 import DivineVideoRecorder from './DivineVideoRecorder'
+import { recordMetric } from '@/lib/performance-metrics'
 
 // Extract hashtags from content (NIP-01)
 function extractHashtags(content) {
@@ -484,6 +485,7 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
       return
     }
     
+    const fetchStartedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
     const readRelays = getReadRelays()
     // アプリ版に合わせて 2 日間ウィンドウを使用:
     //   - Android NostrRepositoryTimeline.fetchFollowingTimelineFast: since = now - 2 * DAY_SECS
@@ -492,7 +494,7 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
     const twoDaysAgo = Math.floor(Date.now() / 1000) - 2 * 24 * 3600
 
     try {
-      const noteFilter = { kinds: [1, NOSTR_KINDS.LONG_FORM, NOSTR_KINDS.SHORT_VIDEO], authors: followList, since: twoDaysAgo, limit: 100 }
+      const noteFilter = { kinds: [1, NOSTR_KINDS.LONG_FORM, NOSTR_KINDS.ADDRESSABLE_SHORT_VIDEO], authors: followList, since: twoDaysAgo, limit: 100 }
       const repostFilter = { kinds: [6], authors: followList, since: twoDaysAgo, limit: 50 }
       
       const [notes, reposts] = await Promise.all([
@@ -527,7 +529,10 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
         return timeB - timeA
       })
 
-      setFollowingPosts(allPosts)
+      if (allPosts.length > 0 || followingPosts.length === 0) {
+        setFollowingPosts(allPosts)
+      }
+      recordMetric('timeline.following.firstPage', ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - fetchStartedAt, { count: allPosts.length, emptyPreserved: allPosts.length === 0 && followingPosts.length > 0 })
       initialLoadDone.current = true
       
       // Fetch profiles
@@ -999,7 +1004,7 @@ const TimelineTab = forwardRef(function TimelineTab({ pubkey, onStartDM, scrollC
 
       // Add video tags if present (imeta for diVine compatibility)
       if (recordedVideo) {
-        event.kind = 34236
+        event.kind = NOSTR_KINDS.ADDRESSABLE_SHORT_VIDEO
         const hashTag = recordedVideo.proofTags?.find(t => t[0] === 'x')
         const hash = hashTag ? hashTag[1] : ''
 

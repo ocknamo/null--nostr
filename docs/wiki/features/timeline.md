@@ -10,6 +10,8 @@ Timeline は投稿一覧表示とリアクション状態を扱う主要機能�
 - Timeline is network-first for event pages: stale event cache must not be rendered as the normal first paint or silently mixed into the time axis.
 - Timeline event cache is fallback-only for offline / hard relay failure cases; profile/avatar/follow-list caches remain cache-first.
 - Timeline refresh is cache-safe: transient empty relay responses must not replace an already-visible non-empty timeline or overwrite healthy cached timelines.
+- Timeline enrichment is progressive: Android no longer verifies NIP-05 inside `NostrRepository.enrichPosts()` so DNS/HTTPS verification cannot block first paint; profile/detail surfaces may still verify NIP-05 explicitly.
+- Web following timeline records a local first-page metric and preserves existing posts when a transient empty relay result arrives.
 - Pagination cursors track the oldest post in the fresh contiguous head, not the oldest stale cached post, so users can fill gaps between new posts and old cache.
 - Older-page fetches are bounded to a 6-hour window and return raw posts with cached profiles first; engagement/profile enrichment runs after render. Empty pagination windows are skipped across several bounded windows, and a single empty/failed page no longer permanently disables further old-post loading.
 - Follow pagination uses active-author discovery plus smaller author chunks instead of one huge 500-author REQ.
@@ -29,10 +31,12 @@ Timeline は投稿一覧表示とリアクション状態を扱う主要機能�
 
 - `TimelineViewModel` が フォロー / おすすめ を担当。
 - `TimelineViewModel.loadFollowingTimeline()` and `loadGlobalTimeline()` keep existing posts when a refresh returns an empty list and the UI already has posts.
+- `TimelineViewModel.loadRelayFeed()` also keeps the selected relay and visible relay posts when a slow/empty relay response arrives, instead of auto-deselecting and blanking the feed.
 - NostrRepositoryTimeline.kt fetches TEXT_NOTE, LONG_FORM, and REPOST in regular timeline paths; VIDEO_LOOP is excluded from normal timelines.
 - `NostrRepositoryTimeline.kt` falls back to cached nostrdb follow-timeline data when Rust/relay fetch returns no events, the follow list is temporarily empty, or parsed events are empty.
 - `TimelineScreen.kt` triggers load-more near the bottom of `LazyColumn`; `TimelineViewModel.loadMore()` appends deduped older pages.
 - `NostrRepository.enrichPosts()` が自分のリアクション event id を付与する。
+- `NostrRepository.enrichPosts()` intentionally sets timeline `isVerified=false` and leaves NIP-05 verification to non-hot paths.
 - `PostItem.kt` では `remember(post.event.id)` を使う。
 
 ### iOS
@@ -51,6 +55,9 @@ Timeline は投稿一覧表示とリアクション状態を扱う主要機能�
 - `ios/NuruNuru/Views/Screens/TimelineView.swift`
 - `ios/NuruNuru/Data/NostrRepository+Timeline.swift`
 - `rust-engine/nurunuru-core/src/engine.rs`
+- `components/TimelineTab.js`
+- `components/URLPreview.js`
+- `lib/performance-metrics.js`
 - `ios/GUARDRAILS.md`
 
 ## Related pages

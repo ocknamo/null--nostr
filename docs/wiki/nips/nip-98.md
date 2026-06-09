@@ -7,6 +7,7 @@ NIP-98 HTTP authentication is used for upload targets that require signed HTTP a
 ## Current behavior
 
 - Uploads to nostr.build / share.yabu.me style endpoints add NIP-98 auth where possible.
+- Upstream marks NIP-96 HTTP File Storage Integration as unrecommended/replaced by Blossom, so NIP-96-style response handling should be documented as compatibility rather than the preferred upload standard.
 - iOS `ImageUploadService` creates kind 27235 auth for NIP-98 paths.
 - Blossom upload paths use PUT plus Blossom auth kind 24242 in current code.
 - Backup upload paths also add auth headers.

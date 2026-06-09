@@ -3,6 +3,9 @@ package io.nurunuru.app.data
 import android.content.Context
 import android.util.Log
 import io.nurunuru.app.data.models.NostrEvent
+import io.nurunuru.app.data.models.PublishDeliveryResult
+import io.nurunuru.app.data.models.PublishOutboxStatus
+import io.nurunuru.app.data.models.RelayHealthStatus
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.encodeToString
@@ -14,6 +17,9 @@ import uniffi.nurunuru.FfiEncryptedMessageData
 import uniffi.nurunuru.FfiKeyPackageEventData
 import uniffi.nurunuru.FfiMlsGroupInfo
 import uniffi.nurunuru.FfiScoredPost
+import uniffi.nurunuru.FfiPublishResult
+import uniffi.nurunuru.FfiRelayHealthSnapshot
+import uniffi.nurunuru.FfiPublishOutboxItem
 import uniffi.nurunuru.FfiUserProfile
 import uniffi.nurunuru.NuruNuruClient
 import java.util.concurrent.ConcurrentHashMap
@@ -112,6 +118,19 @@ class NostrClient(
                 }
 
                 client.connect()
+
+                // Durable outbox retry is best-effort and must never block startup.
+                scope.launch {
+                    try {
+                        val retried = client.retryPendingPublishOutbox(20u)
+                        val ok = retried.count { it.ok }
+                        if (retried.isNotEmpty()) {
+                            Log.d(TAG, "Publish outbox retry on connect: ok=$ok total=${retried.size}")
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Publish outbox retry on connect failed: ${e.message}")
+                    }
+                }
 
                 Log.d(TAG, "NuruNuru Rust Client connected")
 
@@ -250,18 +269,69 @@ class NostrClient(
 
     /** Publish a pre-signed Nostr event as-is (used for backup import). */
     suspend fun publishEvent(event: NostrEvent): Boolean {
+        return publishEventResult(event).ok
+    }
+
+    /** Publish a pre-signed event and return structured delivery information. */
+    suspend fun publishEventResult(event: NostrEvent): PublishDeliveryResult {
         return withContext(Dispatchers.IO) {
-            val client = ensureClient() ?: return@withContext false
+            val client = ensureClient() ?: return@withContext PublishDeliveryResult(error = "Rust client unavailable", retryQueued = true)
             try {
                 val jsonStr = Json { encodeDefaults = true }.encodeToString(event)
-                client.publishRawEvent(jsonStr)
-                true
+                client.publishRawEventResult(jsonStr).toPublishDeliveryResult()
             } catch (e: Exception) {
                 Log.w(TAG, "Publish raw event failed: ${e.message}")
-                false
+                PublishDeliveryResult(eventId = event.id, ok = false, retryQueued = true, error = e.message ?: "publish failed")
             }
         }
     }
+
+    suspend fun retryPendingPublishOutbox(limit: UInt = 20u): List<PublishDeliveryResult> = withContext(Dispatchers.IO) {
+        try { ensureClient()?.retryPendingPublishOutbox(limit)?.map { it.toPublishDeliveryResult() } ?: emptyList() }
+        catch (e: Exception) { Log.w(TAG, "retryPendingPublishOutbox failed: ${e.message}"); emptyList() }
+    }
+
+    suspend fun getRelayHealthSnapshots(): List<RelayHealthStatus> = withContext(Dispatchers.IO) {
+        try { ensureClient()?.relayHealthSnapshots()?.map { it.toRelayHealthStatus() } ?: emptyList() }
+        catch (e: Exception) { Log.w(TAG, "relayHealthSnapshots failed: ${e.message}"); emptyList() }
+    }
+
+    suspend fun getPendingPublishOutbox(limit: UInt = 50u): List<PublishOutboxStatus> = withContext(Dispatchers.IO) {
+        try { ensureClient()?.pendingPublishOutbox(limit)?.map { it.toPublishOutboxStatus() } ?: emptyList() }
+        catch (e: Exception) { Log.w(TAG, "pendingPublishOutbox failed: ${e.message}"); emptyList() }
+    }
+
+    private fun FfiPublishResult.toPublishDeliveryResult() = PublishDeliveryResult(
+        eventId = eventId,
+        ok = ok,
+        okRelays = okRelays,
+        failedRelays = failedRelays,
+        firstOkMs = firstOkMs.toLong(),
+        retryQueued = retryQueued,
+        error = error
+    )
+
+    private fun FfiRelayHealthSnapshot.toRelayHealthStatus() = RelayHealthStatus(
+        url = url,
+        role = role,
+        successes = successes.toLong(),
+        failures = failures.toLong(),
+        lastSuccessMs = lastSuccessMs.toLong(),
+        lastFailureMs = lastFailureMs.toLong(),
+        cooldownUntilMs = cooldownUntilMs.toLong(),
+        lastError = lastError,
+        available = available
+    )
+
+    private fun FfiPublishOutboxItem.toPublishOutboxStatus() = PublishOutboxStatus(
+        eventId = eventId,
+        relayUrls = relayUrls,
+        createdAtMs = createdAtMs.toLong(),
+        updatedAtMs = updatedAtMs.toLong(),
+        attempts = attempts.toInt(),
+        state = state,
+        lastError = lastError
+    )
 
     fun recordEngagement(action: String, authorPubkey: String) {
         sdkClient?.recordEngagement(action, authorPubkey)

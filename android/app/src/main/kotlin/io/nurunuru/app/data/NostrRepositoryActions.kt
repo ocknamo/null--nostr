@@ -105,7 +105,14 @@ suspend fun NostrRepository.publishNote(
                     try { rustClient.addRelay(relay) }
                     catch (e: Exception) { android.util.Log.w("NostrRepository", "Ext publishNote addRelay failed: " + relay + " / " + e.message) }
                 }
-                rustClient.publishRawEvent(signedJson)
+                val result = if (!targetRelays.isNullOrEmpty()) {
+                    rustClient.publishRawEventToRelaysResult(signedJson, targetRelays)
+                } else {
+                    rustClient.publishRawEventResult(signedJson)
+                }
+                if (!result.ok) {
+                    android.util.Log.w("NostrRepository", "Ext publishNote queued/failed id=${result.eventId} retry=${result.retryQueued} err=${result.error}")
+                }
             }
             android.util.Log.d("NostrRepository", "Ext publishNote OK")
             try { json.decodeFromString<NostrEvent>(signedJson).also { ev -> cacheUserNotePost(ev.pubkey.ifBlank { myPubkeyHex }, ScoredPost(event = ev, profile = getCachedProfile(ev.pubkey.ifBlank { myPubkeyHex }))) } } catch (_: Exception) { null }
@@ -120,9 +127,13 @@ suspend fun NostrRepository.publishNote(
             val eventId = withContext(Dispatchers.IO) {
                 if (!targetRelays.isNullOrEmpty()) {
                     android.util.Log.d("NostrRepository", "publishNote to ${targetRelays.size} relays: $targetRelays")
-                    rustClient.publishNoteWithTagsToRelays(content, tags, targetRelays)
+                    val result = rustClient.publishNoteWithTagsToRelaysResult(content, tags, targetRelays)
+                    if (!result.ok) android.util.Log.w("NostrRepository", "Rust targeted publish queued/failed id=${result.eventId} retry=${result.retryQueued} err=${result.error}")
+                    result.eventId
                 } else {
-                    rustClient.publishNoteWithTags(content, tags)
+                    val result = rustClient.publishNoteWithTagsResult(content, tags)
+                    if (!result.ok) android.util.Log.w("NostrRepository", "Rust publish queued/failed id=${result.eventId} retry=${result.retryQueued} err=${result.error}")
+                    result.eventId
                 }
             }
             android.util.Log.d("NostrRepository", "Rust publishNote OK: $eventId")

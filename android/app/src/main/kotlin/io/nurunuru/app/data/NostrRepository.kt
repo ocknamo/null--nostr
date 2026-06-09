@@ -118,8 +118,11 @@ class NostrRepository(
         // publishRawEvent() は Rust FFI のブロッキング呼び出し — IO スレッドで実行してメイン ANR を防ぐ
         return withContext(kotlinx.coroutines.Dispatchers.IO) {
             try {
-                rustClient.publishRawEvent(signedJson)
-                kotlinx.serialization.json.Json.parseToJsonElement(signedJson)
+                val result = rustClient.publishRawEventResult(signedJson)
+                if (!result.ok) {
+                    android.util.Log.w("NostrRepository", "signAndPublish: publish queued/failed id=${result.eventId} retry=${result.retryQueued} err=${result.error}")
+                }
+                result.eventId.takeIf { it.isNotEmpty() } ?: kotlinx.serialization.json.Json.parseToJsonElement(signedJson)
                     .jsonObject["id"]?.jsonPrimitive?.content
             } catch (e: Exception) {
                 android.util.Log.w("NostrRepository", "signAndPublish: publish failed: ${e.message}")
@@ -161,6 +164,17 @@ class NostrRepository(
             null
         }
     }
+
+    // ─── Publish delivery / relay diagnostics ────────────────────────────────
+
+    suspend fun retryPendingPublishOutbox(limit: UInt = 20u): List<PublishDeliveryResult> =
+        client.retryPendingPublishOutbox(limit)
+
+    suspend fun getRelayHealthSnapshots(): List<RelayHealthStatus> =
+        client.getRelayHealthSnapshots()
+
+    suspend fun getPendingPublishOutbox(limit: UInt = 50u): List<PublishOutboxStatus> =
+        client.getPendingPublishOutbox(limit)
 
     // ─── Profiles (shared — used by enrichPosts) ──────────────────────────────
 
@@ -474,21 +488,16 @@ class NostrRepository(
 
         val replyCounts = replyEvents.groupBy { it.getTagValue("e") ?: "" }.mapValues { it.value.size }
 
-        // Parallel NIP-05 verification
-        val verificationDeferred = profiles.values.filter { it.nip05 != null }.map { profile ->
-            async {
-                val isVerified = Nip05Utils.verifyNip05(profile.nip05!!, profile.pubkey)
-                profile.pubkey to isVerified
-            }
-        }
-        val verificationResults = verificationDeferred.awaitAll().toMap()
-
+        // Keep NIP-05 verification out of the timeline hot path.
+        // DNS/HTTPS verification is high-latency and failure-prone, so timeline
+        // first paint should render from cached profiles and engagement data only.
+        // Profile/detail screens may still verify NIP-05 explicitly.
         processedItems.map { (event, repost) ->
             val likeCount = reactionCounts[event.id] ?: 0
             val repostCount = repostCounts[event.id] ?: 0
             val replyCount = replyCounts[event.id] ?: 0
             val zapAmount = zaps[event.id] ?: 0L
-            val isVerified = verificationResults[event.pubkey] ?: false
+            val isVerified = false
 
             // Scoring matching web weights (lib/recommendation.js):
             // Zap=100, custom_reaction=60, quote=35, reply=30, Repost=25, bookmark=15, Like=5

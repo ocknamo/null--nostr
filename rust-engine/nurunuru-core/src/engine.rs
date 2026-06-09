@@ -38,6 +38,7 @@ use crate::config::NuruNuruConfig;
 use crate::error::{NuruNuruError, Result};
 use crate::filters;
 use crate::mls::MlsManager;
+use crate::outbox::{PublishOutbox, PublishOutboxItem, PublishResult};
 use crate::recommendation::RecommendationEngine;
 use crate::relay;
 use crate::types::*;
@@ -69,6 +70,10 @@ pub struct NuruNuruEngine {
 
     // SSE streaming subscriptions: sub_id → event buffer
     subscription_buffers: Arc<Mutex<HashMap<String, SubBuffer>>>,
+
+    // Relay health/router state and durable publish outbox.
+    relay_router: RwLock<relay::RelayRouter>,
+    publish_outbox: PublishOutbox,
 
     /// MLS manager — bound lazily by `login()`, re-bound by `mls_reset()`.
     /// `Arc` so MLS calls run without holding the lock (allowing concurrent
@@ -118,6 +123,8 @@ impl NuruNuruEngine {
         }
 
         let recommendation = RecommendationEngine::new(config.recommendation.clone());
+        let relay_router = relay::RelayRouter::new(&config.relay);
+        let publish_outbox = PublishOutbox::new(&config.db_path);
 
         // MLS manager is bound lazily by `login()` so the user pubkey is
         // *always* known before any MLS state is created. Read-only / anonymous
@@ -135,6 +142,8 @@ impl NuruNuruEngine {
             not_interested_posts: RwLock::new(HashSet::new()),
             author_scores: RwLock::new(HashMap::new()),
             subscription_buffers: Arc::new(Mutex::new(HashMap::new())),
+            relay_router: RwLock::new(relay_router),
+            publish_outbox,
             mls: RwLock::new(None),
             mls_db_key: RwLock::new(None),
         });
@@ -873,12 +882,27 @@ impl NuruNuruEngine {
 
     /// Publish a text note (kind 1).
     pub async fn publish_note(&self, content: &str, tags: Vec<Tag>) -> Result<EventId> {
+        let result = self.publish_note_result(content, tags).await?;
+        if result.ok {
+            EventId::from_hex(&result.event_id)
+                .map_err(|e| NuruNuruError::EventError(format!("invalid published event id: {e}")))
+        } else {
+            Err(NuruNuruError::RelayError(result.error))
+        }
+    }
+
+    /// Publish a text note and return structured delivery information.
+    pub async fn publish_note_result(
+        &self,
+        content: &str,
+        tags: Vec<Tag>,
+    ) -> Result<PublishResult> {
         let mut builder = EventBuilder::text_note(content);
         for tag in tags {
             builder = builder.tag(tag);
         }
-        let output = self.client.send_event_builder(builder).await?;
-        Ok(output.val)
+        let event = self.client.sign_event_builder(builder).await?;
+        self.publish_signed_event_result(event, Vec::new()).await
     }
 
     /// Publish a reaction (kind 7, NIP-25).
@@ -1096,6 +1120,28 @@ impl NuruNuruEngine {
         Ok(())
     }
 
+    /// RelayRouter health snapshots for diagnostics and platform UI.
+    pub async fn relay_health_snapshots(&self) -> Vec<relay::RelayHealthSnapshot> {
+        let now = relay::now_ms();
+        self.relay_router.read().await.snapshots(now)
+    }
+
+    /// Enqueue a fully-signed event JSON for durable retry without publishing.
+    pub async fn enqueue_publish_outbox(
+        &self,
+        event: &Event,
+        relay_urls: Vec<String>,
+    ) -> Result<()> {
+        self.publish_outbox
+            .enqueue(event.id.to_hex(), event.as_json(), relay_urls)
+            .await
+    }
+
+    /// List pending/failed durable publish items. Contains signed event JSON only.
+    pub async fn pending_publish_outbox(&self, limit: usize) -> Result<Vec<PublishOutboxItem>> {
+        self.publish_outbox.pending(limit).await
+    }
+
     /// Query local nostrdb cache without hitting relays.
     pub async fn query_local(&self, filter: Filter) -> Result<Vec<Event>> {
         let events = self
@@ -1156,17 +1202,150 @@ impl NuruNuruEngine {
             .filter_map(|u| RelayUrl::parse(u).ok())
             .collect();
 
-        let events = self
+        let now = relay::now_ms();
+        let candidate_strings: Vec<String> = urls.iter().map(|u| u.to_string()).collect();
+        let available_strings = {
+            let router = self.relay_router.read().await;
+            router.available_relays(&candidate_strings, now)
+        };
+        let target_urls: Vec<RelayUrl> = available_strings
+            .iter()
+            .filter_map(|u| RelayUrl::parse(u).ok())
+            .collect();
+
+        match self
             .client
-            .fetch_events_from(urls, filter, Duration::from_secs(timeout_secs))
-            .await?;
-        Ok(events.into_iter().collect())
+            .fetch_events_from(target_urls, filter, Duration::from_secs(timeout_secs))
+            .await
+        {
+            Ok(events) => {
+                let mut router = self.relay_router.write().await;
+                let now = relay::now_ms();
+                for url in &available_strings {
+                    router.record_success(url, now);
+                }
+                Ok(events.into_iter().collect())
+            }
+            Err(err) => {
+                let mut router = self.relay_router.write().await;
+                let now = relay::now_ms();
+                let msg = err.to_string();
+                for url in &available_strings {
+                    router.record_failure(url, now, &msg);
+                }
+                Err(err.into())
+            }
+        }
     }
 
     /// Send any `EventBuilder` — used by the FFI's generic `publish_event`.
     pub async fn send_builder(&self, builder: EventBuilder) -> Result<EventId> {
         let output = self.client.send_event_builder(builder).await?;
         Ok(output.val)
+    }
+
+    async fn publish_signed_event_result(
+        &self,
+        event: Event,
+        relay_urls: Vec<String>,
+    ) -> Result<PublishResult> {
+        let event_id = event.id.to_hex();
+        self.publish_outbox
+            .enqueue(event_id.clone(), event.as_json(), relay_urls.clone())
+            .await?;
+
+        let started_at = relay::now_ms();
+        if relay_urls.is_empty() {
+            return match self.client.send_event(&event).await {
+                Ok(_output) => {
+                    self.publish_outbox.mark_published(&event_id).await?;
+                    Ok(PublishResult {
+                        event_id,
+                        ok: true,
+                        ok_relays: Vec::new(),
+                        failed_relays: Vec::new(),
+                        first_ok_ms: relay::now_ms().saturating_sub(started_at),
+                        retry_queued: false,
+                        error: String::new(),
+                    })
+                }
+                Err(err) => {
+                    let msg = err.to_string();
+                    let _ = self.publish_outbox.mark_failed(&event_id, &msg).await;
+                    Ok(PublishResult {
+                        event_id,
+                        ok: false,
+                        ok_relays: Vec::new(),
+                        failed_relays: Vec::new(),
+                        first_ok_ms: 0,
+                        retry_queued: true,
+                        error: msg,
+                    })
+                }
+            };
+        }
+
+        let now = relay::now_ms();
+        let available_relays = {
+            let router = self.relay_router.read().await;
+            router.available_relays(&relay_urls, now)
+        };
+        let urls: Vec<nostr::types::Url> = available_relays
+            .iter()
+            .filter_map(|u| u.parse().ok())
+            .collect();
+
+        match self.client.send_event_to(urls, &event).await {
+            Ok(_output) => {
+                self.publish_outbox.mark_published(&event_id).await?;
+                let mut router = self.relay_router.write().await;
+                let now = relay::now_ms();
+                for url in &available_relays {
+                    router.record_success(url, now);
+                }
+                Ok(PublishResult {
+                    event_id,
+                    ok: true,
+                    ok_relays: available_relays,
+                    failed_relays: Vec::new(),
+                    first_ok_ms: relay::now_ms().saturating_sub(started_at),
+                    retry_queued: false,
+                    error: String::new(),
+                })
+            }
+            Err(err) => {
+                let msg = err.to_string();
+                let _ = self.publish_outbox.mark_failed(&event_id, &msg).await;
+                let mut router = self.relay_router.write().await;
+                let now = relay::now_ms();
+                for url in &available_relays {
+                    router.record_failure(url, now, &msg);
+                }
+                Ok(PublishResult {
+                    event_id,
+                    ok: false,
+                    ok_relays: Vec::new(),
+                    failed_relays: available_relays,
+                    first_ok_ms: 0,
+                    retry_queued: true,
+                    error: msg,
+                })
+            }
+        }
+    }
+
+    /// Retry pending/failed signed events from the durable publish outbox.
+    pub async fn retry_pending_publish_outbox(&self, limit: usize) -> Result<Vec<PublishResult>> {
+        let items = self.publish_outbox.pending(limit).await?;
+        let mut results = Vec::with_capacity(items.len());
+        for item in items {
+            let event: Event = serde_json::from_str(&item.event_json)?;
+            results.push(
+                self.publish_signed_event_result(event, item.relay_urls)
+                    .await?,
+            );
+        }
+        Ok(results)
     }
 
     /// Publish an already-signed Nostr event to all connected relays.
@@ -1178,8 +1357,18 @@ impl NuruNuruEngine {
     ///
     /// Returns the event ID on success.
     pub async fn publish_raw_event(&self, event: Event) -> Result<EventId> {
-        let output = self.client.send_event(&event).await?;
-        Ok(output.val)
+        let result = self.publish_raw_event_result(event).await?;
+        if result.ok {
+            EventId::from_hex(&result.event_id)
+                .map_err(|e| NuruNuruError::EventError(format!("invalid published event id: {e}")))
+        } else {
+            Err(NuruNuruError::RelayError(result.error))
+        }
+    }
+
+    /// Publish an already-signed event and return structured delivery information.
+    pub async fn publish_raw_event_result(&self, event: Event) -> Result<PublishResult> {
+        self.publish_signed_event_result(event, Vec::new()).await
     }
 
     /// Publish an already-signed Nostr event to specific relays only.
@@ -1188,10 +1377,24 @@ impl NuruNuruEngine {
         event: Event,
         relay_urls: Vec<String>,
     ) -> Result<EventId> {
-        let urls: Vec<nostr::types::Url> =
-            relay_urls.iter().filter_map(|u| u.parse().ok()).collect();
-        let output = self.client.send_event_to(urls, &event).await?;
-        Ok(output.val)
+        let result = self
+            .publish_raw_event_to_relays_result(event, relay_urls)
+            .await?;
+        if result.ok {
+            EventId::from_hex(&result.event_id)
+                .map_err(|e| NuruNuruError::EventError(format!("invalid published event id: {e}")))
+        } else {
+            Err(NuruNuruError::RelayError(result.error))
+        }
+    }
+
+    /// Publish an already-signed event to specific relays and return structured delivery information.
+    pub async fn publish_raw_event_to_relays_result(
+        &self,
+        event: Event,
+        relay_urls: Vec<String>,
+    ) -> Result<PublishResult> {
+        self.publish_signed_event_result(event, relay_urls).await
     }
 
     /// Publish a note to specific relays only (NIP-70 relay selection).
@@ -1201,15 +1404,30 @@ impl NuruNuruEngine {
         tags: Vec<Tag>,
         relay_urls: Vec<String>,
     ) -> Result<EventId> {
+        let result = self
+            .publish_note_to_relays_result(content, tags, relay_urls)
+            .await?;
+        if result.ok {
+            EventId::from_hex(&result.event_id)
+                .map_err(|e| NuruNuruError::EventError(format!("invalid published event id: {e}")))
+        } else {
+            Err(NuruNuruError::RelayError(result.error))
+        }
+    }
+
+    /// Publish a note to specific relays and return structured delivery information.
+    pub async fn publish_note_to_relays_result(
+        &self,
+        content: &str,
+        tags: Vec<Tag>,
+        relay_urls: Vec<String>,
+    ) -> Result<PublishResult> {
         let mut builder = EventBuilder::text_note(content);
         for tag in tags {
             builder = builder.tag(tag);
         }
-        let urls: Vec<nostr::types::Url> =
-            relay_urls.iter().filter_map(|u| u.parse().ok()).collect();
         let event = self.client.sign_event_builder(builder).await?;
-        let output = self.client.send_event_to(urls, &event).await?;
-        Ok(output.val)
+        self.publish_signed_event_result(event, relay_urls).await
     }
 
     /// Store a raw event directly into nostrdb (bypasses relay network).

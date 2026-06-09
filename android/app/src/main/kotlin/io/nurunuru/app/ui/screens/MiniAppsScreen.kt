@@ -59,6 +59,8 @@ import io.nurunuru.app.data.*
 import io.nurunuru.app.data.RelayDiscovery
 import io.nurunuru.app.data.models.DEFAULT_RELAYS
 import io.nurunuru.app.data.models.Nip65Relay
+import io.nurunuru.app.data.models.PublishOutboxStatus
+import io.nurunuru.app.data.models.RelayHealthStatus
 import io.nurunuru.app.data.prefs.AppPreferences
 import io.nurunuru.app.data.NostrRepository
 import io.nurunuru.app.ui.icons.NuruIcons
@@ -656,6 +658,110 @@ private fun MiniAppDetailView(
 }
 
 @Composable
+private fun PublishDiagnosticsCard(
+    pendingOutbox: List<PublishOutboxStatus>,
+    relayHealth: List<RelayHealthStatus>,
+    diagnosticsLoading: Boolean,
+    retryingOutbox: Boolean,
+    retrySummary: String?,
+    onRefresh: () -> Unit,
+    onRetry: () -> Unit
+) {
+    val nuruColors = LocalNuruColors.current
+    Surface(
+        color = nuruColors.bgSecondary,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth().padding(top = 16.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("送信状態とリレー診断", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = nuruColors.textPrimary)
+                    Text("端末内の署名済み送信待ちと Rust RelayRouter の状態です", fontSize = 10.sp, color = nuruColors.textTertiary)
+                }
+                IconButton(onClick = onRefresh, enabled = !diagnosticsLoading, modifier = Modifier.size(36.dp)) {
+                    if (diagnosticsLoading) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = LineGreen)
+                    } else {
+                        Icon(Icons.Outlined.Refresh, contentDescription = "更新", tint = LineGreen, modifier = Modifier.size(18.dp))
+                    }
+                }
+            }
+
+            Surface(color = nuruColors.bgTertiary, shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("送信待ち", fontSize = 11.sp, color = nuruColors.textTertiary)
+                        Spacer(Modifier.weight(1f))
+                        Text("${pendingOutbox.size} 件", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = if (pendingOutbox.isEmpty()) LineGreen else Color(0xFFFF9800))
+                    }
+                    retrySummary?.let { Text(it, fontSize = 10.sp, color = nuruColors.textSecondary) }
+                    pendingOutbox.take(3).forEach { item ->
+                        Surface(color = nuruColors.bgPrimary, shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
+                            Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(shortEventIdForDiagnostics(item.eventId), fontSize = 11.sp, fontWeight = FontWeight.Medium, color = nuruColors.textPrimary)
+                                    Spacer(Modifier.weight(1f))
+                                    Text(item.state, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = if (item.state == "failed") Color.Red else Color(0xFFFF9800))
+                                }
+                                Text("attempts: ${item.attempts} · relays: ${item.relayUrls.size}", fontSize = 10.sp, color = nuruColors.textTertiary)
+                                if (item.lastError.isNotBlank()) {
+                                    Text(item.lastError, fontSize = 10.sp, color = nuruColors.textTertiary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                        }
+                    }
+                    Button(
+                        onClick = onRetry,
+                        enabled = pendingOutbox.isNotEmpty() && !retryingOutbox,
+                        colors = ButtonDefaults.buttonColors(containerColor = LineGreen, disabledContainerColor = LineGreen.copy(alpha = 0.35f)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().height(40.dp)
+                    ) {
+                        if (retryingOutbox) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                        } else {
+                            Text("送信待ちを再送", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+
+            Surface(color = nuruColors.bgTertiary, shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("RelayRouter", fontSize = 11.sp, color = nuruColors.textTertiary)
+                        Spacer(Modifier.weight(1f))
+                        val unavailable = relayHealth.count { !it.available }
+                        Text("${relayHealth.size} relays · $unavailable cooldown", fontSize = 10.sp, color = nuruColors.textTertiary)
+                    }
+                    if (relayHealth.isEmpty()) {
+                        Text("Rust FFI relay health はまだありません。投稿・取得後に表示されます。", fontSize = 10.sp, color = nuruColors.textTertiary)
+                    } else {
+                        relayHealth.take(5).forEach { health ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().background(nuruColors.bgPrimary, RoundedCornerShape(10.dp)).padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Box(Modifier.size(8.dp).background(if (health.available) LineGreen else Color(0xFFFF9800), CircleShape))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(health.url.removePrefix("wss://"), fontSize = 11.sp, color = nuruColors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text("${health.role} · ok ${health.successes} / fail ${health.failures}", fontSize = 10.sp, color = nuruColors.textTertiary)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun shortEventIdForDiagnostics(id: String): String =
+    if (id.length <= 12) id else id.take(8) + "…" + id.takeLast(4)
+
+@Composable
 private fun UploadMiniAppsView(prefs: AppPreferences) {
     val nuruColors = LocalNuruColors.current
     var uploadServer by remember { mutableStateOf(prefs.uploadServer) }
@@ -811,9 +917,35 @@ private fun RelayMiniAppsViewContent(prefs: AppPreferences, repository: NostrRep
     var mlsInboxRelays by remember { mutableStateOf(prefs.mlsInboxRelays) }
     var manualKeyPackageRelayUrl by remember { mutableStateOf("") }
     var manualInboxRelayUrl by remember { mutableStateOf("") }
+    var relayHealth by remember { mutableStateOf<List<RelayHealthStatus>>(emptyList()) }
+    var pendingOutbox by remember { mutableStateOf<List<PublishOutboxStatus>>(emptyList()) }
+    var diagnosticsLoading by remember { mutableStateOf(false) }
+    var retryingOutbox by remember { mutableStateOf(false) }
+    var retrySummary by remember { mutableStateOf<String?>(null) }
 
     val selectedRegion = remember(selectedRegionId) {
         RelayDiscovery.REGION_COORDINATES.find { it.id == selectedRegionId }
+    }
+
+    suspend fun loadPublishDiagnostics() {
+        diagnosticsLoading = true
+        try {
+            relayHealth = repository.getRelayHealthSnapshots()
+            pendingOutbox = repository.getPendingPublishOutbox(20u)
+        } finally {
+            diagnosticsLoading = false
+        }
+    }
+
+    fun retryOutboxNow() {
+        retryingOutbox = true
+        coroutineScope.launch {
+            val results = repository.retryPendingPublishOutbox(20u)
+            val ok = results.count { it.ok }
+            retrySummary = "再送: $ok/${results.size} 件成功"
+            loadPublishDiagnostics()
+            retryingOutbox = false
+        }
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -932,6 +1064,8 @@ private fun RelayMiniAppsViewContent(prefs: AppPreferences, repository: NostrRep
             nearestRelays = config.outbox
         }
     }
+
+    LaunchedEffect(Unit) { loadPublishDiagnostics() }
 
     LazyColumn(
         modifier = Modifier
@@ -1188,6 +1322,16 @@ private fun RelayMiniAppsViewContent(prefs: AppPreferences, repository: NostrRep
                             }
                         }
                     }
+
+                    PublishDiagnosticsCard(
+                        pendingOutbox = pendingOutbox,
+                        relayHealth = relayHealth,
+                        diagnosticsLoading = diagnosticsLoading,
+                        retryingOutbox = retryingOutbox,
+                        retrySummary = retrySummary,
+                        onRefresh = { coroutineScope.launch { loadPublishDiagnostics() } },
+                        onRetry = { retryOutboxNow() }
+                    )
 
                     // ── 高度な設定（折りたたみ）────────────────────────────────
                     HorizontalDivider(color = nuruColors.border, modifier = Modifier.padding(top = 16.dp, bottom = 4.dp))

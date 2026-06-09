@@ -86,6 +86,21 @@ The iOS Rust FFI MLS database base path is account-scoped as nurunuru_ndb_<pubke
 
 NostrRepository.ensureMlsClient() and ensureRustNostrClient() both use the active account's scoped DB path, including read-only fallback paths for NIP-46, Passkey/Nosskey, and locked nsec sessions.
 
+## Rust structured publish / outbox diagnostics
+
+As of 2026-06-09, iOS maps Rust `FfiPublishResult` through `RustPublishDeliveryResult` in `RustNostrFFIClient`. Rust raw-event publishing uses structured result APIs, logs queued/failed delivery state, and still falls back to `NostrClient` when Rust publish does not report success. `RustNostrFFIClient.connect(relayUrls:)` starts a detached best-effort `retryPendingPublishOutbox(20)` so signed events left in the durable Rust outbox can recover after reconnect without blocking the `NostrRepository` actor.
+
+Repository accessors expose `retryPendingPublishOutbox()`, `getRelayHealthSnapshots()`, and `getPendingPublishOutbox()` for future Settings / Performance Console UI. These diagnostics must remain sanitized and must not display raw event content without explicit user intent.
+
+
+## Rust publish diagnostics UI
+
+- `RelaySettingsView` includes a Rust diagnostics card when `NURUNURU_FFI_AVAILABLE` is enabled.
+- The card shows local pending/failed signed publish outbox count, up to three pending event IDs, attempt counts, and a manual retry button.
+- It also shows Rust `RelayRouter` health snapshots (availability, role, success/failure counts) for up to five relays.
+- Diagnostics stay local and sanitized; raw event content is not displayed.
+- Source: `ios/NuruNuru/Views/MiniApps/RelaySettingsView.swift`, `ios/NuruNuru/Data/NostrRepository.swift`, `ios/NuruNuru/Data/NuruNuruFFILiveClient.swift`.
+
 ## Source references
 
 - `ios/NuruNuru/`
@@ -93,6 +108,10 @@ NostrRepository.ensureMlsClient() and ensureRustNostrClient() both use the activ
 - `docs/wiki/decisions/adr-0019-ios-rust-ffi-write-path.md`
 - `ios/project.yml`
 - `ios/NuruNuru/Data/`
+- `rust-engine/nurunuru-ffi/ios/Sources/NuruNuru/nurunuru_ffi.swift`
+- `ios/NuruNuru/Data/NostrRepository.swift`
+- `ios/NuruNuru/Views/MiniApps/RelaySettingsView.swift`
+- `ios/NuruNuru/Data/NuruNuruFFILiveClient.swift`
 - `ios/NuruNuru/ViewModels/`
 
 ## Related pages

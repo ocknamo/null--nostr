@@ -7,7 +7,10 @@ import {
   canSign,
   publishRelayListMetadata,
   fetchRelayListMetadata,
-  isValidRelayUrl
+  isValidRelayUrl,
+  getPendingPublishOutbox,
+  getPublishOutboxStats,
+  retryPendingPublishOutbox
 } from '@/lib/nostr'
 import {
   autoDetectRelays,
@@ -20,6 +23,7 @@ import {
   findNearestRelays,
   generateRelayListByLocation
 } from '@/lib/geohash'
+import { getConnectionStats, getRelayHealth } from '@/lib/connection-manager'
 
 // ──────────────────────────────────────────────────────────────
 // localStorage keys (mirrors Android AppPreferences)
@@ -95,6 +99,14 @@ export default function RelaySettings({ pubkey }) {
   const [manualKeyPackageRelayUrl, setManualKeyPackageRelayUrl] = useState('')
   const [manualInboxRelayUrl, setManualInboxRelayUrl] = useState('')
 
+  // Local publish / relay diagnostics
+  const [pendingOutbox, setPendingOutbox] = useState([])
+  const [outboxStats, setOutboxStats] = useState({ total: 0, pending: 0, failed: 0, published: 0 })
+  const [relayDiagnostics, setRelayDiagnostics] = useState([])
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
+  const [retryingOutbox, setRetryingOutbox] = useState(false)
+  const [retrySummary, setRetrySummary] = useState(null)
+
   // ──────────────────────────────────────────────────────────────
   // Init
   // ──────────────────────────────────────────────────────────────
@@ -149,6 +161,47 @@ export default function RelaySettings({ pubkey }) {
       saveList(LS_NIP65_RELAYS, savedRelays)
     }
   }, [savedRelays])
+
+  const loadPublishDiagnostics = () => {
+    setDiagnosticsLoading(true)
+    try {
+      const pending = getPendingPublishOutbox(20)
+      const stats = getPublishOutboxStats()
+      const conn = getConnectionStats()
+      const relays = Array.from(new Set([
+        ...savedRelays.map(r => typeof r === 'string' ? r : r.url),
+        currentRelay,
+        ...Object.keys(conn.failedRelays || {})
+      ].filter(Boolean)))
+      setPendingOutbox(pending)
+      setOutboxStats(stats)
+      setRelayDiagnostics(relays.map(url => ({ url, ...getRelayHealth(url) })).slice(0, 8))
+    } finally {
+      setDiagnosticsLoading(false)
+    }
+  }
+
+  const handleRetryOutbox = async () => {
+    setRetryingOutbox(true)
+    try {
+      const results = await retryPendingPublishOutbox(20)
+      const ok = results.filter(r => r.ok).length
+      setRetrySummary(`再送: ${ok}/${results.length} 件成功`)
+      loadPublishDiagnostics()
+    } catch (e) {
+      setRetrySummary(`再送に失敗しました: ${e?.message || e}`)
+    } finally {
+      setRetryingOutbox(false)
+    }
+  }
+
+  useEffect(() => {
+    loadPublishDiagnostics()
+    const onOnline = () => { retryPendingPublishOutbox(20).finally(loadPublishDiagnostics) }
+    window.addEventListener('online', onOnline)
+    return () => window.removeEventListener('online', onOnline)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedRelays, currentRelay])
 
   // ──────────────────────────────────────────────────────────────
   // Handlers
@@ -477,6 +530,17 @@ export default function RelaySettings({ pubkey }) {
           )}
         </div>
 
+        <PublishDiagnosticsCard
+          pendingOutbox={pendingOutbox}
+          outboxStats={outboxStats}
+          relayDiagnostics={relayDiagnostics}
+          diagnosticsLoading={diagnosticsLoading}
+          retryingOutbox={retryingOutbox}
+          retrySummary={retrySummary}
+          onRefresh={loadPublishDiagnostics}
+          onRetry={handleRetryOutbox}
+        />
+
         {/* ── 高度な設定（折りたたみ）──────────────────────── */}
         <div className="mt-4 pt-2 border-t border-[var(--border-color)]">
           <button
@@ -630,6 +694,96 @@ export default function RelaySettings({ pubkey }) {
             </div>
           )}
         </div>
+      </div>
+    </div>
+  )
+}
+
+
+function shortEventId(id = '') {
+  return id.length <= 12 ? id : `${id.slice(0, 8)}…${id.slice(-4)}`
+}
+
+function PublishDiagnosticsCard({
+  pendingOutbox,
+  outboxStats,
+  relayDiagnostics,
+  diagnosticsLoading,
+  retryingOutbox,
+  retrySummary,
+  onRefresh,
+  onRetry,
+}) {
+  return (
+    <div className="mt-4 p-3 bg-[var(--bg-primary)] rounded-xl border border-[var(--border-color)] space-y-3">
+      <div className="flex items-start gap-3">
+        <div className="flex-1 min-w-0">
+          <p className="text-[13px] font-medium text-[var(--text-primary)]">送信状態とリレー診断</p>
+          <p className="text-[11px] text-[var(--text-tertiary)] mt-0.5">
+            署名済み送信待ちと Web リレー状態です。内容は外部送信されません。
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={diagnosticsLoading}
+          className="px-2 py-1 text-[11px] font-semibold text-[var(--line-green)] hover:opacity-80 disabled:opacity-50"
+        >
+          {diagnosticsLoading ? '更新中...' : '更新'}
+        </button>
+      </div>
+
+      <div className="p-3 bg-[var(--bg-secondary)] rounded-xl space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] text-[var(--text-tertiary)]">送信待ち</span>
+          <span className={`text-sm font-bold ${pendingOutbox.length === 0 ? 'text-[var(--line-green)]' : 'text-orange-500'}`}>
+            {pendingOutbox.length} 件
+          </span>
+        </div>
+        <p className="text-[10px] text-[var(--text-tertiary)]">
+          pending {outboxStats.pending || 0} / failed {outboxStats.failed || 0} / published {outboxStats.published || 0}
+        </p>
+        {retrySummary && <p className="text-[11px] text-[var(--text-secondary)]">{retrySummary}</p>}
+        {pendingOutbox.slice(0, 3).map(item => (
+          <div key={item.eventId} className="p-2 bg-[var(--bg-primary)] rounded-lg">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-mono text-[var(--text-primary)]">{shortEventId(item.eventId)}</span>
+              <span className={`text-[10px] font-semibold ${item.state === 'failed' ? 'text-red-500' : 'text-orange-500'}`}>{item.state}</span>
+            </div>
+            <p className="text-[10px] text-[var(--text-tertiary)] mt-0.5">
+              attempts: {item.attempts || 0} · relays: {item.relayUrls?.length || 0}
+            </p>
+            {item.lastError && <p className="text-[10px] text-[var(--text-tertiary)] truncate mt-0.5">{item.lastError}</p>}
+          </div>
+        ))}
+        <button
+          type="button"
+          onClick={onRetry}
+          disabled={pendingOutbox.length === 0 || retryingOutbox}
+          className="w-full py-2 bg-[var(--line-green)] hover:opacity-90 text-white rounded-lg text-xs font-bold transition-colors disabled:opacity-40"
+        >
+          {retryingOutbox ? '再送中...' : '送信待ちを再送'}
+        </button>
+      </div>
+
+      <div className="p-3 bg-[var(--bg-secondary)] rounded-xl space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] text-[var(--text-tertiary)]">Web relay health</span>
+          <span className="text-[10px] text-[var(--text-tertiary)]">{relayDiagnostics.length} relays</span>
+        </div>
+        {relayDiagnostics.length === 0 ? (
+          <p className="text-[11px] text-[var(--text-tertiary)]">投稿・取得後にリレー状態が表示されます。</p>
+        ) : relayDiagnostics.slice(0, 5).map(relay => (
+          <div key={relay.url} className="flex items-center gap-2 p-2 bg-[var(--bg-primary)] rounded-lg">
+            <span className={`w-2 h-2 rounded-full ${relay.status === 'healthy' ? 'bg-[var(--line-green)]' : relay.status === 'cooldown' ? 'bg-orange-500' : 'bg-red-500'}`} />
+            <div className="flex-1 min-w-0">
+              <p className="text-[11px] text-[var(--text-primary)] truncate">{relay.url.replace('wss://', '')}</p>
+              <p className="text-[10px] text-[var(--text-tertiary)]">
+                {relay.status} · fail {relay.failures || 0}{relay.cooldownRemaining ? ` · ${Math.ceil(relay.cooldownRemaining / 1000)}s` : ''}
+              </p>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   )

@@ -565,7 +565,7 @@ fun EmbeddedNostrContent(
 fun PostMedia(post: ScoredPost, overrideContent: String? = null) {
     val nuruColors = LocalNuruColors.current
     val content = overrideContent ?: post.event.content
-    if (post.event.kind == NostrKind.VIDEO_LOOP) {
+    if (post.event.kind == NostrKind.ADDRESSABLE_SHORT_VIDEO) {
         val videoUrl = post.event.getTagValue("url") ?: content
         val verificationLevel = post.event.getTagValue("verification")
         val durationSec = post.event.getTagValue("duration")?.toIntOrNull()

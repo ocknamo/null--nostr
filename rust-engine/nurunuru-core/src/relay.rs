@@ -162,4 +162,169 @@ mod tests {
         // Japanese relays should come first
         assert!(relays[0] == "wss://yabu.me" || relays[0] == "wss://relay-jp.nostr.wirednet.jp");
     }
+
+    #[test]
+    fn test_router_cooldown_and_fallback() {
+        let config = RelayConfig::default();
+        let mut router = RelayRouter::new(&config);
+        let relays = vec!["wss://a.example".to_string(), "wss://b.example".to_string()];
+        for r in &relays {
+            router.add_relay(r.clone(), RelayRole::Read);
+        }
+        router.record_failure(&relays[0], 100, "timeout");
+        router.record_failure(&relays[0], 101, "timeout");
+        router.record_failure(&relays[0], 102, "timeout");
+        assert_eq!(
+            router.available_relays(&relays, 103),
+            vec![relays[1].clone()]
+        );
+        assert_eq!(
+            router.available_relays(&[relays[0].clone()], 103),
+            vec![relays[0].clone()]
+        );
+        router.record_success(&relays[0], 104);
+        assert!(router.available_relays(&relays, 105).contains(&relays[0]));
+    }
+}
+
+/// Role assigned to a relay for routing decisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RelayRole {
+    Read,
+    Write,
+    Search,
+    Temporary,
+}
+
+/// In-memory health stats used by RelayRouter.
+#[derive(Debug, Clone, Default)]
+pub struct RelayHealth {
+    pub successes: u64,
+    pub failures: u64,
+    pub last_success_ms: u64,
+    pub last_failure_ms: u64,
+    pub cooldown_until_ms: u64,
+    pub last_error: String,
+}
+
+/// FFI/API-safe relay health snapshot.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RelayHealthSnapshot {
+    pub url: String,
+    pub role: String,
+    pub successes: u64,
+    pub failures: u64,
+    pub last_success_ms: u64,
+    pub last_failure_ms: u64,
+    pub cooldown_until_ms: u64,
+    pub last_error: String,
+    pub available: bool,
+}
+
+/// Smart relay routing groundwork.
+///
+/// This is intentionally deterministic and local-only for Phase 1. It tracks
+/// health and cooldowns; future phases can add latency percentiles, NIP-65
+/// outbox grouping, and persistent relay scoring without changing callers.
+#[derive(Debug, Clone)]
+pub struct RelayRouter {
+    health: std::collections::HashMap<String, RelayHealth>,
+    roles: std::collections::HashMap<String, RelayRole>,
+    max_failures_before_cooldown: u64,
+    cooldown_ms: u64,
+}
+
+impl RelayRouter {
+    pub fn new(config: &RelayConfig) -> Self {
+        let mut router = Self {
+            health: std::collections::HashMap::new(),
+            roles: std::collections::HashMap::new(),
+            max_failures_before_cooldown: 3,
+            cooldown_ms: 120_000,
+        };
+        for url in build_relay_list(config) {
+            router.add_relay(url, RelayRole::Read);
+        }
+        router.add_relay(config.search_relay.clone(), RelayRole::Search);
+        router
+    }
+
+    pub fn add_relay(&mut self, url: String, role: RelayRole) {
+        self.health.entry(url.clone()).or_default();
+        self.roles.entry(url).or_insert(role);
+    }
+
+    pub fn available_relays(&self, urls: &[String], now_ms: u64) -> Vec<String> {
+        let available: Vec<String> = urls
+            .iter()
+            .filter(|url| self.is_available(url, now_ms))
+            .cloned()
+            .collect();
+        if available.is_empty() {
+            urls.to_vec()
+        } else {
+            available
+        }
+    }
+
+    pub fn record_success(&mut self, url: &str, now_ms: u64) {
+        let h = self.health.entry(url.to_string()).or_default();
+        h.successes = h.successes.saturating_add(1);
+        h.last_success_ms = now_ms;
+        h.cooldown_until_ms = 0;
+        h.last_error.clear();
+    }
+
+    pub fn record_failure(&mut self, url: &str, now_ms: u64, error: &str) {
+        let h = self.health.entry(url.to_string()).or_default();
+        h.failures = h.failures.saturating_add(1);
+        h.last_failure_ms = now_ms;
+        h.last_error = error.chars().take(256).collect();
+        if h.failures >= self.max_failures_before_cooldown {
+            h.cooldown_until_ms = now_ms.saturating_add(self.cooldown_ms);
+        }
+    }
+
+    pub fn snapshots(&self, now_ms: u64) -> Vec<RelayHealthSnapshot> {
+        let mut out: Vec<_> = self
+            .health
+            .iter()
+            .map(|(url, h)| {
+                let role = match self.roles.get(url).copied().unwrap_or(RelayRole::Temporary) {
+                    RelayRole::Read => "read",
+                    RelayRole::Write => "write",
+                    RelayRole::Search => "search",
+                    RelayRole::Temporary => "temporary",
+                }
+                .to_string();
+                RelayHealthSnapshot {
+                    url: url.clone(),
+                    role,
+                    successes: h.successes,
+                    failures: h.failures,
+                    last_success_ms: h.last_success_ms,
+                    last_failure_ms: h.last_failure_ms,
+                    cooldown_until_ms: h.cooldown_until_ms,
+                    last_error: h.last_error.clone(),
+                    available: self.is_available(url, now_ms),
+                }
+            })
+            .collect();
+        out.sort_by(|a, b| a.url.cmp(&b.url));
+        out
+    }
+
+    fn is_available(&self, url: &str, now_ms: u64) -> bool {
+        self.health
+            .get(url)
+            .map(|h| h.cooldown_until_ms == 0 || now_ms >= h.cooldown_until_ms)
+            .unwrap_or(true)
+    }
+}
+
+pub fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }

@@ -39,6 +39,13 @@ struct RelaySettingsView: View {
     @State private var mlsInboxRelays:      [String] = []
     @State private var manualKeyPackageRelayUrl = ""
     @State private var manualInboxRelayUrl      = ""
+#if NURUNURU_FFI_AVAILABLE
+    @State private var relayHealth: [RustRelayHealthStatus] = []
+    @State private var pendingOutbox: [RustPublishOutboxStatus] = []
+    @State private var diagnosticsLoading = false
+    @State private var retryingOutbox = false
+    @State private var retrySummary: String? = nil
+#endif
 
     @StateObject private var locationHelper = LocationHelper()
 
@@ -58,6 +65,10 @@ struct RelaySettingsView: View {
                     savedRelaysCard
                 }
 
+#if NURUNURU_FFI_AVAILABLE
+                diagnosticsCard
+#endif
+
                 // Save button
                 saveButton
 
@@ -75,6 +86,9 @@ struct RelaySettingsView: View {
                 relayStates = await repository.perRelayStates()
             }
         }
+#if NURUNURU_FFI_AVAILABLE
+        .task { await loadDiagnostics() }
+#endif
         .alert("保存エラー", isPresented: $showError) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -327,6 +341,164 @@ struct RelaySettingsView: View {
                     .fill(color.opacity(0.15))
             )
     }
+
+
+#if NURUNURU_FFI_AVAILABLE
+    // MARK: - Rust Diagnostics Card
+
+    private var diagnosticsCard: some View {
+        VStack(alignment: .leading, spacing: NuruSpacing.space3) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("送信状態とリレー診断")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(theme.textPrimary)
+                    Text("端末内の署名済み送信待ちと Rust RelayRouter の状態です。内容は外部送信されません。")
+                        .font(.system(size: 10))
+                        .foregroundStyle(theme.textTertiary)
+                }
+                Spacer()
+                Button {
+                    Task { await loadDiagnostics() }
+                } label: {
+                    if diagnosticsLoading {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(NuruColors.lineGreen)
+                .disabled(diagnosticsLoading)
+            }
+
+            pendingOutboxSummary
+            relayHealthSummary
+        }
+        .padding(NuruSpacing.space4)
+        .background(
+            RoundedRectangle(cornerRadius: NuruSpacing.radiusXl)
+                .fill(theme.bgSecondary)
+        )
+    }
+
+    private var pendingOutboxSummary: some View {
+        VStack(alignment: .leading, spacing: NuruSpacing.space2) {
+            HStack {
+                Text("送信待ち")
+                    .font(.system(size: 10))
+                    .foregroundStyle(theme.textTertiary)
+                Spacer()
+                Text("\(pendingOutbox.count) 件")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(pendingOutbox.isEmpty ? NuruColors.lineGreen : Color.orange)
+            }
+
+            if let retrySummary {
+                Text(retrySummary)
+                    .font(.system(size: 10))
+                    .foregroundStyle(theme.textSecondary)
+            }
+
+            if !pendingOutbox.isEmpty {
+                ForEach(pendingOutbox.prefix(3), id: \.eventId) { item in
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack {
+                            Text(shortEventId(item.eventId))
+                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .foregroundStyle(theme.textPrimary)
+                            Spacer()
+                            Text(item.state)
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(item.state == "failed" ? Color.red : Color.orange)
+                        }
+                        Text("attempts: \(item.attempts) · relays: \(item.relayUrls.count)")
+                            .font(.system(size: 10))
+                            .foregroundStyle(theme.textTertiary)
+                        if !item.lastError.isEmpty {
+                            Text(item.lastError)
+                                .font(.system(size: 10))
+                                .foregroundStyle(theme.textTertiary)
+                                .lineLimit(1)
+                        }
+                    }
+                    .padding(NuruSpacing.space3)
+                    .background(RoundedRectangle(cornerRadius: NuruSpacing.radiusLg).fill(theme.bgTertiary))
+                }
+            }
+
+            Button {
+                Task { await retryOutboxNow() }
+            } label: {
+                HStack {
+                    Spacer()
+                    if retryingOutbox {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("送信待ちを再送")
+                            .font(.system(size: 12, weight: .bold))
+                    }
+                    Spacer()
+                }
+                .frame(height: 36)
+                .foregroundStyle(.white)
+                .background(
+                    RoundedRectangle(cornerRadius: NuruSpacing.radiusLg)
+                        .fill(pendingOutbox.isEmpty || retryingOutbox ? NuruColors.lineGreen.opacity(0.35) : NuruColors.lineGreen)
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(pendingOutbox.isEmpty || retryingOutbox)
+        }
+        .padding(NuruSpacing.space3)
+        .background(RoundedRectangle(cornerRadius: NuruSpacing.radiusLg).fill(theme.bgTertiary))
+    }
+
+    private var relayHealthSummary: some View {
+        VStack(alignment: .leading, spacing: NuruSpacing.space2) {
+            HStack {
+                Text("RelayRouter")
+                    .font(.system(size: 10))
+                    .foregroundStyle(theme.textTertiary)
+                Spacer()
+                let unavailable = relayHealth.filter { !$0.available }.count
+                Text("\(relayHealth.count) relays · \(unavailable) cooldown")
+                    .font(.system(size: 10))
+                    .foregroundStyle(theme.textTertiary)
+            }
+
+            if relayHealth.isEmpty {
+                Text("Rust FFI relay health はまだありません。投稿・取得後に表示されます。")
+                    .font(.system(size: 10))
+                    .foregroundStyle(theme.textTertiary)
+            } else {
+                ForEach(relayHealth.prefix(5), id: \.url) { health in
+                    HStack(spacing: NuruSpacing.space2) {
+                        Circle()
+                            .fill(health.available ? NuruColors.lineGreen : Color.orange)
+                            .frame(width: 7, height: 7)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(health.url.replacingOccurrences(of: "wss://", with: ""))
+                                .font(.system(size: 11))
+                                .foregroundStyle(theme.textPrimary)
+                                .lineLimit(1)
+                            Text("\(health.role) · ok \(health.successes) / fail \(health.failures)")
+                                .font(.system(size: 10))
+                                .foregroundStyle(theme.textTertiary)
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal, NuruSpacing.space3)
+                    .padding(.vertical, 6)
+                    .background(RoundedRectangle(cornerRadius: NuruSpacing.radiusLg).fill(theme.bgPrimary))
+                }
+            }
+        }
+        .padding(NuruSpacing.space3)
+        .background(RoundedRectangle(cornerRadius: NuruSpacing.radiusLg).fill(theme.bgTertiary))
+    }
+#endif
 
     // MARK: - Save Button
 
@@ -864,6 +1036,32 @@ struct RelaySettingsView: View {
             showError = true
         }
     }
+
+
+#if NURUNURU_FFI_AVAILABLE
+    private func loadDiagnostics() async {
+        diagnosticsLoading = true
+        async let health = repository.getRelayHealthSnapshots()
+        async let outbox = repository.getPendingPublishOutbox(limit: 20)
+        relayHealth = await health
+        pendingOutbox = await outbox
+        diagnosticsLoading = false
+    }
+
+    private func retryOutboxNow() async {
+        retryingOutbox = true
+        let results = await repository.retryPendingPublishOutbox(limit: 20)
+        let ok = results.filter(\.ok).count
+        retrySummary = "再送: \(ok)/\(results.count) 件成功"
+        await loadDiagnostics()
+        retryingOutbox = false
+    }
+
+    private func shortEventId(_ id: String) -> String {
+        guard id.count > 12 else { return id }
+        return String(id.prefix(8)) + "…" + String(id.suffix(4))
+    }
+#endif
 
     // MARK: - Connection Status
 

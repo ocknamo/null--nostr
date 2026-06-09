@@ -359,6 +359,15 @@ impl NuruNuruClient {
             .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
     }
 
+    /// Local relay health snapshots for diagnostics and relay settings UI.
+    pub fn relay_health_snapshots(&self) -> Vec<FfiRelayHealthSnapshot> {
+        self.runtime
+            .block_on(self.engine.relay_health_snapshots())
+            .into_iter()
+            .map(core_relay_health_to_ffi)
+            .collect()
+    }
+
     // ─── Identity ──────────────────────────────────────────────────────────
 
     /// Set the current user's public key and load follow/mute lists.
@@ -489,6 +498,19 @@ impl NuruNuruClient {
         Ok(eid.to_hex())
     }
 
+    /// Publish an already-signed event JSON and return structured delivery information.
+    pub fn publish_raw_event_result(
+        &self,
+        event_json: String,
+    ) -> Result<FfiPublishResult, NuruNuruFfiError> {
+        let event: nostr::Event = serde_json::from_str(&event_json)
+            .map_err(|e| NuruNuruFfiError::EngineError(format!("Invalid event JSON: {e}")))?;
+        self.runtime
+            .block_on(self.engine.publish_raw_event_result(event))
+            .map(core_publish_result_to_ffi)
+            .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
+    }
+
     /// Publish an already-signed Nostr event JSON to specific relays only.
     pub fn publish_raw_event_to_relays(
         &self,
@@ -502,6 +524,59 @@ impl NuruNuruClient {
             .block_on(self.engine.publish_raw_event_to_relays(event, relay_urls))
             .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))?;
         Ok(eid.to_hex())
+    }
+
+    /// Publish an already-signed event JSON to specific relays and return structured delivery information.
+    pub fn publish_raw_event_to_relays_result(
+        &self,
+        event_json: String,
+        relay_urls: Vec<String>,
+    ) -> Result<FfiPublishResult, NuruNuruFfiError> {
+        let event: nostr::Event = serde_json::from_str(&event_json)
+            .map_err(|e| NuruNuruFfiError::EngineError(format!("Invalid event JSON: {e}")))?;
+        self.runtime
+            .block_on(
+                self.engine
+                    .publish_raw_event_to_relays_result(event, relay_urls),
+            )
+            .map(core_publish_result_to_ffi)
+            .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
+    }
+
+    /// Enqueue a fully-signed event JSON for durable retry without publishing.
+    /// This stores signed event JSON only; no private keys or unsigned signing material.
+    pub fn enqueue_publish_outbox(
+        &self,
+        event_json: String,
+        relay_urls: Vec<String>,
+    ) -> Result<(), NuruNuruFfiError> {
+        let event: nostr::Event = serde_json::from_str(&event_json)
+            .map_err(|e| NuruNuruFfiError::EngineError(format!("Invalid event JSON: {e}")))?;
+        self.runtime
+            .block_on(self.engine.enqueue_publish_outbox(&event, relay_urls))
+            .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
+    }
+
+    /// Return pending/failed durable publish outbox items, oldest first.
+    pub fn pending_publish_outbox(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<FfiPublishOutboxItem>, NuruNuruFfiError> {
+        self.runtime
+            .block_on(self.engine.pending_publish_outbox(limit as usize))
+            .map(|items| items.into_iter().map(core_outbox_item_to_ffi).collect())
+            .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
+    }
+
+    /// Retry pending/failed signed events from the durable publish outbox.
+    pub fn retry_pending_publish_outbox(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<FfiPublishResult>, NuruNuruFfiError> {
+        self.runtime
+            .block_on(self.engine.retry_pending_publish_outbox(limit as usize))
+            .map(|items| items.into_iter().map(core_publish_result_to_ffi).collect())
+            .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
     }
 
     /// Sign a Nostr event with this client's internal key and return signed JSON.
@@ -1395,6 +1470,19 @@ impl NuruNuruClient {
         Ok(eid.to_hex())
     }
 
+    /// Publish a text note with tags and return structured delivery information.
+    pub fn publish_note_with_tags_result(
+        &self,
+        content: String,
+        tags: Vec<Vec<String>>,
+    ) -> Result<FfiPublishResult, NuruNuruFfiError> {
+        let parsed_tags = parse_ffi_tags(tags)?;
+        self.runtime
+            .block_on(self.engine.publish_note_result(&content, parsed_tags))
+            .map(core_publish_result_to_ffi)
+            .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
+    }
+
     /// React to an event (Kind 7, NIP-25).
     ///
     /// `emoji` is typically `"+"` (like), `"-"` (dislike), or a custom
@@ -1495,6 +1583,23 @@ impl NuruNuruClient {
             )
             .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))?;
         Ok(eid.to_hex())
+    }
+
+    /// Publish a text note to specific relays and return structured delivery information.
+    pub fn publish_note_with_tags_to_relays_result(
+        &self,
+        content: String,
+        tags: Vec<Vec<String>>,
+        relay_urls: Vec<String>,
+    ) -> Result<FfiPublishResult, NuruNuruFfiError> {
+        let parsed_tags = parse_ffi_tags(tags)?;
+        self.runtime
+            .block_on(
+                self.engine
+                    .publish_note_to_relays_result(&content, parsed_tags, relay_urls),
+            )
+            .map(core_publish_result_to_ffi)
+            .map_err(|e| NuruNuruFfiError::EngineError(e.to_string()))
     }
 
     /// Update user profile (Kind 0, NIP-01).
@@ -1754,6 +1859,47 @@ fn core_profile_to_ffi(p: nurunuru_core::types::UserProfile) -> FfiUserProfile {
     }
 }
 
+fn core_relay_health_to_ffi(
+    h: nurunuru_core::relay::RelayHealthSnapshot,
+) -> FfiRelayHealthSnapshot {
+    FfiRelayHealthSnapshot {
+        url: h.url,
+        role: h.role,
+        successes: h.successes,
+        failures: h.failures,
+        last_success_ms: h.last_success_ms,
+        last_failure_ms: h.last_failure_ms,
+        cooldown_until_ms: h.cooldown_until_ms,
+        last_error: h.last_error,
+        available: h.available,
+    }
+}
+
+fn core_outbox_item_to_ffi(item: nurunuru_core::outbox::PublishOutboxItem) -> FfiPublishOutboxItem {
+    FfiPublishOutboxItem {
+        event_id: item.event_id,
+        event_json: item.event_json,
+        relay_urls: item.relay_urls,
+        created_at_ms: item.created_at_ms,
+        updated_at_ms: item.updated_at_ms,
+        attempts: item.attempts,
+        state: format!("{:?}", item.state).to_lowercase(),
+        last_error: item.last_error,
+    }
+}
+
+fn core_publish_result_to_ffi(result: nurunuru_core::outbox::PublishResult) -> FfiPublishResult {
+    FfiPublishResult {
+        event_id: result.event_id,
+        ok: result.ok,
+        ok_relays: result.ok_relays,
+        failed_relays: result.failed_relays,
+        first_ok_ms: result.first_ok_ms,
+        retry_queued: result.retry_queued,
+        error: result.error,
+    }
+}
+
 // ─── FFI-safe types ────────────────────────────────────────────────────────
 
 #[derive(uniffi::Record)]
@@ -1787,6 +1933,42 @@ pub struct FfiScoredPost {
 pub struct FfiConnectionStats {
     pub connected_relays: u32,
     pub total_relays: u32,
+}
+
+#[derive(uniffi::Record)]
+pub struct FfiRelayHealthSnapshot {
+    pub url: String,
+    pub role: String,
+    pub successes: u64,
+    pub failures: u64,
+    pub last_success_ms: u64,
+    pub last_failure_ms: u64,
+    pub cooldown_until_ms: u64,
+    pub last_error: String,
+    pub available: bool,
+}
+
+#[derive(uniffi::Record)]
+pub struct FfiPublishOutboxItem {
+    pub event_id: String,
+    pub event_json: String,
+    pub relay_urls: Vec<String>,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+    pub attempts: u32,
+    pub state: String,
+    pub last_error: String,
+}
+
+#[derive(uniffi::Record)]
+pub struct FfiPublishResult {
+    pub event_id: String,
+    pub ok: bool,
+    pub ok_relays: Vec<String>,
+    pub failed_relays: Vec<String>,
+    pub first_ok_ms: u64,
+    pub retry_queued: bool,
+    pub error: String,
 }
 
 // ─── MLS FFI Record types ───────────────────────────────────────────────────

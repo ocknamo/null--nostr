@@ -1,3 +1,87 @@
+## [2026-06-09] performance | Web publish outbox and relay diagnostics parity
+
+- Added a browser-local publish outbox in `lib/publish-outbox.js` that stores fully signed event JSON only in `localStorage`; private keys, unsigned events, and signing material are never stored.
+- Added structured Web publish APIs `publishManagedResult()` and `publishEventResult()` while preserving the legacy boolean `publishEvent()` wrapper.
+- Added `retryPendingPublishOutbox()` and online-event best-effort retry for pending/failed signed events.
+- Added a Web Relay Settings diagnostics card showing pending outbox counts, recent event IDs, manual retry, and `connection-manager.js` relay health without displaying raw signed content.
+- Source: `lib/publish-outbox.js`, `lib/connection-manager.js`, `lib/nostr.js`, `components/miniapps/RelaySettings.js`, `docs/wiki/platforms/web.md`, `docs/wiki/ui/android-ios-sync.md`.
+
+## [2026-06-09] performance | Android Relay Settings publish diagnostics UI
+
+- Added an Android Mini Apps relay settings diagnostics card showing pending signed publish outbox count, recent pending event IDs, retry attempts, manual retry, and Rust RelayRouter health snapshots.
+- Kept diagnostics local and sanitized: raw signed event JSON is not displayed.
+- Reused repository accessors `retryPendingPublishOutbox`, `getRelayHealthSnapshots`, and `getPendingPublishOutbox`.
+- Verified Android debug Kotlin compilation succeeds with `cd android && ./gradlew :app:compileDebugKotlin`.
+- Source: `android/app/src/main/kotlin/io/nurunuru/app/ui/screens/MiniAppsScreen.kt`, `android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepository.kt`, `android/app/src/main/kotlin/io/nurunuru/app/data/NostrClient.kt`, `docs/wiki/platforms/android.md`, `docs/wiki/ui/android-ios-sync.md`.
+
+## [2026-06-09] performance | iOS RelaySettings publish diagnostics UI
+
+- Added an iOS Relay Settings diagnostics card behind `NURUNURU_FFI_AVAILABLE` showing pending signed publish outbox count, recent pending event IDs, retry attempts, manual retry, and Rust RelayRouter health snapshots.
+- Kept diagnostics local and sanitized: raw signed event content is not displayed.
+- Reused repository accessors `retryPendingPublishOutbox`, `getRelayHealthSnapshots`, and `getPendingPublishOutbox` added in the previous phase.
+- Verified iOS simulator build succeeds with `xcodebuild -scheme NuruNuru -destination 'platform=iOS Simulator,name=iPhone 17' -skipPackagePluginValidation build`.
+- Source: `ios/NuruNuru/Views/MiniApps/RelaySettingsView.swift`, `ios/NuruNuru/Data/NostrRepository.swift`, `ios/NuruNuru/Data/NuruNuruFFILiveClient.swift`, `docs/wiki/platforms/ios.md`, `docs/wiki/ui/android-ios-sync.md`.
+
+## [2026-06-09] performance | iOS structured publish result integration
+
+- Synced the iOS Swift Package UniFFI source from regenerated Swift bindings so `FfiPublishResult`, relay health snapshots, and publish outbox APIs are visible to app code.
+- Added iOS `RustPublishDeliveryResult`, `RustRelayHealthStatus`, and `RustPublishOutboxStatus` bridge models in `RustNostrFFIClient`.
+- Updated Rust raw-event publish integration to use `publishRawEventResult` / targeted result variants and log queued/failed delivery state before fallback.
+- Added async repository accessors for `retryPendingPublishOutbox`, `getRelayHealthSnapshots`, and `getPendingPublishOutbox`.
+- `RustNostrFFIClient.connect(relayUrls:)` now starts a detached best-effort pending outbox retry after connect without blocking the repository actor.
+- Source: `ios/NuruNuru/Data/NuruNuruFFILiveClient.swift`, `ios/NuruNuru/Data/NostrRepository.swift`, `rust-engine/nurunuru-ffi/ios/Sources/NuruNuru/nurunuru_ffi.swift`.
+
+## [2026-06-09] performance | Android structured publish result integration
+
+- Added Android domain models for `PublishDeliveryResult`, `RelayHealthStatus`, and `PublishOutboxStatus`.
+- Wired `NostrClient` to map Rust `FfiPublishResult`, relay health snapshots, and publish outbox items into Android data models.
+- Triggered best-effort `retryPendingPublishOutbox(20)` after Rust client connect without blocking app startup.
+- Updated `NostrRepository.signAndPublishGetId()` and `NostrRepositoryActions.publishNote()` to use structured publish result APIs for raw signed events and text-note publish paths, including targeted relay variants.
+- Added repository accessors for pending outbox and relay health diagnostics for future Relay Settings / Performance Console UI.
+- Verified `cd android && ./gradlew :app:compileDebugKotlin` succeeds with existing warnings.
+- Source: `android/app/src/main/kotlin/io/nurunuru/app/data/NostrClient.kt`, `android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepository.kt`, `android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepositoryActions.kt`, `android/app/src/main/kotlin/io/nurunuru/app/data/models/NostrModels.kt`.
+
+## [2026-06-09] performance | Structured publish results and outbox retry API
+
+- Added Rust `PublishResult` for write paths with event id, aggregate ok/failed relay lists, first-ok latency, retry queued flag, and error string.
+- Added structured publish APIs for raw signed events and tagged notes, including targeted relay variants, while preserving legacy event-id-returning APIs.
+- Added `retry_pending_publish_outbox(limit)` to retry pending/failed fully-signed event JSON from `publish_outbox.json` using existing RelayRouter cooldown rules.
+- Exposed Phase 2 APIs through UniFFI and regenerated Kotlin/Swift bindings, including `FfiPublishResult`.
+- Verified `cargo check -p nurunuru-ffi`, targeted Rust tests for RelayRouter/outbox, and regenerated bindings via `bindgen/gen_kotlin.sh` and `bindgen/gen_swift.sh`.
+- Source: `rust-engine/nurunuru-core/src/outbox.rs`, `rust-engine/nurunuru-core/src/engine.rs`, `rust-engine/nurunuru-ffi/src/lib.rs`, `rust-engine/nurunuru-ffi/bindgen/kotlin-out/uniffi/nurunuru/nurunuru.kt`, `rust-engine/nurunuru-ffi/bindgen/swift-out/nurunuru.swift`.
+
+## [2026-06-09] performance | Rust RelayRouter and signed publish outbox groundwork
+
+- Added Rust `RelayRouter` / `RelayHealthSnapshot` groundwork in `rust-engine/nurunuru-core/src/relay.rs`, including cooldown-aware relay availability and unit coverage.
+- Wired relay health recording into explicit relay fetches and targeted publish paths, and made note/raw publish paths enqueue signed events before network send.
+- Added `PublishOutbox` in `rust-engine/nurunuru-core/src/outbox.rs`, storing fully-signed event JSON only under `db_path/publish_outbox.json` before raw publish and marking items published/failed after network result.
+- Exposed UniFFI APIs `relay_health_snapshots()`, `enqueue_publish_outbox()`, and `pending_publish_outbox()`; regenerated Kotlin and Swift bindings.
+- Verified `cargo check -p nurunuru-ffi` and targeted Rust tests for relay cooldown and outbox persistence.
+- Source: `rust-engine/nurunuru-core/src/relay.rs`, `rust-engine/nurunuru-core/src/outbox.rs`, `rust-engine/nurunuru-core/src/engine.rs`, `rust-engine/nurunuru-ffi/src/lib.rs`, `rust-engine/nurunuru-ffi/bindgen/kotlin-out/uniffi/nurunuru/nurunuru.kt`, `rust-engine/nurunuru-ffi/bindgen/swift-out/nurunuru.swift`.
+
+## [2026-06-09] performance | Phase 0 timeline first-paint safety
+
+- Removed Android timeline NIP-05 verification from `NostrRepository.enrichPosts()` so DNS/HTTPS checks no longer block timeline enrichment.
+- Added local-only Web performance metrics helper and instrumented managed relay fetches plus following first-page and URL preview fetch timings.
+- Changed Web URL previews to fetch only near the viewport, reducing Microlink/API pressure on long timelines.
+- Preserved existing Web following posts and Android selected relay posts on transient empty relay responses.
+- Source: `android/app/src/main/kotlin/io/nurunuru/app/data/NostrRepository.kt`, `android/app/src/main/kotlin/io/nurunuru/app/viewmodel/TimelineViewModel.kt`, `components/URLPreview.js`, `components/TimelineTab.js`, `lib/connection-manager.js`, `lib/performance-metrics.js`.
+
+## [2026-06-09] implementation | Shared Nostr kind registry and upstream aliases
+
+- Added Web shared kind registry `lib/nostr-kinds.js` and re-exported `NOSTR_KINDS` from `lib/constants.js`.
+- Added NIP-5A nsite aliases across Web / Android / iOS: root `15128`, legacy `34128`, and named `35128`.
+- Replaced project-local `VIDEO_LOOP` / `videoLoop` / Web `SHORT_VIDEO` usage with upstream-aligned `ADDRESSABLE_SHORT_VIDEO` / `addressableShortVideo` naming for kind `34236`.
+- Replaced Web `NIP46_KIND` and iOS raw kind `24133` usage with `NOSTR_CONNECT` / `nostrConnect` constants while preserving NIP-46 / Nostr Connect feature behavior.
+- Source references: `lib/nostr-kinds.js`, `lib/constants.js`, `lib/nip46.js`, `android/app/src/main/kotlin/io/nurunuru/app/data/models/NostrModels.kt`, `ios/NuruNuru/Models/NostrKind.swift`, `ios/NuruNuru/Data/ExternalSigner.swift`.
+
+## [2026-06-09] docs | NIP and kind registry audit
+
+- Audited upstream `nostr-protocol/nips` at `7a2197c00d1bbff19b32d19851f4dffe4810b8ed` and `nostr-protocol/registry-of-kinds` at `d93db0c028184f317497763837e9524246507acb`.
+- Updated NIP support docs to distinguish official NIP-5A nsites from Scroll mini-app kinds, mark NIP-96 as legacy/unrecommended compatibility, clarify NIP-EE as superseded by Marmot, and note the new NIP-50 `autocomplete:true/false` extension gap.
+- Added `docs/wiki/nips/kind-registry.md`, `docs/wiki/nips/nip-5a.md`, and `docs/wiki/nips/nip-b7.md`; updated NIP-71, NIP-98, image upload, and wiki index links.
+- Source references: `docs/wiki/nips/README.md`, `docs/wiki/nips/kind-registry.md`, `docs/wiki/nips/nip-5a.md`, `docs/wiki/nips/nip-b7.md`, `docs/wiki/nips/nip-50.md`, `docs/wiki/nips/nip-71.md`, `docs/wiki/nips/nip-98.md`, `docs/wiki/features/image-upload.md`, `docs/wiki/index.md`.
+
 ## [2026-06-03] change | Passkey-only onboarding and invite relocation
 
 - 新規登録を Web / Android / iOS でパスキー登録のみに整理し、オンボーディング中の nsec バックアップ/従来作成導線を削除した。

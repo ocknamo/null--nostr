@@ -7,12 +7,12 @@ import Foundation
 ///   1. Client generates a disposable keypair (`clientKeyPair`)
 ///   2. User provides a `bunker://` URI or scans a QR code
 ///   3. Client connects to the relay specified in the URI
-///   4. Client sends `connect` request (Kind 24133, NIP-44 encrypted)
+///   4. Client sends connect request (Nostr Connect kind via NostrKind.nostrConnect, NIP-44 encrypted)
 ///   5. Remote signer responds with approval
 ///   6. Client calls `get_public_key` to learn the user's actual pubkey
 ///   7. For signing: `sign_event` request → signed event response
 ///
-/// All NIP-46 messages are Kind 24133, encrypted with NIP-44.
+/// All Nostr Connect messages use NostrKind.nostrConnect, encrypted with NIP-44.
 actor ExternalSigner {
 
     // MARK: - State
@@ -318,9 +318,9 @@ actor ExternalSigner {
             throw ExternalSignerError.encryptionFailed
         }
 
-        // Build Kind 24133 event
+        // Build Nostr Connect event
         let requestEvent = try signer.signEvent(
-            kind: 24133,
+            kind: NostrKind.nostrConnect,
             tags: [["p", remotePubHex]],
             content: encryptedContent
         )
@@ -358,9 +358,9 @@ actor ExternalSigner {
         guard let client = nip46Client,
               let clientPubHex = clientPublicKeyHex else { return }
 
-        // Subscribe to Kind 24133 events p-tagged to our client pubkey
+        // Subscribe to Nostr Connect events p-tagged to our client pubkey
         let filter = NostrFilter(
-            kinds: [24133],
+            kinds: [NostrKind.nostrConnect],
             since: Int64(Date().timeIntervalSince1970) - 5,
             tags: ["#p": [clientPubHex]]
         )
@@ -372,7 +372,7 @@ actor ExternalSigner {
     }
 
     private func handleResponseEvent(_ event: NostrEvent) {
-        guard event.kind == 24133,
+        guard event.kind == NostrKind.nostrConnect,
               let signer = clientSigner else { return }
 
         // Decrypt NIP-44 content

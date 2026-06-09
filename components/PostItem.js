@@ -19,6 +19,7 @@ import ReportModal from './ReportModal'
 import BirdwatchModal from './BirdwatchModal'
 import BirdwatchDisplay from './BirdwatchDisplay'
 import ReactionEmojiPicker from './ReactionEmojiPicker'
+import { NOSTR_KINDS } from '@/lib/constants'
 
 // NIP-05 verified badge component
 function Nip05Badge({ nip05, pubkey }) {
@@ -382,8 +383,8 @@ export default function PostItem({
   // Extract client tag
   const clientTag = post.tags?.find(t => t[0] === 'client')?.[1] || null
 
-  // ProofMode verification (Kind 34236)
-  const isDivine = post.kind === 34236
+  // ProofMode verification (NIP-71 addressable short video)
+  const isDivine = post.kind === NOSTR_KINDS.ADDRESSABLE_SHORT_VIDEO
   const verificationLevel = post.tags?.find(t => t[0] === 'verification')?.[1] || post.tags?.find(t => t[0] === 'verification-level')?.[1]
   const videoUrlTag = post.tags?.find(t => t[0] === 'url')?.[1]
   
@@ -450,7 +451,7 @@ export default function PostItem({
     const previewUrls = []
     const textParts = []
 
-    // For Kind 34236, add the video URL from tags if not in content
+    // For NIP-71 addressable short video, add the video URL from tags if not in content
     if (isDivine && videoUrlTag && !content?.includes(videoUrlTag)) {
       videos.push(videoUrlTag)
     }

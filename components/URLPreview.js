@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
+import { recordMetric } from '@/lib/performance-metrics'
 
 // In-memory cache for OG data
 const ogDataCache = new Map()
@@ -50,14 +51,20 @@ function isValidUrl(urlString) {
  */
 export default function URLPreview({ url, compact = false }) {
   const [ogData, setOgData] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
+  const [isVisible, setIsVisible] = useState(false)
   const [error, setError] = useState(false)
   const mountedRef = useRef(true)
   const fetchAttemptedRef = useRef(false)
+  const rootRef = useRef(null)
 
   useEffect(() => {
     mountedRef.current = true
     fetchAttemptedRef.current = false
+    setOgData(null)
+    setError(false)
+    setLoading(false)
+    setIsVisible(false)
 
     return () => {
       mountedRef.current = false
@@ -65,7 +72,29 @@ export default function URLPreview({ url, compact = false }) {
   }, [url])
 
   useEffect(() => {
-    if (!url || fetchAttemptedRef.current) {
+    const node = rootRef.current
+    if (!node) return
+
+    if (typeof IntersectionObserver === 'undefined') {
+      setIsVisible(true)
+      return
+    }
+
+    const observer = new IntersectionObserver(
+      entries => {
+        if (entries.some(entry => entry.isIntersecting)) {
+          setIsVisible(true)
+          observer.disconnect()
+        }
+      },
+      { rootMargin: '300px 0px' }
+    )
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [url])
+
+  useEffect(() => {
+    if (!url || fetchAttemptedRef.current || !isVisible) {
       return
     }
 
@@ -119,6 +148,8 @@ export default function URLPreview({ url, compact = false }) {
     } catch {}
 
     const fetchOGData = async () => {
+      const startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
+      setLoading(true)
       // Check if we're in rate limit backoff period
       if (Date.now() < rateLimitBackoffUntil) {
         if (mountedRef.current) {
@@ -226,6 +257,7 @@ export default function URLPreview({ url, compact = false }) {
           }
 
           if (mountedRef.current) {
+            recordMetric('urlPreview.fetch', ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt, { ok: true, hasImage: !!data.image })
             setOgData(data)
             setLoading(false)
           }
@@ -255,6 +287,7 @@ export default function URLPreview({ url, compact = false }) {
             timestamp: Date.now()
           }))
         } catch {}
+        recordMetric('urlPreview.fetch', ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt, { ok: false })
         setError(true)
         setLoading(false)
       }
@@ -265,7 +298,11 @@ export default function URLPreview({ url, compact = false }) {
     const delay = 200 + Math.random() * 500 // 200-700ms
     const timeoutId = setTimeout(fetchOGData, delay)
     return () => clearTimeout(timeoutId)
-  }, [url])
+  }, [url, isVisible])
+
+  if (!isVisible && !ogData) {
+    return <div ref={rootRef} className="my-2" />
+  }
 
   // Don't show anything if error or no data
   if (error || (!loading && !ogData)) {
@@ -275,7 +312,7 @@ export default function URLPreview({ url, compact = false }) {
   // Loading skeleton
   if (loading) {
     return (
-      <div className={`border border-[var(--border-color)] rounded-lg overflow-hidden bg-[var(--bg-secondary)] my-2 ${compact ? 'max-w-xs' : ''}`}>
+      <div ref={rootRef} className={`border border-[var(--border-color)] rounded-lg overflow-hidden bg-[var(--bg-secondary)] my-2 ${compact ? 'max-w-xs' : ''}`}>
         <div className="animate-pulse">
           {!compact && <div className="h-32 bg-[var(--bg-tertiary)]" />}
           <div className="p-3">
@@ -312,6 +349,7 @@ export default function URLPreview({ url, compact = false }) {
         target="_blank"
         rel="noopener noreferrer"
         onClick={handleClick}
+        ref={rootRef}
         className="block border border-[var(--border-color)] rounded-lg overflow-hidden bg-[var(--bg-secondary)] hover:bg-[var(--bg-tertiary)] transition-colors my-2 max-w-sm"
       >
         <div className="flex items-center gap-3 p-2">
@@ -359,6 +397,7 @@ export default function URLPreview({ url, compact = false }) {
       target="_blank"
       rel="noopener noreferrer"
       onClick={handleClick}
+      ref={rootRef}
       className="block border border-[var(--border-color)] rounded-lg overflow-hidden bg-[var(--bg-secondary)] hover:bg-[var(--bg-tertiary)] transition-colors my-2"
     >
       {ogData.image && (

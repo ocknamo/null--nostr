@@ -408,15 +408,40 @@ actor NostrRepository {
         let targets = relayUrls ?? buildRelayConnectionUrls()
         rust.connect(relayUrls: targets)
         do {
-            _ = try await Task.detached(priority: .userInitiated) {
-                try rust.publishRawEvent(rawJSON, relayUrls: relayUrls)
+            let result = try await Task.detached(priority: .userInitiated) {
+                try rust.publishRawEventResult(rawJSON, relayUrls: relayUrls)
             }.value
-            AppLogger.log("FFI", "Rust publish ok event=\(event.id) targeted=\(relayUrls?.count ?? 0)")
-            return true
+            if result.ok {
+                AppLogger.log("FFI", "Rust publish ok event=\(event.id) firstOkMs=\(result.firstOkMs) targeted=\(relayUrls?.count ?? 0)")
+                return true
+            }
+            AppLogger.log("FFI", "Rust publish queued/failed event=\(event.id) retry=\(result.retryQueued) err=\(result.error)")
+            return false
         } catch {
             AppLogger.log("FFI", "Rust publish failed; falling back event=\(event.id) err=\(error)")
             return false
         }
+    }
+
+    func retryPendingPublishOutbox(limit: UInt32 = 20) async -> [RustPublishDeliveryResult] {
+        guard let rust = ensureRustNostrClient() else { return [] }
+        return await Task.detached(priority: .utility) {
+            (try? rust.retryPendingPublishOutbox(limit: limit)) ?? []
+        }.value
+    }
+
+    func getRelayHealthSnapshots() async -> [RustRelayHealthStatus] {
+        guard let rust = ensureRustNostrClient() else { return [] }
+        return await Task.detached(priority: .utility) {
+            rust.relayHealthSnapshots()
+        }.value
+    }
+
+    func getPendingPublishOutbox(limit: UInt32 = 50) async -> [RustPublishOutboxStatus] {
+        guard let rust = ensureRustNostrClient() else { return [] }
+        return await Task.detached(priority: .utility) {
+            (try? rust.pendingPublishOutbox(limit: limit)) ?? []
+        }.value
     }
 
     func publishSignedRawEventJSON(_ rawJSON: String, to relays: [String]) async throws {

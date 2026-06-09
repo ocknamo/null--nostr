@@ -107,7 +107,7 @@ extension NostrRepository {
         }
 
         let content = summary.isEmpty ? title : summary
-        let event = try signer.signEvent(kind: NostrKind.videoLoop, tags: tags, content: content)
+        let event = try signer.signEvent(kind: NostrKind.addressableShortVideo, tags: tags, content: content)
         try await publishSignedEvent(event, to: RokunanaRelays.readWrite)
         return event
     }
