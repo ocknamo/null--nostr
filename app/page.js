@@ -9,6 +9,7 @@ import TalkTab from '@/components/TalkTab'
 import TimelineTab from '@/components/TimelineTab'
 import MiniAppTab from '@/components/MiniAppTab'
 import { loadPubkey, clearPubkey, getLoginMethod, getAutoSignEnabled, startBackgroundPrefetch, clearPrefetchPromises, restoreStoredPrivateKey, clearStoredPrivateKey, getPrivateKeyHex, nip19, hexToBytes } from '@/lib/nostr'
+import { createNosskeyManager } from '@/lib/nosskey'
 import { initCache } from '@/lib/cache'
 
 // Desktop sidebar navigation items
@@ -144,12 +145,8 @@ export default function Home() {
         const loginMethod = getLoginMethod()
         if (loginMethod === 'nosskey') {
           try {
-            const { NosskeyManager } = await import('nosskey-sdk')
-            const manager = new NosskeyManager({
-              storageOptions: { enabled: true, storageKey: 'nurunuru_nosskey' },
-              cacheOptions: { enabled: true, timeoutMs: 3600000 }
-            })
-            
+            const manager = await createNosskeyManager()
+
             if (manager.hasKeyInfo()) {
               window.nosskeyManager = manager
               // Do not export the private key during passive session restore.
@@ -227,9 +224,12 @@ export default function Home() {
     clearPubkey()
     clearPrefetchPromises()
     clearStoredPrivateKey(logoutPubkey)
-    // Clear Nosskey data if it was used
+    // Clear Nosskey session if it was used.
+    // Use clearCurrentKeyInfo() (not clearStoredKeyInfo()) so the account
+    // registry is preserved — otherwise imported wrap-mode keys, which cannot
+    // be re-derived, would be permanently lost on logout.
     if (window.nosskeyManager) {
-      window.nosskeyManager.clearStoredKeyInfo()
+      window.nosskeyManager.clearCurrentKeyInfo()
       window.nosskeyManager = undefined
     }
     localStorage.removeItem('nurunuru_login_method')

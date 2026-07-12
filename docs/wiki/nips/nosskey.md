@@ -43,37 +43,64 @@ SDK releases and in this repo's pre-2026-05-23 Web sign-up. `nosskey-sdk@^0.1.2`
 auto-normalises legacy salt values to the standard one on load; new keys
 across all three platforms are now created with the standard salt.
 
+### Wrap-mode salt (imported keys)
+
+`nosskey-sdk@0.2.0` adds a second salt `"nostr-pwk-wrap"`
+(hex `6e6f7374722d70776b2d77726170`) used by **wrap mode** — the path that
+imports an *existing* nsec instead of deriving a fresh key. The wrap salt's
+PRF output becomes a key-encryption key (KEK); the imported secret key is
+encrypted to itself with NIP-44 v2 and stored in `NostrKeyInfo.wrapped.payload`.
+The KEK is never the Nostr key, so importing an arbitrary nsec is possible
+(unlike PRF Direct, which can only *generate* a key).
+
 ## Current behavior
 
 ### Web (`components/SignUpModal.js`, `components/LoginScreen.js`)
 
-- Uses `nosskey-sdk@^0.1.2` from npm. Lazy-loaded in `LoginScreen.js` and
-  `app/page.js`.
-- `NosskeyManager` is created with `storageKey: 'nurunuru_nosskey'` and a
-  1-hour key cache.
-- 5-step sign-up wizard (`SignUpModal.js`):
+- Uses `nosskey-sdk@^0.2.0` from npm. The `NosskeyManager` is created via the
+  shared helper `createNosskeyManager()` in `lib/nosskey.js` (lazy `import`),
+  used by `LoginScreen.js` and `app/page.js`.
+- `NosskeyManager` is created with `storageKey: 'nurunuru_nosskey'`,
+  `registryStorageKey: 'nurunuru_nosskey_accounts'`, and a 1-hour key cache.
+- Sign-up wizard (`SignUpModal.js`):
   1. `welcome` — calls `createPasskey({ rp: { name: 'ぬるぬる' }, … })` to
-     create the resident Passkey, then calls `exportNostrKey(keyInfo, cid)`
-     with a minimal SDK-0.1.x-compatible `NostrKeyInfo` shape to derive the
-     initial secret key and public key. This preserves the pre-0.1.2 Web
-     behavior of one Passkey registration prompt plus one PRF assertion.
-  2. `relay`   — region picker → recommended relays.
-  3. `profile` — kind 0 metadata + kind 10002 NIP-65 relay list publish.
-  4. `tutorial` — `#nostrはじめました` first post.
-  5. `success` — show npub / complete or redirect to app.
-- The old `backup` step and `exportNostrKey(null, credentialId)` call were
-  removed when moving to `nosskey-sdk@0.1.x`, where `exportNostrKey` requires
-  a non-null `NostrKeyInfo`.
-- Subsequent logins call `NosskeyManager.createNostrKey()` with no
-  `credentialId` so the browser shows the passkey picker. Normal Web login does
-  **not** call `exportNostrKey()`; exporting is reserved for app redirect,
-  explicit key export, DM fallback, or signing paths that require the secret.
-  This avoids a second passkey prompt during login.
-- When the user explicitly exports the key, Web stores it in the module-private
-  key store and persists an encrypted-at-rest copy using AES-GCM with a
-  non-extractable per-origin WebCrypto key in IndexedDB. On reload,
-  `app/page.js` restores this copy only when auto-sign is enabled, without
-  invoking WebAuthn.
+     create the resident Passkey, then `createNostrKey(cid)` (PRF Direct) to
+     derive the key info, then `exportNostrKey(keyInfo, cid)` to obtain the
+     secret for the encrypted auto-sign store. In 0.2.0, `createPasskey()`
+     pre-caches the creation-time PRF output, so `createNostrKey(cid)` needs no
+     extra biometric prompt; UV count stays at 2 (create + export).
+     The `welcome` step also offers a discreet "既存の秘密鍵(nsec)をお持ちの方
+     はこちら" link that switches to the `import` step.
+  2. `import` — (existing-user path) validates the nsec/hex via
+     `decodeNsec()` in `lib/nosskey.js`, calls `createPasskey(...)`, then
+     `importNostrKey(seckeyBytes, cid)` (**wrap mode**). Success merges back
+     into the normal wizard at `relay`. `importNostrKey` zeroizes the input
+     buffer, so the hex is captured before the call for the auto-sign store.
+  3. `relay`   — region picker → recommended relays.
+  4. `profile` — kind 0 metadata + kind 10002 NIP-65 relay list publish.
+  5. `tutorial` — `#nostrはじめました` first post.
+  6. `success` — show npub / complete or redirect to app.
+- Subsequent logins (`LoginScreen.js handleNosskeyLogin`):
+  1. current key info present → log in with it.
+  2. else consult the registry via `listKeyInfos()`. One saved account → log in
+     with it; multiple → show an account picker. This is required for imported
+     **wrap-mode** accounts, which cannot be re-derived via PRF-direct
+     `createNostrKey()`.
+  3. else call `createNostrKey()` with no `credentialId` (discoverable passkey
+     picker, PRF Direct recovery).
+  Normal Web login does **not** call `exportNostrKey()` unless an app redirect
+  needs the nsec; exporting is otherwise reserved for explicit key export, DM
+  fallback, or signing paths that require the secret.
+- **Logout** (`app/page.js handleLogout`) calls `clearCurrentKeyInfo()`, which
+  drops the current pointer + memory/cache but **preserves the account
+  registry**. Using `clearStoredKeyInfo()` here would permanently destroy
+  imported wrap-mode secrets (they are not re-derivable). `clearStoredKeyInfo()`
+  is reserved for a full "erase everything" on a shared device.
+- When the user explicitly exports the key (or during sign-up/import), Web
+  stores it in the module-private key store and persists an encrypted-at-rest
+  copy using AES-GCM with a non-extractable per-origin WebCrypto key in
+  IndexedDB. On reload, `app/page.js` restores this copy only when auto-sign is
+  enabled, without invoking WebAuthn.
 
 ### iOS (`ios/NuruNuru/Data/NosskeyManager.swift`, `NosskeySigner.swift`)
 
@@ -131,20 +158,34 @@ across all three platforms are now created with the standard salt.
 {
   "credentialId": "<hex (iOS, Android) or base64url (Android raw)>",
   "pubkey":       "<32-byte secp256k1 x-only public key, lowercase hex>",
-  "salt":         "6e6f7374722d70776b",
-  "username":     "user"            // optional
+  "salt":         "6e6f7374722d70776b",  // or 6e6f7374722d70776b2d77726170 for wrap mode
+  "username":     "user",           // optional
+  // wrap mode only (imported nsec): the secret encrypted to itself (NIP-44 v2)
+  "wrapped":      { "v": 1, "alg": "nip44-v2", "payload": "<base64>" }
 }
 ```
 
-The secret key is **never** stored. It's derived on demand via biometric
-prompt and zeroized after use.
+For **PRF Direct** keys the secret is **never** stored — it's derived on demand
+via biometric prompt and zeroized after use. For **wrap mode** (imported nsec)
+keys, the *encrypted* secret lives in `wrapped.payload`; only the PRF-derived
+KEK (recomputed per biometric prompt) can decrypt it.
+
+On Web, `nosskey-sdk@0.2.0` also keeps a multi-account **registry** in
+`localStorage['nurunuru_nosskey_accounts']` — a JSON array of the above records.
+`setCurrentKeyInfo()` upserts into it; logout preserves it so saved accounts
+(especially non-re-derivable wrap-mode keys) remain recoverable.
+
+> Note: a wrap-mode key's `wrapped.payload` lives only in this origin's
+> `localStorage`. Even though the Passkey itself syncs across devices, the
+> encrypted payload does **not** — importing again is required on a new device.
 
 ## Platform notes
 
 | Concern | Web | iOS | Android |
 |---|---|---|---|
-| Library | `nosskey-sdk@^0.1.2` | Native `AuthenticationServices` (iOS 18+) | `androidx.credentials` 1.2.2 (API 28+) |
-| Storage key | `nurunuru_nosskey` (localStorage) | `nurunuru_nosskey_keyinfo` (UserDefaults) | `nurunuru_nosskey` SharedPreferences |
+| Library | `nosskey-sdk@^0.2.0` | Native `AuthenticationServices` (iOS 18+) | `androidx.credentials` 1.2.2 (API 28+) |
+| Storage key | `nurunuru_nosskey` + registry `nurunuru_nosskey_accounts` (localStorage) | `nurunuru_nosskey_keyinfo` (UserDefaults) | `nurunuru_nosskey` SharedPreferences |
+| nsec import | wrap mode (`importNostrKey`) in sign-up | not yet | classic nsec button |
 | Login method flag | `nurunuru_login_method = 'nosskey'` | `loginMethod = "nosskey"` | `loginMethod = "nosskey"` |
 | Signer | `NosskeyManager.signEvent` | `NosskeySigner` (`EventSigner` impl) | `NosskeySigner` (`AppSigner` impl) |
 | Cache TTL | 60 min | 5 min | 5 min |
@@ -155,13 +196,17 @@ prompt and zeroized after use.
 ## Source references
 
 - Web
-  - `components/SignUpModal.js` (uses `NosskeyManager.createPasskey` /
-    `exportNostrKey(keyInfo, cid)`; salt `6e6f7374722d70776b`)
-  - `components/LoginScreen.js` (lazy-loads `NosskeyManager`, restores stored
-    key info, and uses discoverable `createNostrKey()` for passkey login)
-  - `app/page.js` (rehydration of `NosskeyManager` on reload without passive
-    encrypted auto-sign key restore)
-  - `src/adapters/signing/NosskeySigner.ts` (tracks nosskey-sdk 0.1.x flat
+  - `lib/nosskey.js` (shared `createNosskeyManager()` factory with storage +
+    registry keys, and `decodeNsec()` for nsec/hex import validation)
+  - `components/SignUpModal.js` (`createPasskey` + `createNostrKey(cid)` for new
+    accounts; `import` step calls `importNostrKey(seckey, cid)` for wrap-mode
+    nsec import; salts `6e6f7374722d70776b` / `6e6f7374722d70776b2d77726170`)
+  - `components/LoginScreen.js` (uses `createNosskeyManager()`, recovers from the
+    registry via `listKeyInfos()` with an account picker, falls back to
+    discoverable `createNostrKey()`)
+  - `app/page.js` (rehydration of `NosskeyManager` on reload; logout uses
+    `clearCurrentKeyInfo()` to preserve the registry)
+  - `src/adapters/signing/NosskeySigner.ts` (tracks nosskey-sdk flat
     NIP-04/NIP-44 method names; broader DM routing is future work)
 - iOS
   - `ios/NuruNuru/Data/NosskeyManager.swift` (PRF orchestration)
@@ -211,8 +256,13 @@ prompt and zeroized after use.
 - Should `NosskeyKeyInfo.username` be exposed in profile copy ("@user")
   somewhere in Settings? Currently we hardcode `"user"` to avoid asking the
   user up-front.
-- Web sign-up currently still needs one Passkey creation prompt plus one PRF
-  assertion to obtain the Nostr secret with `nosskey-sdk@0.1.2`. Native
-  iOS/Android can derive the secret during registration; true one-prompt Web
-  sign-up parity depends on WebAuthn PRF registration-result support and/or SDK
-  API changes.
+- With `nosskey-sdk@0.2.0`, `createPasskey()` pre-caches the creation-time PRF
+  output so `createNostrKey(cid)` / `importNostrKey(seckey, cid)` need no extra
+  prompt. The remaining Web UV during sign-up is the `exportNostrKey()` call that
+  seeds the encrypted auto-sign store; skipping the eager export (deriving the
+  secret lazily on first sign) would make Web sign-up truly single-prompt — a
+  possible future simplification.
+- Imported wrap-mode keys are recoverable only on the origin/device where they
+  were imported (the encrypted payload is not Passkey-synced) and only while the
+  registry survives. Cross-device UX for imported keys needs a re-import prompt;
+  a guided "この端末にインポート" flow is future work.

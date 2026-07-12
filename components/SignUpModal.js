@@ -1,19 +1,21 @@
 'use client'
 
 import { useState, useRef } from 'react'
-import { nip19, getPublicKey } from 'nostr-tools'
+import { nip19 } from 'nostr-tools'
 import {
   savePubkey,
   setStoredPrivateKey,
   publishRelayListMetadata,
   setDefaultRelay,
   hexToBytes,
+  bytesToHex,
   uploadImage,
   createEventTemplate,
   signEventNip07,
   publishEvent
 } from '@/lib/nostr'
 import { autoDetectRelays, formatDistance, REGION_COORDINATES, selectRelaysByRegion, saveSelectedRegion } from '@/lib/geohash'
+import { decodeNsec } from '@/lib/nosskey'
 
 /**
  * SignUpModal Component
@@ -42,9 +44,13 @@ const TUTORIAL_DEFAULT_CONTENT = `\n#${TUTORIAL_HASHTAG}`
 const TUTORIAL_PLACEHOLDER = `いまどうしてる？\n#${TUTORIAL_HASHTAG}`
 
 export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
-  const [step, setStep] = useState('welcome') // welcome, relay, profile, tutorial, success
+  const [step, setStep] = useState('welcome') // welcome, import, relay, profile, tutorial, success
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+
+  // 既存秘密鍵(nsec)インポート用ステート
+  const [importNsecInput, setImportNsecInput] = useState('')
+  const [importError, setImportError] = useState('')
   const [createdPubkey, setCreatedPubkey] = useState(null)
   const [backupNsec, setBackupNsec] = useState('')
   const [recommendedRelays, setRecommendedRelays] = useState([])
@@ -90,32 +96,24 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
       })
 
       if (cid) {
-        // Export and cache the Nostr key immediately, without showing an nsec backup step.
         // 新規登録はパスキー登録のみ。秘密鍵バックアップ画面は表示しない。
         //
-        // nosskey-sdk 0.1.x requires a non-null NostrKeyInfo for exportNostrKey.
-        // Calling createNostrKey(cid) before exportNostrKey(keyInfo) performs two
-        // PRF assertions after passkey creation, so keep the Web onboarding at the
-        // pre-0.1.2 two-prompt behavior by providing the required keyInfo shape and
-        // passing the freshly-created credentialId explicitly to exportNostrKey.
-        const credentialIdHex = Array.from(cid)
-          .map(b => b.toString(16).padStart(2, '0'))
-          .join('')
-        const exportKeyInfo = {
-          credentialId: credentialIdHex,
-          pubkey: '',
-          salt: '6e6f7374722d70776b' // "nostr-pwk" standard PRF salt
-        }
-        const privateKeyHex = await nosskeyManager.exportNostrKey(exportKeyInfo, cid)
-        if (!privateKeyHex) throw new Error('パスキーから鍵を準備できませんでした')
+        // nosskey-sdk 0.2.0 では createPasskey() が作成時に PRF を先読みキャッシュ
+        // するため、直後の createNostrKey(cid) は追加の生体認証なしで鍵情報を返す。
+        // exportNostrKey(keyInfo, cid) は自動署名用の秘密鍵取得のために 1 回だけ
+        // 認証を行う (UV 回数は従来と同じ 2 回)。
+        const keyInfo = await nosskeyManager.createNostrKey(cid)
+        const pk = keyInfo?.pubkey
+        if (!pk) throw new Error('パスキーから鍵を準備できませんでした')
 
-        const pk = getPublicKey(hexToBytes(privateKeyHex))
-        const keyInfo = { ...exportKeyInfo, pubkey: pk }
         setCreatedPubkey(pk)
-
         nosskeyManager.setCurrentKeyInfo(keyInfo)
-        setStoredPrivateKey(pk, privateKeyHex)
-        setBackupNsec(nip19.nsecEncode(hexToBytes(privateKeyHex)))
+
+        const privateKeyHex = await nosskeyManager.exportNostrKey(keyInfo, cid)
+        if (privateKeyHex) {
+          setStoredPrivateKey(pk, privateKeyHex)
+          setBackupNsec(nip19.nsecEncode(hexToBytes(privateKeyHex)))
+        }
 
         setStep('relay')
         startRelayDetection()
@@ -128,6 +126,67 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
         setError('登録がキャンセルされました')
       } else {
         setError(e.message || 'エラーが発生しました')
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Handle importing an existing Nostr secret key (nsec) behind a passkey.
+  // 既存の Nostr 秘密鍵をパスキーで暗号化保護 (wrap モード) してログインする。
+  const handleImportKey = async () => {
+    setLoading(true)
+    setImportError('')
+    try {
+      if (!nosskeyManager) throw new Error('Passkey manager not initialized')
+
+      // 1. 入力された nsec / hex を検証してバイト列へ
+      let seckey
+      try {
+        seckey = decodeNsec(importNsecInput)
+      } catch (validationError) {
+        setImportError(validationError.message || '秘密鍵の形式が正しくありません')
+        setLoading(false)
+        return
+      }
+
+      // importNostrKey は渡した seckey バッファを内部で 0 埋めするため、
+      // 自動署名用に控える hex は呼び出し前に確保しておく。
+      const privateKeyHex = bytesToHex(seckey)
+
+      window.nosskeyManager = nosskeyManager
+
+      // 2. パスキーを作成 (生体認証 1 回目 / PRF 先読みキャッシュ)
+      const cid = await nosskeyManager.createPasskey({
+        rp: { name: 'ぬるぬる' },
+        user: { name: 'user', displayName: 'Nostr User' }
+      })
+      if (!cid) throw new Error('パスキーの作成に失敗しました')
+
+      // 3. wrap モードでインポート (先読み PRF を消費するため追加認証なし)
+      const keyInfo = await nosskeyManager.importNostrKey(seckey, cid)
+      const pk = keyInfo?.pubkey
+      if (!pk) throw new Error('秘密鍵のインポートに失敗しました')
+
+      setCreatedPubkey(pk)
+      nosskeyManager.setCurrentKeyInfo(keyInfo)
+
+      // 4. 自動署名・DM 用に暗号化して端末内保存 (新規登録フローと同じ挙動)
+      setStoredPrivateKey(pk, privateKeyHex)
+      setBackupNsec(nip19.nsecEncode(hexToBytes(privateKeyHex)))
+
+      // 入力欄はメモリから消す
+      setImportNsecInput('')
+
+      // 通常の新規登録と同じウィザードへ合流
+      setStep('relay')
+      startRelayDetection()
+    } catch (e) {
+      console.error('Import error:', e)
+      if (e.name === 'NotAllowedError') {
+        setImportError('登録がキャンセルされました')
+      } else {
+        setImportError(e.message || 'エラーが発生しました')
       }
     } finally {
       setLoading(false)
@@ -350,7 +409,7 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
         {/* Progress bar (5 steps: welcome / region / profile / tutorial / success) */}
         <div className="h-1.5 w-full bg-[var(--bg-secondary)] flex">
           <div className={`h-full bg-[var(--line-green)] transition-all duration-500 ${
-            step === 'welcome' ? 'w-1/5' :
+            step === 'welcome' || step === 'import' ? 'w-1/5' :
             step === 'relay' ? 'w-2/5' :
             step === 'profile' ? 'w-3/5' :
             step === 'tutorial' ? 'w-4/5' : 'w-full'
@@ -391,6 +450,71 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
 
               <button onClick={onClose} className="text-[var(--text-tertiary)] text-sm hover:underline">
                 キャンセル
+              </button>
+
+              {/* 既存 Nostr ユーザー向けの控えめな導線 */}
+              <div className="pt-2">
+                <button
+                  onClick={() => { setError(''); setImportError(''); setStep('import') }}
+                  disabled={loading}
+                  className="text-[var(--text-tertiary)] text-xs hover:text-[var(--line-green)] hover:underline disabled:opacity-50"
+                >
+                  既存の秘密鍵(nsec)をお持ちの方はこちら
+                </button>
+              </div>
+            </div>
+          )}
+
+          {step === 'import' && (
+            <div className="text-center space-y-6">
+              <div className="w-20 h-20 mx-auto bg-green-500/10 rounded-full flex items-center justify-center">
+                <svg className="w-10 h-10 text-[var(--line-green)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M15 7h3a5 5 0 015 5 5 5 0 01-5 5h-3m-6 0H6a5 5 0 01-5-5 5 5 0 015-5h3" />
+                  <line x1="8" y1="12" x2="16" y2="12" />
+                </svg>
+              </div>
+              <div>
+                <h2 className="text-2xl font-bold text-[var(--text-primary)] mb-2">秘密鍵をインポート</h2>
+                <p className="text-[var(--text-secondary)] text-sm">
+                  お持ちの秘密鍵(nsec)を、この端末のパスキーで暗号化して安全に保存します。
+                </p>
+              </div>
+
+              <div className="text-left">
+                <input
+                  type="password"
+                  value={importNsecInput}
+                  onChange={e => { setImportNsecInput(e.target.value); setImportError('') }}
+                  placeholder="nsec1..."
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="w-full px-4 py-3 rounded-xl bg-[var(--bg-secondary)] text-[var(--text-primary)] text-sm outline-none border border-transparent focus:border-[var(--line-green)]"
+                />
+                <p className="text-[var(--text-tertiary)] text-xs mt-2">
+                  秘密鍵はサーバーに送信されず、この端末内にのみ保存されます。
+                </p>
+              </div>
+
+              {importError && (
+                <div className="p-3 bg-red-500/10 rounded-xl">
+                  <p className="text-red-500 text-xs">{importError}</p>
+                </div>
+              )}
+
+              <button
+                onClick={handleImportKey}
+                disabled={loading || !importNsecInput.trim()}
+                className="w-full btn-line py-4 text-lg font-bold disabled:opacity-50"
+              >
+                {loading ? 'インポート中...' : 'パスキーでインポート'}
+              </button>
+
+              <button
+                onClick={() => { setImportNsecInput(''); setImportError(''); setStep('welcome') }}
+                disabled={loading}
+                className="text-[var(--text-tertiary)] text-sm hover:underline disabled:opacity-50"
+              >
+                戻る
               </button>
             </div>
           )}

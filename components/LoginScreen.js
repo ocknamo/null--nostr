@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { nip19 } from 'nostr-tools'
 import { savePubkey, hexToBytes } from '@/lib/nostr'
+import { createNosskeyManager, NOSSKEY_STORAGE_KEY } from '@/lib/nosskey'
 import SignUpModal from './SignUpModal'
 
 export default function LoginScreen({ onLogin }) {
@@ -16,6 +17,8 @@ export default function LoginScreen({ onLogin }) {
   const [showNostrLoginOption, setShowNostrLoginOption] = useState(false)
   const [showSignUpModal, setShowSignUpModal] = useState(false)
   const [createdPubkey, setCreatedPubkey] = useState(null)
+  // 登録簿に複数アカウントがある場合のログイン先選択
+  const [accountChoices, setAccountChoices] = useState(null)
   const nosskeyManagerRef = useRef(null)
 
   // nostr-login states
@@ -30,11 +33,7 @@ export default function LoginScreen({ onLogin }) {
       await new Promise(r => setTimeout(r, 100))
 
       try {
-        const { NosskeyManager } = await import('nosskey-sdk')
-        const manager = new NosskeyManager({
-          storageOptions: { enabled: true, storageKey: 'nurunuru_nosskey' },
-          cacheOptions: { enabled: true, timeoutMs: 3600000 }
-        })
+        const manager = await createNosskeyManager()
         nosskeyManagerRef.current = manager
 
         // 1. First check storage for existing key info (Synchronous/No prompt)
@@ -50,10 +49,24 @@ export default function LoginScreen({ onLogin }) {
           }
         }
 
+        // 1b. Registry check — a saved account (incl. imported wrap-mode keys) means
+        // "パスキーでログイン" should be enabled even without a current key.
+        if (!foundPubkey) {
+          try {
+            const accounts = manager.listKeyInfos()
+            if (accounts && accounts.length > 0) {
+              setNosskeyHasKey(true)
+              foundPubkey = true
+            }
+          } catch (e) {
+            console.error('Registry check error:', e)
+          }
+        }
+
         // 2. Fallback direct localStorage check
         if (!foundPubkey) {
           try {
-            const storedData = localStorage.getItem('nurunuru_nosskey')
+            const storedData = localStorage.getItem(NOSSKEY_STORAGE_KEY)
             if (storedData) {
               const parsed = JSON.parse(storedData)
               if (parsed?.pubkey || parsed?.publicKey) {
@@ -163,6 +176,58 @@ export default function LoginScreen({ onLogin }) {
     }
   }
 
+  // Finalize login for a given NostrKeyInfo (current key or a registry account).
+  // Sets it as current, handles the optional app redirect, and calls onLogin.
+  const completeNosskeyLogin = async (manager, keyInfo, redirectUri) => {
+    const storedPubkey = keyInfo?.pubkey || keyInfo?.publicKey
+    if (!keyInfo || !storedPubkey) {
+      setError('パスキーが見つかりません。新規登録してください。')
+      return false
+    }
+
+    manager.setCurrentKeyInfo(keyInfo)
+
+    // Handle app redirect if requested
+    if (redirectUri) {
+      try {
+        const privateKeyHex = await manager.exportNostrKey(keyInfo)
+        if (privateKeyHex) {
+          const nsec = nip19.nsecEncode(hexToBytes(privateKeyHex))
+          const targetUrl = `${redirectUri}${redirectUri.includes('?') ? '&' : '?'}nsec=${nsec}`
+          console.log('completeNosskeyLogin: Redirecting to app:', targetUrl)
+          window.location.href = targetUrl
+          return true
+        }
+      } catch (e) {
+        console.error('completeNosskeyLogin: Failed to export key for redirect:', e)
+      }
+    }
+
+    savePubkey(storedPubkey)
+    localStorage.setItem('nurunuru_login_method', 'nosskey')
+    window.nosskeyManager = manager
+    onLogin(storedPubkey)
+    return true
+  }
+
+  // Login to a specific account chosen from the registry selection UI.
+  const handleSelectAccount = async (keyInfo) => {
+    const manager = nosskeyManagerRef.current || window.nosskeyManager
+    if (!manager) return
+    const redirectUri = accountChoices?.redirectUri
+    setAccountChoices(null)
+    setNosskeyLoading(true)
+    setError('')
+    try {
+      await completeNosskeyLogin(manager, keyInfo, redirectUri)
+    } catch (e) {
+      console.error('handleSelectAccount error:', e)
+      setError(e.message || 'ログインに失敗しました')
+    } finally {
+      setNosskeyLoading(false)
+    }
+  }
+
   // Passkey login handler
   const handleNosskeyLogin = async () => {
     setNosskeyLoading(true)
@@ -182,34 +247,37 @@ export default function LoginScreen({ onLogin }) {
       console.log('Login - stored key info:', keyInfo)
       console.log('Login - stored pubkey:', storedPubkey)
 
-      // If we have stored key info, use it
+      // If we have current key info, use it
       if (keyInfo && storedPubkey) {
         console.log('handleNosskeyLogin: Found stored keyInfo, pubkey=', storedPubkey)
-        // Handle app redirect if requested
-        if (redirectUri) {
-          try {
-            const privateKeyHex = await manager.exportNostrKey(keyInfo)
-            if (privateKeyHex) {
-              const nsec = nip19.nsecEncode(hexToBytes(privateKeyHex))
-              const targetUrl = `${redirectUri}${redirectUri.includes('?') ? '&' : '?'}nsec=${nsec}`
-              console.log('handleNosskeyLogin: Redirecting to app via stored key:', targetUrl)
-              window.location.href = targetUrl
-              return
-            }
-          } catch (e) {
-            console.error('handleNosskeyLogin: Failed to export key for redirect:', e)
-          }
-        }
-
-        savePubkey(storedPubkey)
-        localStorage.setItem('nurunuru_login_method', 'nosskey')
-        window.nosskeyManager = manager
-        onLogin(storedPubkey)
+        await completeNosskeyLogin(manager, keyInfo, redirectUri)
         return
       }
 
-      // No stored key info - try to authenticate with existing passkey
-      // This allows login even if localStorage was cleared
+      // No current key info - try the registry (saved accounts). This covers
+      // imported wrap-mode keys, which cannot be re-derived via the PRF-direct
+      // createNostrKey() fallback below.
+      let accounts = []
+      try {
+        accounts = manager.listKeyInfos() || []
+      } catch (e) {
+        console.error('handleNosskeyLogin: listKeyInfos failed:', e)
+      }
+
+      if (accounts.length === 1) {
+        console.log('handleNosskeyLogin: Recovering single registry account')
+        await completeNosskeyLogin(manager, accounts[0], redirectUri)
+        return
+      }
+      if (accounts.length > 1) {
+        console.log('handleNosskeyLogin: Multiple registry accounts, prompting selection')
+        setAccountChoices({ accounts, redirectUri })
+        setNosskeyLoading(false)
+        return
+      }
+
+      // No stored/registry key info - try to authenticate with an existing passkey
+      // (PRF-direct). This allows login even if localStorage was cleared.
       console.log('No stored key info, attempting passkey authentication...')
 
       try {
@@ -406,6 +474,48 @@ export default function LoginScreen({ onLogin }) {
           onSuccess={(pubkey) => onLogin(pubkey)}
           nosskeyManager={nosskeyManagerRef.current}
         />
+      )}
+
+      {accountChoices && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center modal-overlay p-4"
+          onClick={() => setAccountChoices(null)}
+        >
+          <div
+            className="w-full max-w-md bg-[var(--bg-primary)] rounded-3xl overflow-hidden shadow-2xl animate-scaleIn p-6"
+            onClick={e => e.stopPropagation()}
+          >
+            <h2 className="text-xl font-bold text-[var(--text-primary)] mb-1">アカウントを選択</h2>
+            <p className="text-[var(--text-tertiary)] text-sm mb-4">ログインするアカウントを選んでください。</p>
+            <div className="space-y-2">
+              {accountChoices.accounts.map((acc) => {
+                let npubShort = acc.pubkey
+                try {
+                  const npub = nip19.npubEncode(acc.pubkey)
+                  npubShort = `${npub.slice(0, 12)}…${npub.slice(-6)}`
+                } catch {}
+                return (
+                  <button
+                    key={`${acc.pubkey}:${acc.credentialId}`}
+                    onClick={() => handleSelectAccount(acc)}
+                    className="w-full text-left px-4 py-3 rounded-2xl bg-[#1c1c1e] hover:bg-[#2a2a2c] transition-colors"
+                  >
+                    <div className="text-[var(--text-primary)] font-bold">
+                      {acc.username || 'Nostr アカウント'}
+                    </div>
+                    <div className="text-[var(--text-tertiary)] text-xs font-mono">{npubShort}</div>
+                  </button>
+                )
+              })}
+            </div>
+            <button
+              onClick={() => setAccountChoices(null)}
+              className="mt-4 text-[var(--text-tertiary)] text-sm hover:underline"
+            >
+              キャンセル
+            </button>
+          </div>
+        </div>
       )}
 
     </div>
