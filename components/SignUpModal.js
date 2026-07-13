@@ -15,7 +15,7 @@ import {
   publishEvent
 } from '@/lib/nostr'
 import { autoDetectRelays, formatDistance, REGION_COORDINATES, selectRelaysByRegion, saveSelectedRegion } from '@/lib/geohash'
-import { decodeNsec } from '@/lib/nosskey'
+import { decodeNsec, passkeyErrorMessage } from '@/lib/nosskey'
 
 /**
  * SignUpModal Component
@@ -122,11 +122,7 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
       }
     } catch (e) {
       console.error('Signup error:', e)
-      if (e.name === 'NotAllowedError') {
-        setError('登録がキャンセルされました')
-      } else {
-        setError(e.message || 'エラーが発生しました')
-      }
+      setError(passkeyErrorMessage(e, { cancelled: '登録がキャンセルされました' }))
     } finally {
       setLoading(false)
     }
@@ -183,11 +179,7 @@ export default function SignUpModal({ onClose, onSuccess, nosskeyManager }) {
       startRelayDetection()
     } catch (e) {
       console.error('Import error:', e)
-      if (e.name === 'NotAllowedError') {
-        setImportError('登録がキャンセルされました')
-      } else {
-        setImportError(e.message || 'エラーが発生しました')
-      }
+      setImportError(passkeyErrorMessage(e, { cancelled: '登録がキャンセルされました' }))
     } finally {
       setLoading(false)
     }

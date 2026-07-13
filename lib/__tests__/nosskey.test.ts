@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { getPublicKey, nip19 } from 'nostr-tools'
-import { decodeNsec } from '@/lib/nosskey'
+import { decodeNsec, passkeyErrorMessage } from '@/lib/nosskey'
 
 describe('decodeNsec', () => {
   // A fixed, well-known secret key for deterministic assertions.
@@ -56,5 +56,39 @@ describe('decodeNsec', () => {
 
   it('rejects non-hex garbage', () => {
     expect(() => decodeNsec('not a key at all')).toThrow()
+  })
+})
+
+describe('passkeyErrorMessage', () => {
+  it('returns the given cancelled text for NotAllowedError', () => {
+    const err = Object.assign(new Error('The operation either timed out or was not allowed'), {
+      name: 'NotAllowedError',
+    })
+    expect(passkeyErrorMessage(err, { cancelled: '登録がキャンセルされました' })).toBe(
+      '登録がキャンセルされました'
+    )
+  })
+
+  it('uses a default cancelled message when none is provided', () => {
+    const err = Object.assign(new Error('cancelled'), { name: 'NotAllowedError' })
+    expect(passkeyErrorMessage(err)).toBe('パスキー認証がキャンセルされました')
+  })
+
+  it('returns the "not found" message when no credentials exist', () => {
+    const err = new Error('No credentials available')
+    expect(passkeyErrorMessage(err)).toMatch(/パスキーが見つかりません/)
+  })
+
+  it('includes the password-manager hint for a generic passkey failure', () => {
+    const err = new Error('PRF secret not available')
+    const msg = passkeyErrorMessage(err)
+    expect(msg).toMatch(/パスキーの認証に失敗しました/)
+    expect(msg).toMatch(/Bitwarden/)
+    expect(msg).toMatch(/PRF/)
+  })
+
+  it('includes the hint when passed a non-Error value', () => {
+    const msg = passkeyErrorMessage(undefined)
+    expect(msg).toMatch(/Bitwarden/)
   })
 })

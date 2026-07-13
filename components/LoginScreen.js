@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { nip19 } from 'nostr-tools'
 import { savePubkey, hexToBytes } from '@/lib/nostr'
-import { createNosskeyManager, NOSSKEY_STORAGE_KEY } from '@/lib/nosskey'
+import { createNosskeyManager, NOSSKEY_STORAGE_KEY, passkeyErrorMessage } from '@/lib/nosskey'
 import SignUpModal from './SignUpModal'
 
 export default function LoginScreen({ onLogin }) {
@@ -321,17 +321,11 @@ export default function LoginScreen({ onLogin }) {
         }
       } catch (authError) {
         console.error('Passkey auth error:', authError)
-        if (authError.name === 'NotAllowedError') {
-          setError('認証がキャンセルされました')
-        } else if (authError.message?.includes('No credentials')) {
-          setError('パスキーが見つかりません。新規登録してください。')
-        } else {
-          setError('パスキーの認証に失敗しました')
-        }
+        setError(passkeyErrorMessage(authError, { cancelled: '認証がキャンセルされました' }))
       }
     } catch (e) {
       console.error('Nosskey login error:', e)
-      setError(e.message || 'ログインに失敗しました')
+      setError(passkeyErrorMessage(e, { cancelled: '認証がキャンセルされました' }))
     } finally {
       setNosskeyLoading(false)
     }
